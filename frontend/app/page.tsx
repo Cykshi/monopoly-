@@ -510,7 +510,11 @@ export default function GameBoard() {
     const currentHouses = propertyHouses[tileId] || 0;
     if (currentHouses <= 0) return;
 
-    const refund = Math.floor((tile.houseCost || 100) / 2);
+    // Refund 50% of whatever it actually cost to build the level being
+    // removed - a hotel (level 5) was built with hotelCost, everything
+    // below that with houseCost.
+    const costOfCurrentLevel = currentHouses === 5 ? tile.hotelCost || 200 : tile.houseCost || 100;
+    const refund = Math.floor(costOfCurrentLevel / 2);
     setPropertyHouses((prev) => ({ ...prev, [tileId]: currentHouses - 1 }));
     setPlayers((prev) =>
       prev.map((p) => (p.id === currentPlayer.id ? { ...p, money: p.money + refund } : p))
@@ -598,6 +602,8 @@ export default function GameBoard() {
 
           const ownedBackground = owner ? getTransparentColor(owner.color, "25") : undefined;
           const ownedBorder = owner ? getTransparentColor(owner.color, "90") : undefined;
+          const houses = propertyHouses[tile.id] || 0;
+          const isHotel = houses >= 5;
 
           return (
             <div
@@ -613,6 +619,14 @@ export default function GameBoard() {
               style={{
                 gridRow,
                 gridColumn,
+                // Once a house/hotel badge is built, it deliberately pokes
+                // outside this tile's own box (like the flag does on the
+                // opposite edge). Without a raised z-index here, the NEXT
+                // tile in the grid (a DOM sibling) paints on top of that
+                // overflow regardless of the badge's own z-index, since
+                // z-index only resolves within the same stacking parent -
+                // that's what was cutting a line through the badge.
+                zIndex: houses > 0 ? 20 : undefined,
                 ...(owner
                   ? {
                       backgroundColor: ownedBackground,
@@ -733,7 +747,7 @@ export default function GameBoard() {
                   </div>
                 </div>
               ) : (
-                <div className="relative z-10 flex h-full w-full items-center justify-center p-[0.6vmin]">
+                <div className="relative z-40 flex h-full w-full items-center justify-center p-[0.6vmin]">
                   <div
                     className={`absolute left-1/2 top-1/2 flex items-center justify-start ${
                       orientation === "top" ? "flex-col-reverse" : "flex-col"
@@ -800,12 +814,45 @@ export default function GameBoard() {
                       </div>
                     ) : owner ? (
                       <div
-                        className="m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.3vmin] text-center font-black uppercase tracking-wide"
+                        className={`m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.3vmin] text-center font-black uppercase tracking-wide ${
+                          isProperty && houses > 0 ? "invisible" : ""
+                        }`}
                         style={{ color: owner.color, backgroundColor: `${owner.color}18` }}
                       >
                         <span className="whitespace-nowrap text-[0.9vmin]">Owned</span>
                       </div>
                     ) : null}
+
+                    {/* House/hotel indicator - mirrors how the flag pokes
+                        half outside the tile's top edge, but sits on the
+                        OPPOSITE edge (same side as price/Owned), half
+                        outside the border and half inside. Only shown for
+                        property-type tiles (utilities don't have houses)
+                        once at least one house has been built. */}
+                    {owner && isProperty && houses > 0 && (
+                      <div
+                        className={`absolute left-1/2 z-[70] flex -translate-x-1/2 items-center justify-center gap-[0.35vmin] rounded-[0.5vmin] border-[0.2vmin] px-[0.6vmin] shadow-lg ${
+                          orientation === "top" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2"
+                        }`}
+                        style={{
+                          height: "2.7vmin",
+                          borderColor: "rgba(255,255,255,0.85)",
+                          backgroundColor: owner.color,
+                          boxShadow: `0 0 1vmin ${owner.color}aa, 0 0.3vmin 0.7vmin rgba(0,0,0,0.55)`,
+                        }}
+                      >
+                        {isHotel ? (
+                          <span className="text-[1.6vmin] leading-none drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">🏨</span>
+                        ) : (
+                          <>
+                            <span className="text-[1.3vmin] leading-none drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">🏠</span>
+                            <span className="text-[1.05vmin] font-black text-white drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">
+                              x{houses}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1073,23 +1120,43 @@ export default function GameBoard() {
                     const currentHouses = propertyHouses[activeModal.id] || 0;
                     const maxedOut = currentHouses >= 5;
                     const upgradeCost = currentHouses === 4 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
+                    // Degrading always refunds 50% of the SAME cost that was
+                    // paid to build the level currently being removed - e.g.
+                    // upgrade to a hotel for $100, degrade it and get $50
+                    // back (downgradeHouse already implements this refund).
+                    const degradeCost = currentHouses === 5 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
+                    const degradeRefund = Math.floor(degradeCost / 2);
+                    const canDegrade = currentHouses > 0;
 
                     return (
-                      <div className={`mt-[2vmin] grid gap-[1.2vmin] ${isUpgradable ? "grid-cols-2" : "grid-cols-1"}`}>
+                      <div
+                        className={`mt-[2vmin] grid gap-[1.2vmin] ${
+                          isUpgradable ? "grid-cols-3" : "grid-cols-1"
+                        }`}
+                      >
                         <button
                           onClick={() => sellPropertyEntirely(activeModal.id)}
-                          className="rounded-[0.9vmin] border-[0.18vmin] border-red-500 bg-red-950/60 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(239,68,68,0.85),0_0_1.6vmin_rgba(239,68,68,0.65)]"
+                          className="rounded-[0.9vmin] border-[0.18vmin] border-red-500 bg-red-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(239,68,68,0.85),0_0_1.6vmin_rgba(239,68,68,0.65)]"
                         >
                           Sell (+${sellRefund})
                         </button>
                         {isUpgradable && (
-                          <button
-                            onClick={() => upgradeHouse(activeModal.id)}
-                            disabled={maxedOut}
-                            className="rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
-                          >
-                            {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
-                          </button>
+                          <>
+                            <button
+                              onClick={() => downgradeHouse(activeModal.id)}
+                              disabled={!canDegrade}
+                              className="rounded-[0.9vmin] border-[0.18vmin] border-orange-500 bg-orange-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(249,115,22,0.85),0_0_1.6vmin_rgba(249,115,22,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                            >
+                              {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
+                            </button>
+                            <button
+                              onClick={() => upgradeHouse(activeModal.id)}
+                              disabled={maxedOut}
+                              className="rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                            >
+                              {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
+                            </button>
+                          </>
                         )}
                       </div>
                     );
