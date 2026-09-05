@@ -1143,18 +1143,18 @@ export default function GameBoard() {
                         {isUpgradable && (
                           <>
                             <button
-                              onClick={() => downgradeHouse(activeModal.id)}
-                              disabled={!canDegrade}
-                              className="rounded-[0.9vmin] border-[0.18vmin] border-orange-500 bg-orange-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(249,115,22,0.85),0_0_1.6vmin_rgba(249,115,22,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
-                            >
-                              {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
-                            </button>
-                            <button
                               onClick={() => upgradeHouse(activeModal.id)}
                               disabled={maxedOut}
                               className="rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
                             >
                               {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
+                            </button>
+                            <button
+                              onClick={() => downgradeHouse(activeModal.id)}
+                              disabled={!canDegrade}
+                              className="rounded-[0.9vmin] border-[0.18vmin] border-orange-500 bg-orange-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(249,115,22,0.85),0_0_1.6vmin_rgba(249,115,22,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                            >
+                              {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
                             </button>
                           </>
                         )}
