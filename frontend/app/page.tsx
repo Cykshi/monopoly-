@@ -72,7 +72,7 @@ const BOARD_TILES: Tile[] = [
   { id: 24, name: "FIXED TAX", type: "tax", icon: "💰", price: "-$200" },
   { id: 25, name: "AIRPORT 3", type: "airport", icon: "✈️", price: "$200" },
   { id: 26, name: "Chittagong", type: "bangladesh", countryCode: "BD", price: "$380", rent: 120, rents: [120, 360, 850, 2000, 2200, 2400], houseCost: 200, hotelCost: 200 },
-  { id: 27, name: "Île-de-France", type: "france", countryCode: "FR", price: "$400", rent: 130, rents: [130, 390, 900, 2000, 2400, 2800], houseCost: 200, hotelCost: 200 },
+  { id: 27, name: "France", type: "france", countryCode: "FR", price: "$400", rent: 130, rents: [130, 390, 900, 2000, 2400, 2800], houseCost: 200, hotelCost: 200 },
   { id: 28, name: "SURPRISE", type: "card", icon: "❓" },
   { id: 29, name: "MP", type: "india", countryCode: "IN", price: "$400", rent: 140, rents: [140, 400, 900, 2000, 2400, 2800], houseCost: 200, hotelCost: 200 },
   { id: 30, name: "CLUB", type: "corner", icon: "🥂" },
@@ -101,11 +101,6 @@ const PROPERTY_TYPES = new Set(["bangladesh", "france", "india", "china", "ameri
 const BOARD_SIZE = BOARD_TILES.length;
 const PASS_START_BONUS = 200;
 
-// Single source of truth for the board's geometry. If the board's overall
-// size, border, padding, or gap ever change in the className below, update
-// the matching constant here too - everything else (tile depth, the
-// swapped-dimension box used to rotate left/right content) derives from
-// these so the four edges always stay in sync.
 const BOARD_VMIN = 96;
 const BOARD_BORDER_VMIN = 0.3 * 2;
 const BOARD_PADDING_VMIN = 0.4 * 2;
@@ -116,15 +111,9 @@ const RING_SIZE = 11;
 const TOTAL_FR = CORNER_FR * 2 + INNER_FR * 9;
 const TRACK_SPACE_VMIN = BOARD_VMIN - BOARD_BORDER_VMIN - BOARD_PADDING_VMIN - BOARD_GAP_VMIN * (RING_SIZE - 1);
 const UNIT_FR_VMIN = TRACK_SPACE_VMIN / TOTAL_FR;
-const TILE_NARROW_VMIN = UNIT_FR_VMIN * INNER_FR; // width along the edge
-const TILE_DEPTH_VMIN = UNIT_FR_VMIN * CORNER_FR; // depth toward the center
-const TILE_CONTENT_PADDING_VMIN = 0.6 * 2; // matches each tile's p-[0.6vmin]
-// The content block (flag -> spacer -> name -> price) is always built at this
-// one "portrait" size - narrow width, deep height - regardless of which edge
-// the tile is on. Bottom/top tiles use it unrotated (their own cell is
-// already this shape); left/right tiles rotate the exact same block 90deg,
-// so its visual footprint becomes deep-wide/narrow-tall, matching THEIR
-// cell instead. Same numbers, same block, every side.
+const TILE_NARROW_VMIN = UNIT_FR_VMIN * INNER_FR;
+const TILE_DEPTH_VMIN = UNIT_FR_VMIN * CORNER_FR;
+const TILE_CONTENT_PADDING_VMIN = 0.6 * 2;
 const CONTENT_BLOCK_WIDTH_VMIN = TILE_NARROW_VMIN - TILE_CONTENT_PADDING_VMIN;
 const CONTENT_BLOCK_HEIGHT_VMIN = TILE_DEPTH_VMIN - TILE_CONTENT_PADDING_VMIN;
 
@@ -140,8 +129,6 @@ const calculateRent = (tile: Tile, houses: number) => {
   return Math.floor(tile.rent * (1 + houses * 0.6));
 };
 
-// Anchors the player-token cluster in the gap between the inward-facing
-// flag/icon and the tile name, per edge orientation.
 const getTokenAnchor = (orientation: string) => {
   switch (orientation) {
     case "bottom":
@@ -157,11 +144,33 @@ const getTokenAnchor = (orientation: string) => {
   }
 };
 
-// Long names (e.g. "Île-de-France", "AIRPORT 1") would otherwise overflow a
-// single ~7vmin-wide tile at a fixed font size, so scale down past 8 chars.
 const getNameFontSize = (name: string) => {
   const extra = Math.max(0, name.length - 8);
   return Math.max(0.78, 1.1 - extra * 0.045);
+};
+
+// Splits an action-log line on any +$ / -$ amount and highlights it: green
+// bold for a gain (+$200), red bold for a loss (-$100). Everything else in
+// the line stays plain white/gray text.
+const renderLogMessage = (msg: string) => {
+  const parts = msg.split(/([+-]\$[0-9,]+)/g);
+  return parts.map((part, idx) => {
+    if (/^\+\$[0-9,]+$/.test(part)) {
+      return (
+        <span key={idx} className="font-black text-emerald-400">
+          {part}
+        </span>
+      );
+    }
+    if (/^-\$[0-9,]+$/.test(part)) {
+      return (
+        <span key={idx} className="font-black text-red-400">
+          {part}
+        </span>
+      );
+    }
+    return <span key={idx}>{part}</span>;
+  });
 };
 
 export default function GameBoard() {
@@ -285,7 +294,10 @@ export default function GameBoard() {
       currentPos = (currentPos + 1) % BOARD_SIZE;
       remaining--;
 
-      if (currentPos === 0) setHasSkillCard(true);
+      if (currentPos === 0) {
+        setHasSkillCard(true);
+        addLog(`${player.name} passed START (+$${PASS_START_BONUS})`);
+      }
 
       setPlayers((prev) =>
         prev.map((p) =>
@@ -312,7 +324,7 @@ export default function GameBoard() {
         p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
       )
     );
-    addLog(`${player.name} paid $${amount} tax.`);
+    addLog(`${player.name} paid -$${amount} tax.`);
     return;
   }
 
@@ -330,7 +342,7 @@ export default function GameBoard() {
           return p;
         })
       );
-      addLog(`${player.name} paid $${rent} rent to ${owner?.name} on ${tile.name}.`);
+      addLog(`${player.name} paid -$${rent} rent to ${owner?.name} (+$${rent}) on ${tile.name}.`);
     } else {
       setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
       if (!ownerId) setActiveModal(tile);
@@ -348,7 +360,6 @@ export default function GameBoard() {
   const rollDice = () => {
     if (isRolling || isMoving || gamePhase !== "YOUR TURN") return;
 
-    // One immutable result per roll. The log, dice and movement all use these exact values.
     const result: [number, number] = [
       Math.floor(Math.random() * 6) + 1,
       Math.floor(Math.random() * 6) + 1,
@@ -370,7 +381,6 @@ export default function GameBoard() {
     addLog(`Rolled ${total} (${first} + ${second})`);
     socketRef.current?.emit("player:rolled", { dice: [first, second], total });
 
-    // The piece starts moving only after the final die face is visible.
     animateMovement(total);
   };
 
@@ -411,7 +421,7 @@ export default function GameBoard() {
       prev.map((p) => (p.id === currentPlayer.id ? { ...p, money: p.money - cost } : p))
     );
     setPropertyOwnership((prev) => ({ ...prev, [tile.id]: currentPlayer.id }));
-    addLog(`${currentPlayer.name} bought ${tile.name} for ${tile.price}`);
+    addLog(`${currentPlayer.name} bought ${tile.name} for -${tile.price}`);
     socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: currentPlayer.id });
     setActiveModal(null);
   };
@@ -451,7 +461,7 @@ export default function GameBoard() {
     setPlayers((prev) =>
       prev.map((p) => (p.id === currentPlayer.id ? { ...p, money: p.money + refund } : p))
     );
-    addLog(`${currentPlayer.name} sold a house on ${tile.name}`);
+    addLog(`${currentPlayer.name} sold a house on ${tile.name} (+$${refund})`);
   };
 
   const getTilePosition = (index: number) => {
@@ -483,7 +493,6 @@ export default function GameBoard() {
 
   return (
     <main className="flex h-screen w-screen items-center justify-center overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-[1vmin] font-sans">
-      {/* Global keyframes for token motion - unscoped so inline `animation` refs resolve */}
       <style jsx global>{`
         @keyframes tokenBounce {
           0%, 100% { transform: translateY(0) scale(1); }
@@ -558,7 +567,6 @@ export default function GameBoard() {
                   : {}),
               }}
             >
-              {/* Translucent flag watermark - shown on every tile that has a country flag, in full color so it's still visible */}
               {!isCorner && tile.countryCode && (
                 <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[0.9vmin]">
                   <div className="absolute inset-0 flex scale-150 items-center justify-center opacity-25">
@@ -574,73 +582,89 @@ export default function GameBoard() {
                 />
               )}
 
-              {/* PLAYER TOKENS - anchored between the flag and the name, per orientation */}
               {isOccupied && (
                 <div
-                  className="absolute z-50 flex flex-wrap items-center justify-center gap-[0.4vmin]"
+                  className="absolute z-50 flex items-center"
                   style={{
                     top: tokenAnchor.top,
                     left: tokenAnchor.left,
                     transform: "translate(-50%, -50%)",
-                    maxWidth: "72%",
+                    maxWidth: "80%",
                   }}
                 >
-                  {playersHere.map((player) => {
-                    const isBig = player.isCurrentPlayer;
-                    const size = isBig ? "3.6vmin" : "2.9vmin";
+                  {(() => {
+                    const MAX_VISIBLE = 3;
+                    const overflowCount = Math.max(0, playersHere.length - MAX_VISIBLE);
+                    const visible = overflowCount > 0 ? playersHere.slice(0, MAX_VISIBLE - 1) : playersHere;
+                    const size = "3.8vmin";
+
                     return (
-                      <div
-                        key={player.id}
-                        title={player.name}
-                        className={`relative flex items-center justify-center rounded-full transition-transform duration-300 ${
-                          isBig ? "z-10" : "hover:scale-110"
-                        }`}
-                        style={{
-                          height: size,
-                          width: size,
-                          background: `radial-gradient(circle at 32% 28%, ${player.color}ee, ${player.color} 55%, #00000055 100%)`,
-                          boxShadow: `0 0 1.8vmin ${player.color}cc, 0 0.7vmin 1.4vmin rgba(0,0,0,0.7), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.4), inset 0 -0.3vmin 0.45vmin rgba(0,0,0,0.4)`,
-                          animation: isBig
-                            ? "tokenBounce 1.4s ease-in-out infinite, tokenGlow 1.4s ease-in-out infinite"
-                            : "tokenIdle 2.6s ease-in-out infinite",
-                          animationDelay: `${(player.id % 4) * 0.15}s`,
-                        }}
-                      >
-                        {/* soft contact shadow under the token */}
-                        <div
-                          className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 rounded-full bg-black/40"
-                          style={{ width: "70%", height: "0.5vmin", marginTop: "0.15vmin", filter: "blur(0.3vmin)" }}
-                        />
-                        <div
-                          className="pointer-events-none absolute left-[18%] top-[14%] h-[35%] w-[35%] rounded-full opacity-70"
-                          style={{ background: "radial-gradient(circle, rgba(255,255,255,0.85), rgba(255,255,255,0) 70%)" }}
-                        />
-                        <div
-                          className="pointer-events-none absolute inset-0 rounded-full"
-                          style={{ boxShadow: `inset 0 0 0 0.14vmin ${player.color}`, filter: "brightness(1.6)" }}
-                        />
-                        <div className="absolute inset-0 flex flex-col items-center justify-center">
-                          {player.mood === "flat" ? (
-                            <>
-                              <div className="flex gap-[0.4vmin] mt-[0.1vmin]">
-                                <div className="h-[0.22vmin] w-[0.65vmin] rounded-full bg-white/95" />
-                                <div className="h-[0.22vmin] w-[0.65vmin] rounded-full bg-white/95" />
-                              </div>
-                              <div className="mt-[0.25vmin] h-[0.22vmin] w-[1vmin] rounded-full bg-white/85" />
-                            </>
-                          ) : (
-                            <>
-                              <div className="flex gap-[0.4vmin] mt-[0.12vmin]">
-                                <div className="h-[0.5vmin] w-[0.5vmin] rounded-full bg-white/95" />
-                                <div className="h-[0.5vmin] w-[0.5vmin] rounded-full bg-white/95" />
-                              </div>
-                              <div className="mt-[0.1vmin] h-[0.42vmin] w-[0.8vmin] rounded-b-full border-b-[0.18vmin] border-l-[0.18vmin] border-r-[0.18vmin] border-white/85 bg-transparent" />
-                            </>
-                          )}
-                        </div>
-                      </div>
+                      <>
+                        {visible.map((player, idx) => (
+                          <div
+                            key={player.id}
+                            title={player.name}
+                            className="relative flex items-center justify-center rounded-full transition-transform duration-300 hover:z-20 hover:scale-110"
+                            style={{
+                              height: size,
+                              width: size,
+                              marginLeft: idx === 0 ? 0 : "-1.15vmin",
+                              zIndex: player.isCurrentPlayer ? 10 : idx,
+                              background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
+                              border: `0.09vmin solid ${player.color}`,
+                              boxShadow: player.isCurrentPlayer
+                                ? `0 0 1.8vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.7vmin 1.3vmin rgba(0,0,0,0.75), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.45), inset 0 -0.3vmin 0.4vmin rgba(0,0,0,0.35)`
+                                : `0 0 0.6vmin ${player.color}aa, 0 0.5vmin 1vmin rgba(0,0,0,0.65), inset 0 0.22vmin 0.3vmin rgba(255,255,255,0.35), inset 0 -0.25vmin 0.35vmin rgba(0,0,0,0.3)`,
+                              animation: player.isCurrentPlayer
+                                ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s`
+                                : undefined,
+                            }}
+                          >
+                            <div
+                              className="pointer-events-none absolute left-[16%] top-[12%] h-[38%] w-[38%] rounded-full opacity-80"
+                              style={{ background: "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)" }}
+                            />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center">
+                              {player.mood === "flat" ? (
+                                <>
+                                  <div className="flex gap-[0.45vmin]">
+                                    <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
+                                    <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
+                                  </div>
+                                  <div className="mt-[0.25vmin] h-[0.26vmin] w-[1.05vmin] rounded-full bg-white/85" />
+                                </>
+                              ) : (
+                                <>
+                                  <div className="flex gap-[0.45vmin]">
+                                    <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
+                                    <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
+                                  </div>
+                                  <div className="mt-[0.1vmin] h-[0.42vmin] w-[0.8vmin] rounded-b-full border-b-[0.16vmin] border-l-[0.16vmin] border-r-[0.16vmin] border-white/85 bg-transparent" />
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+
+                        {overflowCount > 0 && (
+                          <div
+                            title={`+${overflowCount} more`}
+                            className="relative flex items-center justify-center rounded-full bg-[#1c1626] text-white"
+                            style={{
+                              height: size,
+                              width: size,
+                              marginLeft: "-0.9vmin",
+                              zIndex: 20,
+                              border: "0.16vmin solid rgba(255,255,255,0.5)",
+                              boxShadow: "0 0.4vmin 0.9vmin rgba(0,0,0,0.6)",
+                            }}
+                          >
+                            <span className="text-[1.05vmin] font-black">+{overflowCount}</span>
+                          </div>
+                        )}
+                      </>
                     );
-                  })}
+                  })()}
                 </div>
               )}
 
@@ -655,13 +679,6 @@ export default function GameBoard() {
                 </div>
               ) : (
                 <div className="relative z-10 flex h-full w-full items-center justify-center p-[0.6vmin]">
-                  {/* Every tile shares one identical vertical layout (flag → spacer →
-                      name → price), in the same square box. Bottom-row tiles render
-                      it upright; top-row tiles just reverse the stacking order (so
-                      the flag ends up on its inward/bottom edge) without rotating
-                      the text; left/right-column tiles rotate this whole block 90°
-                      as a single unit, so nothing has to be sized or positioned
-                      differently per edge. */}
                   <div
                     className={`absolute left-1/2 top-1/2 flex items-center justify-start ${
                       orientation === "top" ? "flex-col-reverse" : "flex-col"
@@ -677,9 +694,6 @@ export default function GameBoard() {
                           : "translate(-50%, -50%)",
                     }}
                   >
-                    {/* Flag / icon marker - anchored to this block's own top edge
-                        (or bottom edge when the block is reversed for the top row);
-                        rotating the whole block for left/right carries it along. */}
                     <div
                       className={`absolute left-1/2 z-40 flex -translate-x-1/2 items-center justify-center ${
                         orientation === "top" ? "bottom-0 translate-y-1/2" : "top-0 -translate-y-1/2"
@@ -700,10 +714,8 @@ export default function GameBoard() {
                       )}
                     </div>
 
-                    {/* Fixed spacer that reserves room for the flag */}
                     <div className="h-[18%] w-full" />
 
-                    {/* Flexible spacer - absorbs the slack so the name group sits right above the price */}
                     <div className="flex-1" />
 
                     <div
@@ -711,7 +723,6 @@ export default function GameBoard() {
                       className="relative flex min-w-0 flex-col items-center justify-center overflow-visible text-center"
                       style={{ animation: isOccupied ? "nameDodge 0.7s ease-in-out" : "none" }}
                     >
-                      {/* Name tag - full text, one line, no truncation */}
                       <span
                         className={`relative z-[60] whitespace-nowrap font-bold uppercase leading-tight tracking-wide text-gray-100 ${
                           isOccupied ? "rounded-[0.4vmin] bg-[#0f0c16]/90 px-[0.5vmin] py-[0.1vmin] shadow-md" : ""
@@ -749,10 +760,9 @@ export default function GameBoard() {
 
         {/* ================= CENTER CONSOLE ================= */}
         <div
-          className="relative z-0 flex flex-col items-center justify-between rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
+          className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
           style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
         >
-          {/* Top bar */}
           <div className="flex w-full items-start justify-between">
             <div className="flex flex-col items-start">
               <span className="text-[1vmin] font-bold uppercase tracking-[0.2em] text-gray-500">Current</span>
@@ -779,13 +789,9 @@ export default function GameBoard() {
             </div>
           </div>
 
-          {/* Title + Phase */}
           <div>
-            <h1 className="bg-gradient-to-br from-indigo-400 via-purple-400 to-white bg-clip-text text-[4.2vmin] font-black uppercase tracking-widest text-transparent">
-              Finance Chess
-            </h1>
             <div
-              className={`mx-auto mt-[0.6vmin] w-fit rounded-full border px-[1.8vmin] py-[0.4vmin] text-[1.1vmin] font-black uppercase tracking-widest ${
+              className={`mx-auto w-fit rounded-full border px-[1.8vmin] py-[0.4vmin] text-[1.1vmin] font-black uppercase tracking-widest ${
                 gamePhase === "YOUR TURN"
                   ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
                   : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
@@ -797,64 +803,84 @@ export default function GameBoard() {
             </div>
           </div>
 
-          {/* 3D Dice - FIXED */}
-          <div className="my-3 flex justify-center">
+          {/* 3D Dice - back to its original size */}
+          <div className="-mt-2 mb-2 flex justify-center">
             <DiceScene dice={dice} rollTrigger={rollTrigger} onSettled={handleDiceSettled} />
           </div>
 
-          {/* Action Log */}
-          <div className="h-[7vmin] w-full max-w-[42vmin] overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-[1.5vmin] py-[0.8vmin] text-left">
-            {actionLog.slice(0, 3).map((msg, i) => (
-              <p key={i} className={`text-[1.15vmin] leading-snug ${i === 0 ? "text-gray-200" : "text-gray-500"}`}>
-                {msg}
-              </p>
-            ))}
+          {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
+          <div className="flex h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center">
+            <div>
+              {actionLog.slice(0, 3).map((msg, i) => (
+                <p key={i} className={`text-[1.55vmin] leading-snug ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
+                  {renderLogMessage(msg)}
+                </p>
+              ))}
+            </div>
           </div>
 
-          {/* Buttons */}
           <div className="flex w-full max-w-[44vmin] gap-[1.2vmin]">
-            <button
-              onClick={rollDice}
-              disabled={isRolling || isMoving || gamePhase !== "YOUR TURN"}
-              className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {isRolling ? "Rolling..." : "🎲 Roll Dice"}
-            </button>
+            {gamePhase === "YOUR TURN" ? (
+              <>
+                <button
+                  onClick={rollDice}
+                  disabled={isRolling || isMoving}
+                  className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isRolling ? "Rolling..." : "🎲 Roll Dice"}
+                </button>
 
-            <button
-              onClick={openSkillCard}
-              disabled={!hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN"}
-              className="relative flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {hasSkillCard ? "🃏 Card" : "Exhausted"}
-              {hasSkillCard && (
-                <span className="absolute -right-[0.6vmin] -top-[0.6vmin] flex h-[2vmin] min-w-[2vmin] items-center justify-center rounded-full bg-yellow-400 text-[0.9vmin] font-black text-black">
-                  1
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={endTurn}
-              disabled={gamePhase !== "ACTION" && gamePhase !== "END TURN"}
-              className="rounded-[1.1vmin] border border-white/15 bg-white/10 px-[2vmin] py-[1.6vmin] text-[1.4vmin] font-bold uppercase text-gray-300 transition hover:bg-white/20 disabled:opacity-30"
-            >
-              End Turn
-            </button>
+                <button
+                  onClick={openSkillCard}
+                  disabled={!hasSkillCard || isRolling || isMoving}
+                  className="relative flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {hasSkillCard ? "🃏 Card" : "Exhausted"}
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={endTurn}
+                disabled={gamePhase !== "ACTION" && gamePhase !== "END TURN"}
+                className="flex-1 rounded-[1.1vmin] border border-white/15 bg-white/10 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                End Turn
+              </button>
+            )}
           </div>
 
-          {/* Player strip */}
-          <div className="flex gap-[0.8vmin]">
+          <div className="flex flex-wrap justify-center gap-[1.2vmin]">
             {players.map((player) => (
               <div
                 key={player.id}
-                className={`flex items-center gap-[0.5vmin] rounded-full border px-[1vmin] py-[0.4vmin] ${
-                  player.isCurrentPlayer ? "border-white/40 bg-white/15" : "border-white/5 bg-white/[0.03]"
+                className={`flex items-center gap-[1vmin] rounded-[1.4vmin] border px-[2.2vmin] py-[1.3vmin] transition-all duration-300 ${
+                  player.isCurrentPlayer ? "scale-105" : "border-white/10 bg-white/[0.04]"
                 }`}
+                style={
+                  player.isCurrentPlayer
+                    ? {
+                        borderColor: `${player.color}aa`,
+                        backgroundColor: `${player.color}22`,
+                        boxShadow: `0 0 1.6vmin ${player.color}88, inset 0 0 0.7vmin ${player.color}33`,
+                      }
+                    : undefined
+                }
               >
-                <span className="h-[0.9vmin] w-[0.9vmin] rounded-full" style={{ backgroundColor: player.color }} />
-                <span className="text-[1vmin] font-bold text-gray-300">{player.name}</span>
-                <span className="text-[0.9vmin] text-gray-500">${(player.money / 1000).toFixed(1)}k</span>
+                <span className="h-[1.6vmin] w-[1.6vmin] shrink-0 rounded-full" style={{ backgroundColor: player.color }} />
+                <div className="flex flex-col items-start leading-tight">
+                  <span
+                    className={`text-[1.4vmin] font-bold ${player.isCurrentPlayer ? "text-white" : "text-gray-300"}`}
+                  >
+                    {player.name}
+                  </span>
+                  <span
+                    className={`text-[1.7vmin] font-black tracking-tight ${
+                      player.isCurrentPlayer ? "text-emerald-400" : "text-white"
+                    }`}
+                  >
+                    ${player.money.toLocaleString()}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
