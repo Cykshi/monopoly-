@@ -50,27 +50,27 @@ const BOARD_TILES: Tile[] = [
   { id: 2, name: "Normandy", type: "france", countryCode: "FR", price: "$100", rent: 20, rents: [20, 60, 180, 500, 700, 900], houseCost: 50, hotelCost: 50 },
   { id: 3, name: "TREASURE", type: "card", icon: "🎁" },
   { id: 4, name: "Bihar", type: "india", countryCode: "IN", price: "$140", rent: 30, rents: [30, 90, 270, 750, 925, 1100], houseCost: 100, hotelCost: 100 },
-  { id: 5, name: "AIRPORT 1", type: "airport", icon: "✈️", price: "$200" },
+  { id: 5, name: "AIRPORT 1", type: "airport", icon: "✈️", price: "$160" },
   { id: 6, name: "Guangdong", type: "china", countryCode: "CN", price: "$180", rent: 40, rents: [40, 100, 300, 750, 925, 1100], houseCost: 100, hotelCost: 100 },
   { id: 7, name: "TAX", type: "tax", icon: "📉", price: "-$100" },
   { id: 8, name: "California", type: "america", countryCode: "US", price: "$220", rent: 50, rents: [50, 150, 450, 1000, 1200, 1400], houseCost: 150, hotelCost: 150 },
-  { id: 9, name: "SOLAR", type: "electricity", icon: "☀️", price: "$150" },
+  { id: 9, name: "SOLAR", type: "electricity", icon: "☀️", price: "$240" },
   { id: 10, name: "JAIL", type: "corner", icon: "🔒" },
   { id: 11, name: "Scotland", type: "uk", countryCode: "GB", price: "$260", rent: 60, rents: [60, 180, 500, 1100, 1300, 1500], houseCost: 150, hotelCost: 150 },
   { id: 12, name: "Sindh", type: "pakistan", countryCode: "PK", price: "$260", rent: 60, rents: [60, 180, 500, 1100, 1300, 1500], houseCost: 150, hotelCost: 150 },
   { id: 13, name: "Osaka", type: "japan", countryCode: "JP", price: "$280", rent: 70, rents: [70, 200, 550, 1200, 1400, 1600], houseCost: 150, hotelCost: 150 },
   { id: 14, name: "SURPRISE", type: "card", icon: "❓" },
-  { id: 15, name: "AIRPORT 2", type: "airport", icon: "✈️", price: "$200" },
+  { id: 15, name: "AIRPORT 2", type: "airport", icon: "✈️", price: "$290" },
   { id: 16, name: "UP", type: "india", countryCode: "IN", price: "$300", rent: 80, rents: [80, 220, 600, 1400, 1700, 2000], houseCost: 200, hotelCost: 200 },
   { id: 17, name: "Provence", type: "france", countryCode: "FR", price: "$300", rent: 80, rents: [80, 220, 600, 1400, 1700, 2000], houseCost: 200, hotelCost: 200 },
-  { id: 18, name: "FIBER", type: "internet", icon: "🌐", price: "$150" },
+  { id: 18, name: "FIBER", type: "internet", icon: "🌐", price: "$310" },
   { id: 19, name: "Texas", type: "america", countryCode: "US", price: "$320", rent: 90, rents: [90, 250, 700, 1500, 1850, 2100], houseCost: 200, hotelCost: 200 },
   { id: 20, name: "REST HOUSE", type: "corner", icon: "🏨" },
   { id: 21, name: "Shanghai", type: "china", countryCode: "CN", price: "$350", rent: 100, rents: [100, 300, 750, 1700, 2000, 2300], houseCost: 200, hotelCost: 200 },
   { id: 22, name: "Wales", type: "uk", countryCode: "GB", price: "$350", rent: 100, rents: [100, 300, 750, 1700, 2000, 2300], houseCost: 200, hotelCost: 200 },
-  { id: 23, name: "WIND", type: "electricity", icon: "🌪️", price: "$150" },
+  { id: 23, name: "WIND", type: "electricity", icon: "🌪️", price: "$360" },
   { id: 24, name: "FIXED TAX", type: "tax", icon: "💰", price: "-$200" },
-  { id: 25, name: "AIRPORT 3", type: "airport", icon: "✈️", price: "$200" },
+  { id: 25, name: "AIRPORT 3", type: "airport", icon: "✈️", price: "$370" },
   { id: 26, name: "Chittagong", type: "bangladesh", countryCode: "BD", price: "$380", rent: 120, rents: [120, 360, 850, 2000, 2200, 2400], houseCost: 200, hotelCost: 200 },
   { id: 27, name: "France", type: "france", countryCode: "FR", price: "$400", rent: 130, rents: [130, 390, 900, 2000, 2400, 2800], houseCost: 200, hotelCost: 200 },
   { id: 28, name: "SURPRISE", type: "card", icon: "❓" },
@@ -80,10 +80,10 @@ const BOARD_TILES: Tile[] = [
   { id: 32, name: "New York", type: "america", countryCode: "US", price: "$420", rent: 160, rents: [160, 450, 1000, 2200, 2600, 3000], houseCost: 300, hotelCost: 300 },
   { id: 33, name: "Punjab", type: "pakistan", countryCode: "PK", price: "$450", rent: 170, rents: [170, 500, 1100, 2400, 2800, 3200], houseCost: 300, hotelCost: 300 },
   { id: 34, name: "TAX", type: "tax", icon: "📉", price: "-$250" },
-  { id: 35, name: "AIRPORT 4", type: "airport", icon: "✈️", price: "$200" },
+  { id: 35, name: "AIRPORT 4", type: "airport", icon: "✈️", price: "$460" },
   { id: 36, name: "England", type: "uk", countryCode: "GB", price: "$480", rent: 180, rents: [180, 500, 1200, 2500, 3000, 3500], houseCost: 300, hotelCost: 300 },
-  { id: 37, name: "NUCLEAR", type: "electricity", icon: "☢️", price: "$150" },
-  { id: 38, name: "5G NET", type: "internet", icon: "📡", price: "$150" },
+  { id: 37, name: "NUCLEAR", type: "electricity", icon: "☢️", price: "$490" },
+  { id: 38, name: "5G NET", type: "internet", icon: "📡", price: "$495" },
   { id: 39, name: "Beijing", type: "china", countryCode: "CN", price: "$500", rent: 200, rents: [200, 600, 1400, 3000, 3500, 4000], houseCost: 300, hotelCost: 300 },
 ];
 
@@ -98,6 +98,21 @@ const INITIAL_HOUSES: Record<number, number> = { 1: 2, 4: 3, 17: 1, 26: 0, 29: 2
 const PROPERTY_OWNERSHIP: Record<number, number> = { 1: 1, 4: 1, 17: 2, 26: 3, 29: 4 };
 
 const PROPERTY_TYPES = new Set(["bangladesh", "france", "india", "china", "america", "uk", "pakistan", "japan"]);
+
+// Utility-style tiles (like Monopoly's railroads/utilities): no houses/hotels,
+// instead rent scales purely with how many of that SAME type you own.
+const UTILITY_TYPES = new Set(["electricity", "internet", "airport"]);
+const OWNABLE_TYPES = new Set([...PROPERTY_TYPES, ...UTILITY_TYPES]);
+
+// Rent tiers per type, indexed by (number owned - 1). Doubles with each
+// additional tile owned - same escalation shape as classic railroad rent,
+// just rescaled up to match this board's higher utility purchase prices.
+const UTILITY_RENT_TABLE: Record<string, number[]> = {
+  airport: [50, 100, 200, 400],
+  electricity: [80, 200, 400],
+  internet: [120, 300],
+};
+
 const BOARD_SIZE = BOARD_TILES.length;
 const PASS_START_BONUS = 200;
 
@@ -272,6 +287,19 @@ export default function GameBoard() {
     setActionLog((prev) => [msg, ...prev].slice(0, 8));
   };
 
+  // How many tiles of this SAME utility type (e.g. all "airport" tiles) does
+  // this owner currently hold? Drives the tiered rent lookup below.
+  const getUtilityOwnerCount = (type: string, ownerId: number) =>
+    BOARD_TILES.filter((t) => t.type === type && propertyOwnership[t.id] === ownerId).length;
+
+  const calculateUtilityRent = (tile: Tile, ownerId: number) => {
+    const table = UTILITY_RENT_TABLE[tile.type];
+    if (!table) return 0;
+    const count = getUtilityOwnerCount(tile.type, ownerId);
+    const tierIndex = Math.min(Math.max(count, 1), table.length) - 1;
+    return table[tierIndex];
+  };
+
   const animateMovement = (steps: number) => {
     const player = playersRef.current.find((p) => p.isCurrentPlayer);
     if (!player) return;
@@ -328,11 +356,13 @@ export default function GameBoard() {
     return;
   }
 
-  if (PROPERTY_TYPES.has(tile.type)) {
+  if (PROPERTY_TYPES.has(tile.type) || UTILITY_TYPES.has(tile.type)) {
     const ownerId = propertyOwnership[tile.id];
     if (ownerId && ownerId !== playerId) {
       const houses = propertyHouses[tile.id] || 0;
-      const rent = calculateRent(tile, houses);
+      const rent = PROPERTY_TYPES.has(tile.type)
+        ? calculateRent(tile, houses)
+        : calculateUtilityRent(tile, ownerId);
       const owner = playersRef.current.find((p) => p.id === ownerId);
 
       setPlayers((prev) =>
@@ -413,7 +443,7 @@ export default function GameBoard() {
   };
 
   const buyProperty = (tile: Tile) => {
-    if (!currentPlayer || !PROPERTY_TYPES.has(tile.type) || propertyOwnership[tile.id]) return;
+    if (!currentPlayer || !OWNABLE_TYPES.has(tile.type) || propertyOwnership[tile.id]) return;
     const cost = parsePrice(tile.price);
     if (cost === null || cost <= 0 || currentPlayer.money < cost) return;
 
@@ -446,6 +476,30 @@ export default function GameBoard() {
     setPropertyHouses((prev) => ({ ...prev, [tileId]: currentHouses + 1 }));
     addLog(`${currentPlayer.name} built on ${tile.name} (-$${cost})`);
     socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1 });
+  };
+
+  // Sells the WHOLE tile (property or utility) back to the bank for half its
+  // original purchase price - distinct from downgradeHouse, which only sells
+  // a single house/hotel level off a property that stays owned.
+  const sellPropertyEntirely = (tileId: number) => {
+    if (!currentPlayer) return;
+    const tile = BOARD_TILES.find((t) => t.id === tileId);
+    if (!tile || propertyOwnership[tileId] !== currentPlayer.id) return;
+
+    const price = Math.abs(parsePrice(tile.price) || 0);
+    const refund = Math.floor(price / 2);
+
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === currentPlayer.id ? { ...p, money: p.money + refund } : p))
+    );
+    setPropertyOwnership((prev) => {
+      const next = { ...prev };
+      delete next[tileId];
+      return next;
+    });
+    setPropertyHouses((prev) => ({ ...prev, [tileId]: 0 }));
+    addLog(`${currentPlayer.name} sold ${tile.name} back to the bank (+$${refund})`);
+    setActiveModal(null);
   };
 
   const downgradeHouse = (tileId: number) => {
@@ -526,7 +580,8 @@ export default function GameBoard() {
           const { gridRow, gridColumn, orientation } = getTilePosition(i);
           const isCorner = [0, 10, 20, 30].includes(i);
           const isProperty = PROPERTY_TYPES.has(tile.type);
-          const owner = isProperty ? getTileOwner(tile.id) : undefined;
+          const isUtility = UTILITY_TYPES.has(tile.type);
+          const owner = isProperty || isUtility ? getTileOwner(tile.id) : undefined;
           const playersHere = players.filter((p) => p.position === tile.id);
           const isOccupied = playersHere.length > 0;
           const occupantsKey = playersHere.map((p) => p.id).join("-");
@@ -892,16 +947,30 @@ export default function GameBoard() {
             className="absolute inset-0 z-[100] flex items-center justify-center rounded-[2vmin] bg-black/70 p-[4vmin] backdrop-blur-md"
             onClick={() => setActiveModal(null)}
           >
-            <div
-              className="relative w-[42vmin] overflow-hidden rounded-[1.8vmin] border bg-[#161224] shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                borderColor: getTileOwner(activeModal.id)
-                  ? `${getTileOwner(activeModal.id)!.color}66`
-                  : "rgba(255,255,255,0.08)",
-              }}
-            >
-              <div className="bg-gradient-to-r from-indigo-900/80 to-purple-900/60 px-[2.5vmin] py-[1.8vmin] text-center">
+            <div className="relative w-[42vmin]" onClick={(e) => e.stopPropagation()}>
+              {/* Flag / icon badge - centered on the card's top edge, half
+                  poking out above the header, half sitting inside it. */}
+              <div className="absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1/2">
+                {activeModal.countryCode ? (
+                  <div className="h-[5vmin] w-[7.6vmin] overflow-hidden rounded-[0.8vmin] border-[0.28vmin] border-white shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
+                    <Flag code={activeModal.countryCode} className="h-full w-full object-cover" />
+                  </div>
+                ) : (
+                  <div className="flex h-[5.4vmin] w-[5.4vmin] items-center justify-center rounded-full border-[0.28vmin] border-white bg-[#1c1730] text-[2.6vmin] shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
+                    {activeModal.icon}
+                  </div>
+                )}
+              </div>
+
+              <div
+                className="overflow-hidden rounded-[1.8vmin] border bg-[#161224] shadow-2xl"
+                style={{
+                  borderColor: getTileOwner(activeModal.id)
+                    ? `${getTileOwner(activeModal.id)!.color}66`
+                    : "rgba(255,255,255,0.08)",
+                }}
+              >
+              <div className="bg-gradient-to-r from-indigo-900/80 to-purple-900/60 px-[2.5vmin] pb-[1.8vmin] pt-[3.2vmin] text-center">
                 <h2 className="text-[2.6vmin] font-black uppercase tracking-wider text-white">
                   {activeModal.name}
                 </h2>
@@ -918,32 +987,63 @@ export default function GameBoard() {
               </div>
 
               <div className="p-[2.5vmin]">
-                {PROPERTY_TYPES.has(activeModal.type) && activeModal.rents && (
+                {PROPERTY_TYPES.has(activeModal.type) &&
+                  activeModal.rents &&
+                  (() => {
+                    const owner = getTileOwner(activeModal.id);
+                    // No owner → nothing is "current" yet, so every row stays
+                    // plain white. Owned → whichever tier (0 = base rent,
+                    // 1-4 = houses, 5 = hotel) matches the actual house count
+                    // lights up green; everything else stays white/gray.
+                    const activeTier = owner ? Math.min(propertyHouses[activeModal.id] || 0, 5) : -1;
+                    const rows = [
+                      { label: "with rent", value: activeModal.rents[0] },
+                      { label: "with one house", value: activeModal.rents[1] },
+                      { label: "with two houses", value: activeModal.rents[2] },
+                      { label: "with three houses", value: activeModal.rents[3] },
+                      { label: "with four houses", value: activeModal.rents[4] },
+                      { label: "with a hotel", value: activeModal.rents[5] },
+                    ];
+
+                    return (
+                      <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
+                        {rows.map((row, idx) => {
+                          const isActive = idx === activeTier;
+                          return (
+                            <div
+                              key={row.label}
+                              className={`flex justify-between ${isActive ? "text-emerald-400" : "text-gray-400"}`}
+                            >
+                              <span>{row.label}</span>
+                              <span className={`font-black ${isActive ? "text-emerald-400" : "font-bold text-white"}`}>
+                                ${row.value}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+
+                {/* Utility-style tiles (airports / electricity / internet): rent
+                    scales with how many of that same type the owner holds,
+                    not with houses - shown here as a simple tier list. */}
+                {UTILITY_TYPES.has(activeModal.type) && UTILITY_RENT_TABLE[activeModal.type] && (
                   <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
-                    <div className="flex justify-between text-gray-400">
-                      <span>with rent</span>
-                      <span className="font-bold text-white">${activeModal.rents[0]}</span>
-                    </div>
-                    <div className="flex justify-between text-gray-400">
-                      <span>with one house</span>
-                      <span className="font-bold text-white">${activeModal.rents[1]}</span>
-                    </div>
-                    <div className="flex justify-between text-gray-400">
-                      <span>with two houses</span>
-                      <span className="font-bold text-white">${activeModal.rents[2]}</span>
-                    </div>
-                    <div className="flex justify-between text-gray-400">
-                      <span>with three houses</span>
-                      <span className="font-bold text-white">${activeModal.rents[3]}</span>
-                    </div>
-                    <div className="flex justify-between text-gray-400">
-                      <span>with four houses</span>
-                      <span className="font-bold text-white">${activeModal.rents[4]}</span>
-                    </div>
-                    <div className="flex justify-between text-gray-400">
-                      <span>with a hotel</span>
-                      <span className="font-bold text-emerald-400">${activeModal.rents[5]}</span>
-                    </div>
+                    {UTILITY_RENT_TABLE[activeModal.type].map((amount, idx) => (
+                      <div key={idx} className="flex justify-between text-gray-400">
+                        <span>if owner holds {idx + 1}</span>
+                        <span className="font-bold text-white">${amount}</span>
+                      </div>
+                    ))}
+                    {getTileOwner(activeModal.id) && (
+                      <div className="flex justify-between border-t border-white/10 pt-[0.7vmin] text-emerald-400">
+                        <span>currently owns</span>
+                        <span className="font-black">
+                          {getUtilityOwnerCount(activeModal.type, getTileOwner(activeModal.id)!.id)} of this type
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -952,49 +1052,64 @@ export default function GameBoard() {
                     <div className="text-gray-500">Price</div>
                     <div className="font-black text-white">{activeModal.price}</div>
                   </div>
-                  <div className="text-center">
-                    <div className="text-gray-500">🏠</div>
-                    <div className="font-black text-white">${activeModal.houseCost ?? 100}</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-gray-500">🏨</div>
-                    <div className="font-black text-white">${activeModal.hotelCost ?? 100}</div>
-                  </div>
+                  {PROPERTY_TYPES.has(activeModal.type) && (
+                    <>
+                      <div className="text-center">
+                        <div className="text-gray-500">🏠</div>
+                        <div className="font-black text-white">${activeModal.houseCost ?? 100}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-gray-500">🏨</div>
+                        <div className="font-black text-white">${activeModal.hotelCost ?? 100}</div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {getTileOwner(activeModal.id)?.id === currentPlayer?.id && PROPERTY_TYPES.has(activeModal.type) && (
-                  <div className="mt-[2vmin] grid grid-cols-2 gap-[1.2vmin]">
-                    <button
-                      onClick={() => upgradeHouse(activeModal.id)}
-                      disabled={(propertyHouses[activeModal.id] || 0) >= 5}
-                      className="rounded-[0.9vmin] bg-green-600 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-white hover:bg-green-500 disabled:opacity-30"
-                    >
-                      {(propertyHouses[activeModal.id] || 0) === 4 ? "Buy Hotel" : "Build House"}
-                    </button>
-                    <button
-                      onClick={() => downgradeHouse(activeModal.id)}
-                      disabled={(propertyHouses[activeModal.id] || 0) <= 0}
-                      className="rounded-[0.9vmin] bg-red-600/80 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-white hover:bg-red-500 disabled:opacity-30"
-                    >
-                      Sell
-                    </button>
-                  </div>
-                )}
+                {getTileOwner(activeModal.id)?.id === currentPlayer?.id &&
+                  (() => {
+                    const isUpgradable = PROPERTY_TYPES.has(activeModal.type);
+                    const sellRefund = Math.floor(Math.abs(parsePrice(activeModal.price) || 0) / 2);
+                    const currentHouses = propertyHouses[activeModal.id] || 0;
+                    const maxedOut = currentHouses >= 5;
+                    const upgradeCost = currentHouses === 4 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
 
-                {!getTileOwner(activeModal.id) && PROPERTY_TYPES.has(activeModal.type) && (
+                    return (
+                      <div className={`mt-[2vmin] grid gap-[1.2vmin] ${isUpgradable ? "grid-cols-2" : "grid-cols-1"}`}>
+                        <button
+                          onClick={() => sellPropertyEntirely(activeModal.id)}
+                          className="rounded-[0.9vmin] border-[0.18vmin] border-red-500 bg-red-950/60 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(239,68,68,0.85),0_0_1.6vmin_rgba(239,68,68,0.65)]"
+                        >
+                          Sell (+${sellRefund})
+                        </button>
+                        {isUpgradable && (
+                          <button
+                            onClick={() => upgradeHouse(activeModal.id)}
+                            disabled={maxedOut}
+                            className="rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                          >
+                            {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                {!getTileOwner(activeModal.id) && OWNABLE_TYPES.has(activeModal.type) && (
                   <button
                     onClick={() => buyProperty(activeModal)}
                     disabled={(currentPlayer?.money ?? 0) < (parsePrice(activeModal.price) || 0)}
-                    className="mt-[2vmin] w-full rounded-[0.9vmin] bg-gradient-to-r from-green-600 to-emerald-600 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-white hover:scale-[1.02] disabled:opacity-30"
+                    className="mt-[2vmin] w-full rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
                   >
                     Buy for {activeModal.price}
                   </button>
                 )}
               </div>
+              </div>
 
               <button
                 onClick={() => setActiveModal(null)}
-                className="absolute right-[1.4vmin] top-[1.4vmin] text-[2vmin] text-white/50 hover:text-white"
+                className="absolute right-[1.4vmin] top-[1.4vmin] z-30 text-[2vmin] text-white/50 hover:text-white"
               >
                 ✕
               </button>
