@@ -25,6 +25,23 @@ interface Player {
   money: number;
   position: number;
   isCurrentPlayer?: boolean;
+  mood?: "happy" | "flat";
+}
+
+interface PlayerMovedEvent {
+  playerId: number;
+  position: number;
+  money: number;
+}
+
+interface PropertyBoughtEvent {
+  tileId: number;
+  playerId: number;
+}
+
+interface HouseUpgradedEvent {
+  tileId: number;
+  houses: number;
 }
 
 const BOARD_TILES: Tile[] = [
@@ -71,10 +88,10 @@ const BOARD_TILES: Tile[] = [
 ];
 
 const INITIAL_PLAYERS: Player[] = [
-  { id: 1, name: "You", color: "#8b5cf6", money: 2400, position: 0, isCurrentPlayer: true },
-  { id: 2, name: "Alex", color: "#22c55e", money: 2100, position: 0 },
-  { id: 3, name: "Sam", color: "#ef4444", money: 1950, position: 0 },
-  { id: 4, name: "Jordan", color: "#f59e0b", money: 2250, position: 0 },
+  { id: 1, name: "You", color: "#8b5cf6", money: 2400, position: 0, isCurrentPlayer: true, mood: "happy" },
+  { id: 2, name: "Alex", color: "#22c55e", money: 2100, position: 0, mood: "happy" },
+  { id: 3, name: "Sam", color: "#ef4444", money: 1950, position: 0, mood: "happy" },
+  { id: 4, name: "Jordan", color: "#f59e0b", money: 2250, position: 0, mood: "happy" },
 ];
 
 const INITIAL_HOUSES: Record<number, number> = { 1: 2, 4: 3, 17: 1, 26: 0, 29: 2 };
@@ -83,6 +100,33 @@ const PROPERTY_OWNERSHIP: Record<number, number> = { 1: 1, 4: 1, 17: 2, 26: 3, 2
 const PROPERTY_TYPES = new Set(["bangladesh", "france", "india", "china", "america", "uk", "pakistan", "japan"]);
 const BOARD_SIZE = BOARD_TILES.length;
 const PASS_START_BONUS = 200;
+
+// Single source of truth for the board's geometry. If the board's overall
+// size, border, padding, or gap ever change in the className below, update
+// the matching constant here too - everything else (tile depth, the
+// swapped-dimension box used to rotate left/right content) derives from
+// these so the four edges always stay in sync.
+const BOARD_VMIN = 96;
+const BOARD_BORDER_VMIN = 0.3 * 2;
+const BOARD_PADDING_VMIN = 0.4 * 2;
+const BOARD_GAP_VMIN = 0.45;
+const CORNER_FR = 1.35;
+const INNER_FR = 1;
+const RING_SIZE = 11;
+const TOTAL_FR = CORNER_FR * 2 + INNER_FR * 9;
+const TRACK_SPACE_VMIN = BOARD_VMIN - BOARD_BORDER_VMIN - BOARD_PADDING_VMIN - BOARD_GAP_VMIN * (RING_SIZE - 1);
+const UNIT_FR_VMIN = TRACK_SPACE_VMIN / TOTAL_FR;
+const TILE_NARROW_VMIN = UNIT_FR_VMIN * INNER_FR; // width along the edge
+const TILE_DEPTH_VMIN = UNIT_FR_VMIN * CORNER_FR; // depth toward the center
+const TILE_CONTENT_PADDING_VMIN = 0.6 * 2; // matches each tile's p-[0.6vmin]
+// The content block (flag -> spacer -> name -> price) is always built at this
+// one "portrait" size - narrow width, deep height - regardless of which edge
+// the tile is on. Bottom/top tiles use it unrotated (their own cell is
+// already this shape); left/right tiles rotate the exact same block 90deg,
+// so its visual footprint becomes deep-wide/narrow-tall, matching THEIR
+// cell instead. Same numbers, same block, every side.
+const CONTENT_BLOCK_WIDTH_VMIN = TILE_NARROW_VMIN - TILE_CONTENT_PADDING_VMIN;
+const CONTENT_BLOCK_HEIGHT_VMIN = TILE_DEPTH_VMIN - TILE_CONTENT_PADDING_VMIN;
 
 const parsePrice = (price?: string) => {
   if (!price) return null;
@@ -96,11 +140,33 @@ const calculateRent = (tile: Tile, houses: number) => {
   return Math.floor(tile.rent * (1 + houses * 0.6));
 };
 
+// Anchors the player-token cluster in the gap between the inward-facing
+// flag/icon and the tile name, per edge orientation.
+const getTokenAnchor = (orientation: string) => {
+  switch (orientation) {
+    case "bottom":
+      return { top: "32%", left: "50%" };
+    case "top":
+      return { top: "68%", left: "50%" };
+    case "left":
+      return { top: "50%", left: "68%" };
+    case "right":
+      return { top: "50%", left: "32%" };
+    default:
+      return { top: "50%", left: "50%" };
+  }
+};
+
+// Long names (e.g. "Île-de-France", "AIRPORT 1") would otherwise overflow a
+// single ~7vmin-wide tile at a fixed font size, so scale down past 8 chars.
+const getNameFontSize = (name: string) => {
+  const extra = Math.max(0, name.length - 8);
+  return Math.max(0.78, 1.1 - extra * 0.045);
+};
+
 export default function GameBoard() {
   const socketRef = useRef<Socket | null>(null);
-  const rollIntervalRef = useRef<number | null>(null);
   const moveTimeoutRef = useRef<number | null>(null);
-  const pendingRollRef = useRef<[number, number] | null>(null);
 
   const [isConnected, setIsConnected] = useState(false);
   const [connectionLabel, setConnectionLabel] = useState("Connecting...");
@@ -122,7 +188,10 @@ export default function GameBoard() {
 
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const playersRef = useRef(players);
-  playersRef.current = players;
+
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
 
   useEffect(() => {
     const newSocket = io("http://localhost:3001", { reconnectionAttempts: 8, timeout: 4000 });
@@ -137,13 +206,13 @@ export default function GameBoard() {
       setConnectionLabel("Offline");
     };
 
-    newSocket.on("player:moved", (data: any) => {
+    newSocket.on("player:moved", (data: PlayerMovedEvent) => {
       setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, position: data.position, money: data.money } : p)));
     });
-    newSocket.on("property:bought", (data: any) => {
+    newSocket.on("property:bought", (data: PropertyBoughtEvent) => {
       setPropertyOwnership((prev) => ({ ...prev, [data.tileId]: data.playerId }));
     });
-    newSocket.on("house:upgraded", (data: any) => {
+    newSocket.on("house:upgraded", (data: HouseUpgradedEvent) => {
       setPropertyHouses((prev) => ({ ...prev, [data.tileId]: data.houses }));
     });
 
@@ -159,7 +228,6 @@ export default function GameBoard() {
 
   useEffect(() => {
     return () => {
-      if (rollIntervalRef.current) window.clearInterval(rollIntervalRef.current);
       if (moveTimeoutRef.current) window.clearTimeout(moveTimeoutRef.current);
     };
   }, []);
@@ -201,6 +269,7 @@ export default function GameBoard() {
 
     setIsMoving(true);
     setGamePhase("MOVING...");
+    setPlayers((prev) => prev.map((p) => (p.id === player.id ? { ...p, mood: "flat" } : p)));
 
     let remaining = steps;
     let currentPos = player.position;
@@ -233,42 +302,48 @@ export default function GameBoard() {
   };
 
   const handleLanding = (tile: Tile, playerId: number) => {
-    const player = playersRef.current.find((p) => p.id === playerId);
-    if (!player) return;
+  const player = playersRef.current.find((p) => p.id === playerId);
+  if (!player) return;
 
-    if (tile.type === "tax") {
-      const amount = Math.abs(parsePrice(tile.price) || 0);
+  if (tile.type === "tax") {
+    const amount = Math.abs(parsePrice(tile.price) || 0);
+    setPlayers((prev) =>
+      prev.map((p) =>
+        p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
+      )
+    );
+    addLog(`${player.name} paid $${amount} tax.`);
+    return;
+  }
+
+  if (PROPERTY_TYPES.has(tile.type)) {
+    const ownerId = propertyOwnership[tile.id];
+    if (ownerId && ownerId !== playerId) {
+      const houses = propertyHouses[tile.id] || 0;
+      const rent = calculateRent(tile, houses);
+      const owner = playersRef.current.find((p) => p.id === ownerId);
+
       setPlayers((prev) =>
-        prev.map((p) => (p.id === playerId ? { ...p, money: Math.max(0, p.money - amount) } : p))
+        prev.map((p) => {
+          if (p.id === playerId) return { ...p, money: Math.max(0, p.money - rent), mood: "flat" };
+          if (p.id === ownerId) return { ...p, money: p.money + rent };
+          return p;
+        })
       );
-      addLog(`${player.name} paid $${amount} tax.`);
-      return;
+      addLog(`${player.name} paid $${rent} rent to ${owner?.name} on ${tile.name}.`);
+    } else {
+      setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
+      if (!ownerId) setActiveModal(tile);
     }
+    return;
+  }
 
-    if (PROPERTY_TYPES.has(tile.type)) {
-      const ownerId = propertyOwnership[tile.id];
-      if (ownerId && ownerId !== playerId) {
-        const houses = propertyHouses[tile.id] || 0;
-        const rent = calculateRent(tile, houses);
-        const owner = playersRef.current.find((p) => p.id === ownerId);
+  setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
 
-        setPlayers((prev) =>
-          prev.map((p) => {
-            if (p.id === playerId) return { ...p, money: Math.max(0, p.money - rent) };
-            if (p.id === ownerId) return { ...p, money: p.money + rent };
-            return p;
-          })
-        );
-        addLog(`${player.name} paid $${rent} rent to ${owner?.name} on ${tile.name}.`);
-      } else if (!ownerId) {
-        setActiveModal(tile);
-      }
-    }
-
-    if (tile.type === "card") {
-      addLog(`${player.name} landed on ${tile.name}.`);
-    }
-  };
+  if (tile.type === "card") {
+    addLog(`${player.name} landed on ${tile.name}.`);
+  }
+};
 
   const rollDice = () => {
     if (isRolling || isMoving || gamePhase !== "YOUR TURN") return;
@@ -407,13 +482,34 @@ export default function GameBoard() {
   };
 
   return (
-    <main className="flex h-screen w-screen items-center justify-center overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-[1.5vmin] font-sans">
+    <main className="flex h-screen w-screen items-center justify-center overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-[1vmin] font-sans">
+      {/* Global keyframes for token motion - unscoped so inline `animation` refs resolve */}
+      <style jsx global>{`
+        @keyframes tokenBounce {
+          0%, 100% { transform: translateY(0) scale(1); }
+          50% { transform: translateY(-18%) scale(1.06); }
+        }
+        @keyframes tokenGlow {
+          0%, 100% { filter: brightness(1); }
+          50% { filter: brightness(1.3); }
+        }
+        @keyframes tokenIdle {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-8%); }
+        }
+        @keyframes nameDodge {
+          0% { transform: translateY(0); }
+          35% { transform: translateY(160%); }
+          100% { transform: translateY(0); }
+        }
+      `}</style>
+
       <div
-        className="relative grid aspect-square h-[96vmin] w-[96vmin] rounded-[2vmin] border border-white/10 bg-[#0f0c16] p-[0.5vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15)]"
+        className="relative grid aspect-square h-[96vmin] w-[96vmin] rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)]"
         style={{
-          gridTemplateColumns: "repeat(11, 1fr)",
-          gridTemplateRows: "repeat(11, 1fr)",
-          gap: "0.35vmin",
+          gridTemplateColumns: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
+          gridTemplateRows: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
+          gap: `${BOARD_GAP_VMIN}vmin`,
         }}
       >
         {/* BOARD TILES */}
@@ -422,8 +518,10 @@ export default function GameBoard() {
           const isCorner = [0, 10, 20, 30].includes(i);
           const isProperty = PROPERTY_TYPES.has(tile.type);
           const owner = isProperty ? getTileOwner(tile.id) : undefined;
-          const houses = propertyHouses[tile.id] || 0;
           const playersHere = players.filter((p) => p.position === tile.id);
+          const isOccupied = playersHere.length > 0;
+          const occupantsKey = playersHere.map((p) => p.id).join("-");
+          const tokenAnchor = getTokenAnchor(orientation);
 
           const ownerStripClass =
             orientation === "top"
@@ -434,19 +532,6 @@ export default function GameBoard() {
               ? "absolute bottom-0 right-0 top-0 z-30 w-[0.55vmin]"
               : "absolute bottom-0 left-0 right-0 z-30 h-[0.55vmin]";
 
-          let innerRotation = "";
-          let counterRotation = "";
-          if (orientation === "left") {
-            innerRotation = "rotate-90";
-            counterRotation = "-rotate-90";
-          } else if (orientation === "top") {
-            innerRotation = "rotate-180";
-            counterRotation = "-rotate-180";
-          } else if (orientation === "right") {
-            innerRotation = "-rotate-90";
-            counterRotation = "rotate-90";
-          }
-
           const ownedBackground = owner ? getTransparentColor(owner.color, "25") : undefined;
           const ownedBorder = owner ? getTransparentColor(owner.color, "90") : undefined;
 
@@ -454,23 +539,30 @@ export default function GameBoard() {
             <div
               key={tile.id}
               onClick={() => handleTileClick(tile)}
-              className={`relative flex cursor-pointer items-center justify-center rounded-[0.9vmin] shadow-lg transition-all duration-200 hover:z-30 hover:scale-[1.04] ${
-                owner ? "shadow-[0_0_1.5vmin_rgba(255,255,255,0.08)]" : "hover:shadow-[0_0_2vmin_rgba(255,255,255,0.35)]"
+              className={`relative flex cursor-pointer items-center justify-center rounded-[0.9vmin] transition-all duration-200 hover:z-30 hover:scale-[1.04] ${
+                owner ? "" : "shadow-lg hover:shadow-[0_0_2vmin_rgba(255,255,255,0.35)]"
               } ${
                 isCorner
-                  ? "overflow-hidden border-[0.25vmin] border-indigo-400/60 bg-gradient-to-br from-[#1e143c] to-[#120b24]"
-                  : "border border-[#34404d] bg-[#171e26]/80"
+  ? "border-[0.25vmin] border-indigo-400/60 bg-gradient-to-br from-[#1e143c] to-[#120b24]"
+  : "border border-[#34404d] bg-[#171e26]/80"
               }`}
               style={{
                 gridRow,
                 gridColumn,
-                ...(owner ? { backgroundColor: ownedBackground, borderColor: ownedBorder } : {}),
+                ...(owner
+                  ? {
+                      backgroundColor: ownedBackground,
+                      borderColor: ownedBorder,
+                      boxShadow: `0 0 1.8vmin ${owner.color}99, 0 0 0.5vmin ${owner.color}, inset 0 0 0.8vmin ${owner.color}33`,
+                    }
+                  : {}),
               }}
             >
+              {/* Translucent flag watermark - shown on every tile that has a country flag, in full color so it's still visible */}
               {!isCorner && tile.countryCode && (
                 <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[0.9vmin]">
-                  <div className="absolute inset-0 flex scale-150 items-center justify-center opacity-[0.07] mix-blend-screen">
-                    <Flag code={tile.countryCode} className="h-full w-full object-cover grayscale" />
+                  <div className="absolute inset-0 flex scale-150 items-center justify-center opacity-25">
+                    <Flag code={tile.countryCode} className="h-full w-full object-cover" />
                   </div>
                 </div>
               )}
@@ -482,36 +574,73 @@ export default function GameBoard() {
                 />
               )}
 
-              {playersHere.length > 0 && (
+              {/* PLAYER TOKENS - anchored between the flag and the name, per orientation */}
+              {isOccupied && (
                 <div
-                  className={`absolute z-50 flex max-w-[95%] flex-wrap gap-[0.3vmin] ${
-                    orientation === "top" ? "bottom-[0.35vmin]" : "top-[0.35vmin]"
-                  } left-[0.35vmin]`}
+                  className="absolute z-50 flex flex-wrap items-center justify-center gap-[0.4vmin]"
+                  style={{
+                    top: tokenAnchor.top,
+                    left: tokenAnchor.left,
+                    transform: "translate(-50%, -50%)",
+                    maxWidth: "72%",
+                  }}
                 >
-                  {playersHere.map((player) => (
-                    <div
-                      key={player.id}
-                      title={player.name}
-                      className={`relative flex h-[2.6vmin] w-[2.6vmin] items-center justify-center rounded-full border-[0.25vmin] border-white shadow-[0_0.4vmin_1.2vmin_rgba(0,0,0,0.7)] transition-all duration-300 ${
-                        player.isCurrentPlayer ? "scale-125 ring-2 ring-white/80 z-10" : "hover:scale-110"
-                      }`}
-                      style={{
-                        backgroundColor: player.color,
-                        boxShadow: `0 0 1.2vmin ${player.color}99, 0 0.4vmin 1vmin rgba(0,0,0,0.6)`,
-                      }}
-                    >
-                      <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <div className="flex gap-[0.35vmin] mt-[0.15vmin]">
-                          <div className="h-[0.45vmin] w-[0.45vmin] rounded-full bg-white" />
-                          <div className="h-[0.45vmin] w-[0.45vmin] rounded-full bg-white" />
+                  {playersHere.map((player) => {
+                    const isBig = player.isCurrentPlayer;
+                    const size = isBig ? "3.6vmin" : "2.9vmin";
+                    return (
+                      <div
+                        key={player.id}
+                        title={player.name}
+                        className={`relative flex items-center justify-center rounded-full transition-transform duration-300 ${
+                          isBig ? "z-10" : "hover:scale-110"
+                        }`}
+                        style={{
+                          height: size,
+                          width: size,
+                          background: `radial-gradient(circle at 32% 28%, ${player.color}ee, ${player.color} 55%, #00000055 100%)`,
+                          boxShadow: `0 0 1.8vmin ${player.color}cc, 0 0.7vmin 1.4vmin rgba(0,0,0,0.7), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.4), inset 0 -0.3vmin 0.45vmin rgba(0,0,0,0.4)`,
+                          animation: isBig
+                            ? "tokenBounce 1.4s ease-in-out infinite, tokenGlow 1.4s ease-in-out infinite"
+                            : "tokenIdle 2.6s ease-in-out infinite",
+                          animationDelay: `${(player.id % 4) * 0.15}s`,
+                        }}
+                      >
+                        {/* soft contact shadow under the token */}
+                        <div
+                          className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 rounded-full bg-black/40"
+                          style={{ width: "70%", height: "0.5vmin", marginTop: "0.15vmin", filter: "blur(0.3vmin)" }}
+                        />
+                        <div
+                          className="pointer-events-none absolute left-[18%] top-[14%] h-[35%] w-[35%] rounded-full opacity-70"
+                          style={{ background: "radial-gradient(circle, rgba(255,255,255,0.85), rgba(255,255,255,0) 70%)" }}
+                        />
+                        <div
+                          className="pointer-events-none absolute inset-0 rounded-full"
+                          style={{ boxShadow: `inset 0 0 0 0.14vmin ${player.color}`, filter: "brightness(1.6)" }}
+                        />
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          {player.mood === "flat" ? (
+                            <>
+                              <div className="flex gap-[0.4vmin] mt-[0.1vmin]">
+                                <div className="h-[0.22vmin] w-[0.65vmin] rounded-full bg-white/95" />
+                                <div className="h-[0.22vmin] w-[0.65vmin] rounded-full bg-white/95" />
+                              </div>
+                              <div className="mt-[0.25vmin] h-[0.22vmin] w-[1vmin] rounded-full bg-white/85" />
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex gap-[0.4vmin] mt-[0.12vmin]">
+                                <div className="h-[0.5vmin] w-[0.5vmin] rounded-full bg-white/95" />
+                                <div className="h-[0.5vmin] w-[0.5vmin] rounded-full bg-white/95" />
+                              </div>
+                              <div className="mt-[0.1vmin] h-[0.42vmin] w-[0.8vmin] rounded-b-full border-b-[0.18vmin] border-l-[0.18vmin] border-r-[0.18vmin] border-white/85 bg-transparent" />
+                            </>
+                          )}
                         </div>
-                        <div className="mt-[0.15vmin] h-[0.25vmin] w-[0.9vmin] rounded-full bg-white/90" />
                       </div>
-                      <span className="absolute -bottom-[0.15vmin] text-[0.55vmin] font-black text-white/90 drop-shadow">
-                        {player.name.slice(0, 1)}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -525,65 +654,93 @@ export default function GameBoard() {
                   </div>
                 </div>
               ) : (
-                <div className={`relative z-10 flex h-full w-full flex-col items-center justify-between p-[0.6vmin] ${innerRotation}`}>
-                  {owner && (
-                    <div className="absolute right-[0.2vmin] top-[0.2vmin] z-40 flex items-center">
-                      <div
-                        className="flex items-center gap-[0.15vmin] rounded-[0.4vmin] border px-[0.35vmin] py-[0.1vmin] shadow-lg backdrop-blur-sm"
-                        style={{
-                          backgroundColor: `${owner.color}45`,
-                          borderColor: `${owner.color}99`,
-                        }}
-                      >
-                        <span className="text-[1vmin]">{houses === 5 ? "🏨" : "🏠"}</span>
-                        <span className="text-[0.9vmin] font-black" style={{ color: owner.color }}>
-                          {houses}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="absolute left-1/2 top-0 z-30 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center">
-                    {tile.countryCode ? (
-                      <div className={`h-[2.4vmin] w-[3.5vmin] overflow-hidden rounded-[0.2vmin] border-[0.15vmin] border-white/80 shadow-md ${counterRotation}`}>
-                        <Flag code={tile.countryCode} className="h-full w-full object-cover" />
-                      </div>
-                    ) : (
-                      <span className={`text-[2.4vmin] drop-shadow-xl ${counterRotation}`}>{tile.icon}</span>
-                    )}
-                  </div>
-
-                  <div className="h-[18%] w-full" />
-
-                  <div className="flex w-full flex-1 flex-col items-center justify-center text-center">
-                    <span className="max-w-full break-words text-[1vmin] font-bold uppercase leading-tight tracking-wide text-gray-100">
-                      {tile.name}
-                    </span>
-                    {owner && (
-                      <span className="mt-[0.2vmin] max-w-full truncate text-[0.7vmin] font-bold uppercase" style={{ color: owner.color }}>
-                        {owner.name}
-                      </span>
-                    )}
-                  </div>
-
-                  {!owner && tile.price ? (
+                <div className="relative z-10 flex h-full w-full items-center justify-center p-[0.6vmin]">
+                  {/* Every tile shares one identical vertical layout (flag → spacer →
+                      name → price), in the same square box. Bottom-row tiles render
+                      it upright; top-row tiles just reverse the stacking order (so
+                      the flag ends up on its inward/bottom edge) without rotating
+                      the text; left/right-column tiles rotate this whole block 90°
+                      as a single unit, so nothing has to be sized or positioned
+                      differently per edge. */}
+                  <div
+                    className={`absolute left-1/2 top-1/2 flex items-center justify-start ${
+                      orientation === "top" ? "flex-col-reverse" : "flex-col"
+                    }`}
+                    style={{
+                      width: `${CONTENT_BLOCK_WIDTH_VMIN}vmin`,
+                      height: `${CONTENT_BLOCK_HEIGHT_VMIN}vmin`,
+                      transform:
+                        orientation === "left"
+                          ? "translate(-50%, -50%) rotate(90deg)"
+                          : orientation === "right"
+                          ? "translate(-50%, -50%) rotate(-90deg)"
+                          : "translate(-50%, -50%)",
+                    }}
+                  >
+                    {/* Flag / icon marker - anchored to this block's own top edge
+                        (or bottom edge when the block is reversed for the top row);
+                        rotating the whole block for left/right carries it along. */}
                     <div
-                      className={`w-[95%] rounded-[0.35vmin] py-[0.15vmin] text-center text-[0.85vmin] font-bold ${
-                        tile.price.includes("-")
-                          ? "bg-red-500/80 text-white"
-                          : "border border-[#526171] bg-[#293541] text-[#d9e3ec]"
+                      className={`absolute left-1/2 z-40 flex -translate-x-1/2 items-center justify-center ${
+                        orientation === "top" ? "bottom-0 translate-y-1/2" : "top-0 -translate-y-1/2"
                       }`}
                     >
-                      {tile.price}
+                      {tile.countryCode ? (
+                        <div
+                          className={`h-[3vmin] w-[4.6vmin] overflow-hidden rounded-[0.5vmin] border-[0.22vmin] shadow-lg transition-all duration-300 ${
+                            isOccupied ? "scale-110 border-white shadow-[0_0_1.4vmin_rgba(255,255,255,0.5)]" : "border-white/80"
+                          }`}
+                        >
+                          <Flag code={tile.countryCode} className="h-full w-full object-cover" />
+                        </div>
+                      ) : (
+                        <span className={`text-[3.4vmin] drop-shadow-xl transition-transform duration-300 ${isOccupied ? "scale-110" : ""}`}>
+                          {tile.icon}
+                        </span>
+                      )}
                     </div>
-                  ) : owner ? (
+
+                    {/* Fixed spacer that reserves room for the flag */}
+                    <div className="h-[18%] w-full" />
+
+                    {/* Flexible spacer - absorbs the slack so the name group sits right above the price */}
+                    <div className="flex-1" />
+
                     <div
-                      className="w-[95%] rounded-[0.3vmin] py-[0.15vmin] text-center text-[0.7vmin] font-black uppercase tracking-wide"
-                      style={{ color: owner.color, backgroundColor: `${owner.color}18` }}
+                      key={`name-${tile.id}-${occupantsKey}`}
+                      className="relative flex min-w-0 flex-col items-center justify-center overflow-visible text-center"
+                      style={{ animation: isOccupied ? "nameDodge 0.7s ease-in-out" : "none" }}
                     >
-                      Owned
+                      {/* Name tag - full text, one line, no truncation */}
+                      <span
+                        className={`relative z-[60] whitespace-nowrap font-bold uppercase leading-tight tracking-wide text-gray-100 ${
+                          isOccupied ? "rounded-[0.4vmin] bg-[#0f0c16]/90 px-[0.5vmin] py-[0.1vmin] shadow-md" : ""
+                        }`}
+                        style={{ fontSize: `${getNameFontSize(tile.name)}vmin` }}
+                      >
+                        {tile.name}
+                      </span>
                     </div>
-                  ) : null}
+
+                    {!owner && tile.price ? (
+                      <div
+                        className={`m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.35vmin] text-center font-black ${
+                          tile.price.includes("-")
+                            ? "bg-red-500/80 text-white"
+                            : "border border-[#526171] bg-[#293541] text-[#e7eef5]"
+                        }`}
+                      >
+                        <span className="whitespace-nowrap text-[1.15vmin]">{tile.price}</span>
+                      </div>
+                    ) : owner ? (
+                      <div
+                        className="m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.3vmin] text-center font-black uppercase tracking-wide"
+                        style={{ color: owner.color, backgroundColor: `${owner.color}18` }}
+                      >
+                        <span className="whitespace-nowrap text-[0.9vmin]">Owned</span>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               )}
             </div>
@@ -592,8 +749,8 @@ export default function GameBoard() {
 
         {/* ================= CENTER CONSOLE ================= */}
         <div
-          className="relative z-0 flex flex-col items-center justify-between rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[2vmin] text-center shadow-2xl"
-          style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.8vmin" }}
+          className="relative z-0 flex flex-col items-center justify-between rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
+          style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
         >
           {/* Top bar */}
           <div className="flex w-full items-start justify-between">
