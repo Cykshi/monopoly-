@@ -93,12 +93,16 @@ const BOARD_TILES: Tile[] = [
 
 const STARTING_MONEY = 2000;
 
-const INITIAL_PLAYERS: Player[] = [
-  { id: 1, name: "You", color: "#8b5cf6", money: STARTING_MONEY, position: 0, isCurrentPlayer: true, mood: "happy" },
-  { id: 2, name: "Alex", color: "#22c55e", money: STARTING_MONEY, position: 0, mood: "happy" },
-  { id: 3, name: "Sam", color: "#ef4444", money: STARTING_MONEY, position: 0, mood: "happy" },
-  { id: 4, name: "Jordan", color: "#f59e0b", money: STARTING_MONEY, position: 0, mood: "happy" },
+const DEFAULT_PLAYERS: Player[] = [
+  { id: 1, name: "", color: "#8b5cf6", money: STARTING_MONEY, position: 0, isCurrentPlayer: true, mood: "happy" },
+  { id: 2, name: "", color: "#22c55e", money: STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 3, name: "", color: "#ef4444", money: STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 4, name: "", color: "#f59e0b", money: STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 5, name: "", color: "#06b6d4", money: STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 6, name: "", color: "#ec4899", money: STARTING_MONEY, position: 0, mood: "happy" },
 ];
+
+const INITIAL_PLAYERS: Player[] = DEFAULT_PLAYERS.slice(0, 2);
 
 // Clean board at game start: nobody owns anything yet, no houses built.
 const INITIAL_HOUSES: Record<number, number> = {};
@@ -123,6 +127,13 @@ const UTILITY_RENT_TABLE: Record<string, number[]> = {
 const BOARD_SIZE = BOARD_TILES.length;
 const PASS_START_BONUS = 200;
 const LAND_START_BONUS = 300;
+const TURN_TIME_LIMIT = 120; // 120 seconds per turn
+
+const formatTurnTime = (seconds: number) => {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+};
 
 const BOARD_VMIN = 96;
 const BOARD_BORDER_VMIN = 0.3 * 2;
@@ -162,16 +173,22 @@ const findNearestTileIndex = (fromPos: number, type: string) => {
   return fromPos;
 };
 
-const getTokenAnchor = (orientation: string) => {
+const getTokenAnchor = (orientation: string, isCorner?: boolean, tileId?: number) => {
+  if (isCorner) {
+    if (tileId === 20) {
+      return { top: "34%", left: "50%" };
+    }
+    return { top: "38%", left: "50%" };
+  }
   switch (orientation) {
     case "bottom":
-      return { top: "32%", left: "50%" };
+      return { top: "34%", left: "50%" };
     case "top":
-      return { top: "68%", left: "50%" };
+      return { top: "66%", left: "50%" };
     case "left":
-      return { top: "50%", left: "68%" };
+      return { top: "50%", left: "66%" };
     case "right":
-      return { top: "50%", left: "32%" };
+      return { top: "50%", left: "34%" };
     default:
       return { top: "50%", left: "50%" };
   }
@@ -253,6 +270,10 @@ export default function GameBoard() {
   const [landStartBonus, setLandStartBonus] = useState(LAND_START_BONUS);
   const [fastMode, setFastMode] = useState(false);
   const [enableRestHousePot, setEnableRestHousePot] = useState(true);
+  const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
+  // Turn Timer state (120 seconds per turn)
+  const [turnTimeLeft, setTurnTimeLeft] = useState(TURN_TIME_LIMIT);
+  const isTurnTimedOutRef = useRef(false);
 
   // Vote Kick & Voluntary Bankrupt states
   const [isVoteKickOpen, setIsVoteKickOpen] = useState(false);
@@ -262,6 +283,50 @@ export default function GameBoard() {
 
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const alivePlayers = useMemo(() => players.filter((p) => !p.isBankrupt), [players]);
+
+  const normalizePlayerNames = (list: Player[]) =>
+    list.map((p) => ({
+      ...p,
+      name: p.name.trim() ? p.name.trim() : `Player ${p.id}`,
+    }));
+
+  const handlePlayerCountChange = (count: number) => {
+    if (isGameStarted) return;
+    if (count < 2 || count > 6) return;
+
+    setPlayers((prev) => {
+      if (count === prev.length) return prev;
+      if (count < prev.length) {
+        const trimmed = prev.slice(0, count);
+        if (!trimmed.some((p) => p.isCurrentPlayer)) {
+          trimmed[0].isCurrentPlayer = true;
+        }
+        return trimmed;
+      }
+      const updated = [...prev];
+      for (let i = prev.length; i < count; i++) {
+        const template = DEFAULT_PLAYERS[i];
+        updated.push({
+          id: template.id,
+          name: "",
+          color: template.color,
+          money: startingCash,
+          position: 0,
+          mood: "happy",
+          isCurrentPlayer: false,
+        });
+      }
+      return updated;
+    });
+    addLog(`⚙️ Player count updated to ${count} players.`);
+  };
+
+  const handlePlayerNameChange = (playerId: number, newName: string) => {
+    if (isGameStarted) return;
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === playerId ? { ...p, name: newName } : p))
+    );
+  };
 
   const handleStartingCashChange = (cash: number) => {
     if (isGameStarted) return;
@@ -279,7 +344,10 @@ export default function GameBoard() {
 
   const handleStartGame = () => {
     if (isGameStarted) return;
+    setPlayers((prev) => normalizePlayerNames(prev));
     setIsGameStarted(true);
+    setTurnTimeLeft(TURN_TIME_LIMIT);
+    isTurnTimedOutRef.current = false;
     addLog(`🎮 Game started! Settings are now locked in.`);
   };
 
@@ -785,7 +853,10 @@ export default function GameBoard() {
     }
 
     if (!isGameStarted) {
+      setPlayers((prev) => normalizePlayerNames(prev));
       setIsGameStarted(true);
+      setTurnTimeLeft(TURN_TIME_LIMIT);
+      isTurnTimedOutRef.current = false;
       addLog(`🎲 Game started! Settings are now locked.`);
     }
 
@@ -866,6 +937,7 @@ export default function GameBoard() {
   const confirmSkillCard = () => {
     if (!selectedCardValue || !hasSkillCard) return;
     if (!isGameStarted) {
+      setPlayers((prev) => normalizePlayerNames(prev));
       setIsGameStarted(true);
       addLog(`🃏 Game started! Settings are now locked.`);
     }
@@ -905,7 +977,63 @@ export default function GameBoard() {
 
     setGamePhase("YOUR TURN");
     addLog("Turn ended.");
+    setTurnTimeLeft(TURN_TIME_LIMIT);
+    isTurnTimedOutRef.current = false;
   };
+
+  // Reset turn timer to 120s whenever active player changes or game starts
+  useEffect(() => {
+    setTurnTimeLeft(TURN_TIME_LIMIT);
+    isTurnTimedOutRef.current = false;
+  }, [currentPlayer?.id, isGameStarted]);
+
+  // Turn timer countdown interval (120s per turn)
+  useEffect(() => {
+    if (!isGameStarted || winner) return;
+
+    const interval = window.setInterval(() => {
+      setTurnTimeLeft((prev) => {
+        if (prev <= 1) return 0;
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [isGameStarted, winner, currentPlayer?.id]);
+
+  // Handle turn timeout when 120 seconds expire
+  useEffect(() => {
+    if (!isGameStarted || winner || turnTimeLeft > 0) return;
+
+    const pName = currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`;
+
+    if (gamePhase === "YOUR TURN") {
+      if (!isRolling && !isMoving) {
+        isTurnTimedOutRef.current = true;
+        addLog(`⏰ Time expired (120s) for ${pName}! Auto-rolling dice.`);
+        rollDice();
+      }
+    } else if (gamePhase === "ACTION" || gamePhase === "END TURN") {
+      setActiveModal(null);
+      addLog(`⏰ Time expired (120s) for ${pName}! Turn ended.`);
+      endTurn();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnTimeLeft, isGameStarted, winner, gamePhase, isRolling, isMoving]);
+
+  // If time expired while dice was rolling or moving, immediately end turn once settled
+  useEffect(() => {
+    if (!isGameStarted || winner) return;
+
+    if (gamePhase === "ACTION" && (isTurnTimedOutRef.current || turnTimeLeft === 0)) {
+      isTurnTimedOutRef.current = false;
+      setActiveModal(null);
+      const pName = currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`;
+      addLog(`⏰ Time expired for ${pName}! Turn ended.`);
+      endTurn();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gamePhase, isGameStarted, winner, turnTimeLeft]);
 
   const buyProperty = (tile: Tile) => {
     if (winner || !currentPlayer || !OWNABLE_TYPES.has(tile.type) || propertyOwnership[tile.id]) return;
@@ -1204,7 +1332,7 @@ export default function GameBoard() {
           const playersHere = players.filter((p) => p.position === tile.id);
           const isOccupied = playersHere.length > 0;
           const occupantsKey = playersHere.map((p) => p.id).join("-");
-          const tokenAnchor = getTokenAnchor(orientation);
+          const tokenAnchor = getTokenAnchor(orientation, isCorner, tile.id);
 
           const ownerStripClass =
             orientation === "top"
@@ -1276,32 +1404,56 @@ export default function GameBoard() {
 
               {isOccupied && (
                 <div
-                  className="absolute z-50 flex items-center"
+                  className="pointer-events-none absolute z-50 flex items-center justify-center"
                   style={{
                     top: tokenAnchor.top,
                     left: tokenAnchor.left,
                     transform: "translate(-50%, -50%)",
-                    maxWidth: "80%",
+                    width: isCorner ? "8.8vmin" : "6.6vmin",
+                    maxHeight: isCorner ? "6.8vmin" : "5vmin",
                   }}
                 >
                   {(() => {
-                    const MAX_VISIBLE = 3;
-                    const overflowCount = Math.max(0, playersHere.length - MAX_VISIBLE);
-                    const visible = overflowCount > 0 ? playersHere.slice(0, MAX_VISIBLE - 1) : playersHere;
-                    const size = "3.8vmin";
+                    const count = playersHere.length;
+                    // Token sizing: perfectly scaled so 1, 2, 3, 4, 5, or 6 tokens fit cleanly inside the tile box!
+                    const tokenSizeVmin =
+                      count === 1
+                        ? 2.9
+                        : count === 2
+                        ? 2.35
+                        : count <= 4
+                        ? 2.05
+                        : 1.8;
+                    const sizeStr = `${tokenSizeVmin}vmin`;
+
+                    // Grid arrangement for maximum symmetry and balance inside tile boundaries
+                    const gridColsClass =
+                      count === 1
+                        ? "grid-cols-1"
+                        : count === 2
+                        ? "grid-cols-2 gap-[0.3vmin]"
+                        : count <= 4
+                        ? "grid-cols-2 gap-[0.25vmin]"
+                        : "grid-cols-3 gap-[0.2vmin]";
 
                     return (
-                      <>
-                        {visible.map((player, idx) => {
+                      <div className={`grid items-center justify-items-center ${gridColsClass}`}>
+                        {playersHere.map((player, idx) => {
                           const isEscaping = escapingIds.includes(player.id);
+                          const colSpanClass =
+                            count === 3 && idx === 2
+                              ? "col-span-2 justify-self-center"
+                              : count === 5 && idx === 4
+                              ? "col-span-3 justify-self-center"
+                              : "";
+
                           return (
                             <div
                               key={player.id}
-                              className="relative"
+                              className={`pointer-events-auto relative ${colSpanClass}`}
                               style={{
-                                height: size,
-                                width: size,
-                                marginLeft: idx === 0 ? 0 : "-1.15vmin",
+                                height: sizeStr,
+                                width: sizeStr,
                                 zIndex: player.isCurrentPlayer ? 10 : idx,
                                 animation: player.inJail
                                   ? isEscaping
@@ -1311,73 +1463,103 @@ export default function GameBoard() {
                               }}
                             >
                               <div
-                                title={player.name}
-                                className="relative flex h-full w-full items-center justify-center rounded-full transition-transform duration-300 hover:z-20 hover:scale-110"
+                                title={player.name || `Player ${player.id}`}
+                                className="relative flex h-full w-full items-center justify-center rounded-full transition-transform duration-300 hover:z-20 hover:scale-115"
                                 style={{
                                   background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
                                   border: `0.09vmin solid ${player.color}`,
                                   boxShadow: player.isCurrentPlayer
-                                    ? `0 0 1.8vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.7vmin 1.3vmin rgba(0,0,0,0.75), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.45), inset 0 -0.3vmin 0.4vmin rgba(0,0,0,0.35)`
-                                    : `0 0 0.6vmin ${player.color}aa, 0 0.5vmin 1vmin rgba(0,0,0,0.65), inset 0 0.22vmin 0.3vmin rgba(255,255,255,0.35), inset 0 -0.25vmin 0.35vmin rgba(0,0,0,0.3)`,
+                                    ? `0 0 1.6vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.5vmin 1vmin rgba(0,0,0,0.75), inset 0 0.2vmin 0.3vmin rgba(255,255,255,0.45), inset 0 -0.2vmin 0.3vmin rgba(0,0,0,0.35)`
+                                    : `0 0 0.5vmin ${player.color}aa, 0 0.4vmin 0.8vmin rgba(0,0,0,0.65), inset 0 0.18vmin 0.25vmin rgba(255,255,255,0.35), inset 0 -0.2vmin 0.25vmin rgba(0,0,0,0.3)`,
                                   animation: player.isCurrentPlayer
                                     ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s`
                                     : undefined,
                                 }}
                               >
+                                {/* Specular highlight */}
                                 <div
-                                  className="pointer-events-none absolute left-[16%] top-[12%] h-[38%] w-[38%] rounded-full opacity-80"
-                                  style={{ background: "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)" }}
+                                  className="pointer-events-none absolute left-[16%] top-[12%] h-[36%] w-[36%] rounded-full opacity-80"
+                                  style={{
+                                    background:
+                                      "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)",
+                                  }}
                                 />
+
+                                {/* Face with Eyes & Mouth scaled proportionally to token size */}
                                 <div className="absolute inset-0 flex flex-col items-center justify-center">
                                   {player.mood === "flat" ? (
                                     <>
-                                      <div className="flex gap-[0.45vmin]">
-                                        <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
-                                        <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
+                                      <div className="flex" style={{ gap: `${tokenSizeVmin * 0.12}vmin` }}>
+                                        <div
+                                          className="rounded-full bg-white/95"
+                                          style={{
+                                            height: `${tokenSizeVmin * 0.08}vmin`,
+                                            width: `${tokenSizeVmin * 0.18}vmin`,
+                                          }}
+                                        />
+                                        <div
+                                          className="rounded-full bg-white/95"
+                                          style={{
+                                            height: `${tokenSizeVmin * 0.08}vmin`,
+                                            width: `${tokenSizeVmin * 0.18}vmin`,
+                                          }}
+                                        />
                                       </div>
-                                      <div className="mt-[0.25vmin] h-[0.26vmin] w-[1.05vmin] rounded-full bg-white/85" />
+                                      <div
+                                        className="rounded-full bg-white/85"
+                                        style={{
+                                          marginTop: `${tokenSizeVmin * 0.08}vmin`,
+                                          height: `${tokenSizeVmin * 0.08}vmin`,
+                                          width: `${tokenSizeVmin * 0.28}vmin`,
+                                        }}
+                                      />
                                     </>
                                   ) : (
                                     <>
-                                      <div className="flex gap-[0.45vmin]">
-                                        <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
-                                        <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
+                                      <div className="flex" style={{ gap: `${tokenSizeVmin * 0.14}vmin` }}>
+                                        <div
+                                          className="rounded-full bg-white/95"
+                                          style={{
+                                            height: `${tokenSizeVmin * 0.15}vmin`,
+                                            width: `${tokenSizeVmin * 0.15}vmin`,
+                                          }}
+                                        />
+                                        <div
+                                          className="rounded-full bg-white/95"
+                                          style={{
+                                            height: `${tokenSizeVmin * 0.15}vmin`,
+                                            width: `${tokenSizeVmin * 0.15}vmin`,
+                                          }}
+                                        />
                                       </div>
-                                      <div className="mt-[0.1vmin] h-[0.42vmin] w-[0.8vmin] rounded-b-full border-b-[0.16vmin] border-l-[0.16vmin] border-r-[0.16vmin] border-white/85 bg-transparent" />
+                                      <div
+                                        className="rounded-b-full border-white/85 bg-transparent"
+                                        style={{
+                                          marginTop: `${tokenSizeVmin * 0.04}vmin`,
+                                          height: `${tokenSizeVmin * 0.12}vmin`,
+                                          width: `${tokenSizeVmin * 0.24}vmin`,
+                                          borderBottomWidth: `${tokenSizeVmin * 0.04}vmin`,
+                                          borderLeftWidth: `${tokenSizeVmin * 0.04}vmin`,
+                                          borderRightWidth: `${tokenSizeVmin * 0.04}vmin`,
+                                        }}
+                                      />
                                     </>
                                   )}
                                 </div>
                               </div>
 
-                              {/* Jail bars overlay - visible while locked up, hidden during the breakout pop */}
+                              {/* Jail bars overlay */}
                               {player.inJail && !isEscaping && (
-                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-[0.16vmin] overflow-hidden rounded-full bg-black/15">
-                                  <div className="h-[85%] w-[0.16vmin] rounded-full bg-white/85 shadow-[0_0_0.3vmin_rgba(0,0,0,0.6)]" />
-                                  <div className="h-[85%] w-[0.16vmin] rounded-full bg-white/85 shadow-[0_0_0.3vmin_rgba(0,0,0,0.6)]" />
-                                  <div className="h-[85%] w-[0.16vmin] rounded-full bg-white/85 shadow-[0_0_0.3vmin_rgba(0,0,0,0.6)]" />
+                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-[0.1vmin] overflow-hidden rounded-full bg-black/15">
+                                  <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
+                                  <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
+                                  <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
                                 </div>
                               )}
                             </div>
                           );
                         })}
-
-                        {overflowCount > 0 && (
-                          <div
-                            title={`+${overflowCount} more`}
-                            className="relative flex items-center justify-center rounded-full bg-[#1c1626] text-white"
-                            style={{
-                              height: size,
-                              width: size,
-                              marginLeft: "-0.9vmin",
-                              zIndex: 20,
-                              border: "0.16vmin solid rgba(255,255,255,0.5)",
-                              boxShadow: "0 0.4vmin 0.9vmin rgba(0,0,0,0.6)",
-                            }}
-                          >
-                            <span className="text-[1.05vmin] font-black">+{overflowCount}</span>
-                          </div>
-                        )}
-                      </>
+                      </div>
                     );
                   })()}
                 </div>
@@ -1388,7 +1570,7 @@ export default function GameBoard() {
                   <span
                     className={`${
                       tile.id === 20 ? "text-[3.2vmin]" : "text-[3.8vmin]"
-                    } drop-shadow-[0_0_1vmin_rgba(255,255,255,0.4)]`}
+                    } ${isOccupied ? "opacity-20 scale-80" : ""} drop-shadow-[0_0_1vmin_rgba(255,255,255,0.4)] transition-all`}
                   >
                     {tile.icon}
                   </span>
@@ -1533,16 +1715,38 @@ export default function GameBoard() {
           className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
           style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
         >
-          <div className="flex w-full items-center justify-between px-[0.4vmin]">
+          <div className="relative flex w-full items-center justify-between px-[0.4vmin]">
             {/* Leftmost: Fullscreen button */}
             <button
               onClick={toggleFullscreen}
-              className="flex shrink-0 items-center gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95"
+              className="flex shrink-0 items-center gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer"
               title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
             >
               <span className="text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
               <span className="whitespace-nowrap tracking-wide">{isFullscreen ? "Exit" : "Fullscreen"}</span>
             </button>
+
+            {/* Center: Turn Timer (aligned exactly with YOUR TURN badge below) */}
+            <div
+              className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center select-none pointer-events-none"
+              title={
+                !isGameStarted
+                  ? "Turn Timer: 120s per turn"
+                  : `${turnTimeLeft}s remaining for ${currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`}'s turn`
+              }
+            >
+              <span
+                className={`pointer-events-auto font-mono text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${
+                  isGameStarted && turnTimeLeft <= 10
+                    ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
+                    : isGameStarted && turnTimeLeft <= 30
+                    ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
+                    : "text-yellow-400 drop-shadow-[0_0_1.4vmin_rgba(250,204,21,0.6)]"
+                }`}
+              >
+                {formatTurnTime(turnTimeLeft)}
+              </span>
+            </div>
 
             {/* Rightmost: Room and LIVE connection indicator */}
             <div className="flex shrink-0 items-center gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] shadow-md">
@@ -2129,20 +2333,40 @@ export default function GameBoard() {
                       : undefined,
                 }}
               >
-                <div className="flex items-center gap-[0.8vmin]">
-                  {renderPlayerFace(player, "3.6vmin")}
+                <div className="flex items-center gap-[1vmin]">
+                  <div className="shrink-0">{renderPlayerFace(player, "4vmin")}</div>
                   <div className="flex flex-col leading-tight">
-                    <span
-                      className={`text-[1.25vmin] font-bold ${
-                        isVoteKickOpen && isSelf
-                          ? "text-gray-400"
-                          : player.isCurrentPlayer
-                          ? "text-white"
-                          : "text-gray-300"
-                      }`}
-                    >
-                      {player.name}
-                    </span>
+                    {!isGameStarted ? (
+                      <div
+                        className="flex items-center gap-[0.6vmin]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="text"
+                          value={player.name}
+                          onChange={(e) => handlePlayerNameChange(player.id, e.target.value)}
+                          placeholder={`Player ${player.id}`}
+                          maxLength={12}
+                          className="w-[16.5vmin] rounded-[0.9vmin] border-[0.25vmin] border-purple-400/50 bg-[#160f26] px-[1.1vmin] py-[0.5vmin] text-[1.75vmin] font-black text-white placeholder:text-gray-400/90 placeholder:font-black placeholder:text-[1.65vmin] shadow-inner shadow-black/60 transition-all focus:border-purple-300 focus:bg-[#231540] focus:shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] focus:outline-none"
+                          title="Click to edit player name"
+                        />
+                        <span className="text-[1.4vmin] text-purple-300 drop-shadow" title="Editable before game start">
+                          ✏️
+                        </span>
+                      </div>
+                    ) : (
+                      <span
+                        className={`text-[1.8vmin] font-black tracking-wide drop-shadow-[0_0.2vmin_0.4vmin_rgba(0,0,0,0.9)] ${
+                          isVoteKickOpen && isSelf
+                            ? "text-gray-400"
+                            : player.isCurrentPlayer
+                            ? "text-white"
+                            : "text-gray-100"
+                        }`}
+                      >
+                        {player.name || `Player ${player.id}`}
+                      </span>
+                    )}
 
                     {player.isBankrupt ? (
                       <span className="text-[0.9vmin] text-red-400">BANKRUPT</span>
@@ -2186,7 +2410,7 @@ export default function GameBoard() {
                 {isVoteKickOpen && isTarget ? (
                   <div className="flex items-center gap-[0.7vmin]">
                     <span
-                      className={`text-[1.25vmin] font-black ${
+                      className={`text-[1.35vmin] font-black ${
                         votes > 0 ? "text-purple-300" : "text-gray-400"
                       }`}
                     >
@@ -2211,17 +2435,20 @@ export default function GameBoard() {
                     )}
                   </div>
                 ) : (
-                  <span
-                    className={`text-[1.35vmin] font-black tracking-tight ${
+                  <div
+                    className={`flex items-center gap-[0.4vmin] rounded-[0.9vmin] border-[0.2vmin] px-[1.1vmin] py-[0.45vmin] shadow-md transition-all ${
                       isVoteKickOpen && isSelf
-                        ? "text-gray-500"
+                        ? "border-white/10 bg-white/[0.02] text-gray-500"
                         : player.isCurrentPlayer
-                        ? "text-emerald-300"
-                        : "text-emerald-400"
+                        ? "border-emerald-400/70 bg-[#062418] text-emerald-300 shadow-[0_0_1.4vmin_rgba(16,185,129,0.45)]"
+                        : "border-emerald-500/40 bg-[#091b14] text-emerald-300"
                     }`}
                   >
-                    ${player.money.toLocaleString()}
-                  </span>
+                    <span className="text-[1.35vmin] leading-none">💵</span>
+                    <span className="text-[1.85vmin] font-black tracking-tight drop-shadow">
+                      ${player.money.toLocaleString()}
+                    </span>
+                  </div>
                 )}
               </div>
             );
@@ -2240,8 +2467,8 @@ export default function GameBoard() {
                   <span className="h-[1vmin] w-[1vmin] shrink-0 rounded-full" style={{ backgroundColor: selectedPlayer.color }} />
                   <span className="truncate text-[1.1vmin] font-semibold text-gray-200">
                     {ownedCount > 0
-                      ? `Highlighting ${selectedPlayer.name}'s ${ownedCount} propert${ownedCount === 1 ? "y" : "ies"} on the board`
-                      : `${selectedPlayer.name} doesn't own any properties yet`}
+                      ? `Highlighting ${selectedPlayer.name || `Player ${selectedPlayer.id}`}'s ${ownedCount} propert${ownedCount === 1 ? "y" : "ies"} on the board`
+                      : `${selectedPlayer.name || `Player ${selectedPlayer.id}`} doesn't own any properties yet`}
                   </span>
                 </div>
                 <button
@@ -2264,7 +2491,7 @@ export default function GameBoard() {
             <span className="text-[0.9vmin] font-medium text-gray-400">
               Turn:{" "}
               <span className="font-bold" style={{ color: currentPlayer?.color }}>
-                {currentPlayer?.name}
+                {currentPlayer?.name || `Player ${currentPlayer?.id}`}
               </span>
             </span>
           </div>
@@ -2302,163 +2529,240 @@ export default function GameBoard() {
         </div>
 
         {/* ================= SETTINGS PANEL ================= */}
-        <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] p-[1.6vmin] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)]">
+        <div
+          onClick={() => {
+            if (isGameStarted && !isSettingsExpanded) {
+              setIsSettingsExpanded(true);
+            }
+          }}
+          className={`rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)] transition-all ${
+            !isGameStarted || isSettingsExpanded
+              ? "mt-[1.4vmin] flex flex-1 flex-col justify-between p-[1.6vmin]"
+              : "mt-[1.2vmin] shrink-0 cursor-pointer p-[1.4vmin] hover:border-purple-400/60 hover:bg-[#18122a]"
+          }`}
+        >
           <div className="flex flex-col gap-[1.6vmin]">
             {/* Header with Title and Locked / Editable status */}
-            <div className="flex items-center justify-between border-b-2 border-white/10 pb-[1.1vmin]">
+            <div
+              onClick={(e) => {
+                if (isGameStarted) {
+                  e.stopPropagation();
+                  setIsSettingsExpanded((prev) => !prev);
+                }
+              }}
+              className={`flex items-center justify-between border-b border-purple-500/25 pb-[1.1vmin] ${
+                isGameStarted ? "cursor-pointer select-none" : ""
+              }`}
+              title={
+                isGameStarted
+                  ? isSettingsExpanded
+                    ? "Click to collapse settings"
+                    : "Click to expand settings"
+                  : undefined
+              }
+            >
               <div className="flex items-center gap-[0.8vmin]">
                 <span className="text-[2.2vmin]">⚙️</span>
                 <span className="text-[1.8vmin] font-black uppercase tracking-wider text-white">
-                  Game Settings
+                  GAME SETTINGS
                 </span>
               </div>
-              <span
-                className={`rounded-full border-2 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider transition-all ${
-                  isGameStarted
-                    ? "border-amber-400/60 bg-amber-500/25 text-amber-300 shadow-[0_0_1.2vmin_rgba(245,158,11,0.3)]"
-                    : "border-emerald-400/80 bg-emerald-500/25 text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse"
-                }`}
-              >
-                {isGameStarted ? "🔒 Settings Locked" : "🟢 Setup (Editable)"}
-              </span>
-            </div>
-
-            {/* Setting 1: Starting Cash */}
-            <div className="flex flex-col gap-[0.8vmin]">
-              <div className="flex items-center justify-between">
-                <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                  💵 Starting Cash:
-                </span>
-                <span className="text-[1.7vmin] font-black text-emerald-400">
-                  ${startingCash.toLocaleString()}
-                </span>
-              </div>
-              <div className="grid grid-cols-4 gap-[0.6vmin]">
-                {[1500, 2000, 2500, 3000].map((cash) => (
-                  <button
-                    key={cash}
-                    onClick={() => handleStartingCashChange(cash)}
-                    disabled={isGameStarted}
-                    className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all ${
-                      startingCash === cash
-                        ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
-                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                    } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
-                    title={isGameStarted ? "Game has started. Settings cannot be changed." : `Set starting cash to $${cash.toLocaleString()}`}
-                  >
-                    ${cash >= 1000 ? `${cash / 1000}k` : cash}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Setting 2: START Bonus (Pass / Land) */}
-            <div className="flex flex-col gap-[0.8vmin]">
-              <div className="flex items-center justify-between">
-                <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                  🚩 START Bonus:
-                </span>
-                <span className="text-[1.35vmin] font-bold text-gray-200">
-                  Pass <span className="font-black text-emerald-400">+${passStartBonus}</span> / Land{" "}
-                  <span className="font-black text-emerald-400">+${landStartBonus}</span>
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-[0.6vmin]">
-                {[
-                  { label: "Standard", pass: 200, land: 300 },
-                  { label: "Boosted", pass: 300, land: 450 },
-                  { label: "High", pass: 400, land: 600 },
-                ].map((preset) => {
-                  const isActive = passStartBonus === preset.pass && landStartBonus === preset.land;
-                  return (
-                    <button
-                      key={preset.label}
-                      onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
-                      disabled={isGameStarted}
-                      className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.3vmin] font-black transition-all ${
-                        isActive
-                          ? "border-[0.25vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.4vmin_rgba(99,102,241,0.55)] scale-[1.03]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                      } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
-                      title={isGameStarted ? "Game has started. Settings cannot be changed." : `${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
-                    >
-                      {preset.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Setting 3: Movement Speed & Free Parking Pot */}
-            <div className="grid grid-cols-2 gap-[1vmin]">
-              {/* Speed Toggle */}
-              <div className="flex flex-col gap-[0.6vmin]">
-                <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
-                  ⚡ Game Speed:
-                </span>
-                <div className="flex gap-[0.5vmin]">
-                  <button
-                    onClick={() => !isGameStarted && setFastMode(false)}
-                    disabled={isGameStarted}
-                    className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
-                      !fastMode
-                        ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.2vmin_rgba(168,85,247,0.45)]"
-                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                    } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
-                  >
-                    1x Normal
-                  </button>
-                  <button
-                    onClick={() => !isGameStarted && setFastMode(true)}
-                    disabled={isGameStarted}
-                    className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
-                      fastMode
-                        ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(245,158,11,0.45)]"
-                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                    } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
-                  >
-                    ⚡ Fast
-                  </button>
-                </div>
-              </div>
-
-              {/* Rest House Pot Toggle */}
-              <div className="flex flex-col gap-[0.6vmin]">
-                <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
-                  🎁 Rest House Pot:
-                </span>
-                <button
-                  onClick={() => !isGameStarted && setEnableRestHousePot((prev) => !prev)}
-                  disabled={isGameStarted}
-                  className={`w-full rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
-                    enableRestHousePot
-                      ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
-                      : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                  } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+              <div className="flex items-center gap-[0.7vmin]">
+                <span
+                  className={`rounded-full transition-all ${
+                    isGameStarted
+                      ? "border-[0.22vmin] border-amber-400 bg-[#3a2007]/60 px-[1.4vmin] py-[0.45vmin] text-[1.2vmin] font-black uppercase tracking-wider text-amber-300 shadow-[0_0_1.4vmin_rgba(245,158,11,0.45)] hover:brightness-110"
+                      : "border-2 border-emerald-400/80 bg-emerald-500/25 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse"
+                  }`}
                 >
-                  {enableRestHousePot ? "🎁 Pot Active" : "Off (To Bank)"}
-                </button>
+                  {isGameStarted ? "🔒 SETTINGS LOCKED" : "🟢 SETUP (EDITABLE)"}
+                </span>
+                {isGameStarted && (
+                  <span className="text-[1.3vmin] text-amber-300/80 transition-transform duration-200">
+                    {isSettingsExpanded ? "▲" : "▼"}
+                  </span>
+                )}
               </div>
             </div>
+
+            {(!isGameStarted || isSettingsExpanded) && (
+              <>
+                {/* Setting: Number of Players (2 to 6) */}
+                <div className="flex flex-col gap-[0.8vmin]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                      👥 Number of Players:
+                    </span>
+                    <span className="text-[1.6vmin] font-black text-purple-400">
+                      {players.length} Players
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-[0.6vmin]">
+                    {[2, 3, 4, 5, 6].map((count) => {
+                      const isActive = players.length === count;
+                      return (
+                        <button
+                          key={count}
+                          onClick={() => handlePlayerCountChange(count)}
+                          disabled={isGameStarted}
+                          className={`rounded-[0.9vmin] py-[0.85vmin] text-[1.35vmin] font-black transition-all ${
+                            isActive
+                              ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] scale-[1.03]"
+                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                          } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
+                          title={isGameStarted ? "Game has started. Settings cannot be changed." : `Set player count to ${count}`}
+                        >
+                          {count}P
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Setting 1: Starting Cash */}
+                <div className="flex flex-col gap-[0.8vmin]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                      💵 Starting Cash:
+                    </span>
+                    <span className="text-[1.7vmin] font-black text-emerald-400">
+                      ${startingCash.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-[0.6vmin]">
+                    {[1500, 2000, 2500, 3000].map((cash) => (
+                      <button
+                        key={cash}
+                        onClick={() => handleStartingCashChange(cash)}
+                        disabled={isGameStarted}
+                        className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all ${
+                          startingCash === cash
+                            ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
+                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                        } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
+                        title={isGameStarted ? "Game has started. Settings cannot be changed." : `Set starting cash to $${cash.toLocaleString()}`}
+                      >
+                        ${cash >= 1000 ? `${cash / 1000}k` : cash}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Setting 2: START Bonus (Pass / Land) */}
+                <div className="flex flex-col gap-[0.8vmin]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                      🚩 START Bonus:
+                    </span>
+                    <span className="text-[1.35vmin] font-bold text-gray-200">
+                      Pass <span className="font-black text-emerald-400">+${passStartBonus}</span> / Land{" "}
+                      <span className="font-black text-emerald-400">+${landStartBonus}</span>
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-[0.6vmin]">
+                    {[
+                      { label: "Standard", pass: 200, land: 300 },
+                      { label: "Boosted", pass: 300, land: 450 },
+                      { label: "High", pass: 400, land: 600 },
+                    ].map((preset) => {
+                      const isActive = passStartBonus === preset.pass && landStartBonus === preset.land;
+                      return (
+                        <button
+                          key={preset.label}
+                          onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
+                          disabled={isGameStarted}
+                          className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.3vmin] font-black transition-all ${
+                            isActive
+                              ? "border-[0.25vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.4vmin_rgba(99,102,241,0.55)] scale-[1.03]"
+                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                          } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
+                          title={isGameStarted ? "Game has started. Settings cannot be changed." : `${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Setting 3: Movement Speed & Free Parking Pot */}
+                <div className="grid grid-cols-2 gap-[1vmin]">
+                  {/* Speed Toggle */}
+                  <div className="flex flex-col gap-[0.6vmin]">
+                    <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
+                      ⚡ Game Speed:
+                    </span>
+                    <div className="flex gap-[0.5vmin]">
+                      <button
+                        onClick={() => !isGameStarted && setFastMode(false)}
+                        disabled={isGameStarted}
+                        className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
+                          !fastMode
+                            ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.2vmin_rgba(168,85,247,0.45)]"
+                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                      >
+                        1x Normal
+                      </button>
+                      <button
+                        onClick={() => !isGameStarted && setFastMode(true)}
+                        disabled={isGameStarted}
+                        className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
+                          fastMode
+                            ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(245,158,11,0.45)]"
+                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                      >
+                        ⚡ Fast
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Rest House Pot Toggle */}
+                  <div className="flex flex-col gap-[0.6vmin]">
+                    <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
+                      🎁 Rest House Pot:
+                    </span>
+                    <button
+                      onClick={() => !isGameStarted && setEnableRestHousePot((prev) => !prev)}
+                      disabled={isGameStarted}
+                      className={`w-full rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
+                        enableRestHousePot
+                          ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                    >
+                      {enableRestHousePot ? "🎁 Pot Active" : "Off (To Bank)"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Bottom Action or status note */}
-          <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
-            {!isGameStarted ? (
-              <button
-                onClick={handleStartGame}
-                className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
-              >
-                <span className="text-[1.8vmin]">▶</span>
-                <span>Start Game & Lock Settings</span>
-              </button>
-            ) : (
-              <div className="flex items-center justify-center gap-[0.7vmin] rounded-[1vmin] border-2 border-amber-500/40 bg-amber-500/15 py-[1.1vmin] text-center text-[1.3vmin] font-black text-amber-200 shadow-md">
-                <span className="text-[1.6vmin]">🔒</span>
-                <span>Settings Locked For This Match</span>
-              </div>
-            )}
-          </div>
+          {(!isGameStarted || isSettingsExpanded) && (
+            <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
+              {!isGameStarted ? (
+                <button
+                  onClick={handleStartGame}
+                  className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
+                >
+                  <span className="text-[1.8vmin]">▶</span>
+                  <span>Start Game & Lock Settings</span>
+                </button>
+              ) : (
+                <div
+                  onClick={() => setIsSettingsExpanded(false)}
+                  className="flex cursor-pointer items-center justify-center gap-[0.7vmin] rounded-[1vmin] border-2 border-amber-500/40 bg-amber-500/15 py-[1.1vmin] text-center text-[1.3vmin] font-black text-amber-200 shadow-md hover:bg-amber-500/25 transition-all"
+                  title="Click to collapse settings"
+                >
+                  <span className="text-[1.6vmin]">🔒</span>
+                  <span>Settings Locked (Click to Collapse ▲)</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
       </div>
