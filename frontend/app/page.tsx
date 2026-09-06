@@ -204,6 +204,20 @@ const renderLogMessage = (msg: string) => {
   });
 };
 
+// A log line is relevant to this player's personal balance history if
+// either (a) they're the one acting - the line starts with their name - or
+// (b) money moved TO them as the other party, e.g. someone else paying them
+// rent ("Alex paid -$100 rent to You (+$100) on Bihar."), or a creditor
+// seizing a bankrupt player's properties. Only lines carrying an actual
+// dollar amount count, since this box is a money history, not a full log.
+const isBalanceRelevant = (msg: string, playerName: string) => {
+  if (!/[+-]\$[0-9,]+/.test(msg)) return false;
+  if (msg.startsWith(`${playerName} `)) return true;
+  if (msg.includes(`to ${playerName} (`)) return true;
+  if (msg.includes(`${playerName} seized their properties`)) return true;
+  return false;
+};
+
 export default function GameBoard() {
   const socketRef = useRef<Socket | null>(null);
   const moveTimeoutRef = useRef<number | null>(null);
@@ -302,7 +316,7 @@ export default function GameBoard() {
   };
 
   const addLog = (msg: string) => {
-    setActionLog((prev) => [msg, ...prev].slice(0, 8));
+    setActionLog((prev) => [msg, ...prev].slice(0, 60));
   };
 
   // Briefly flags a player as "breaking out" so their token plays the
@@ -815,9 +829,38 @@ export default function GameBoard() {
       <div className="flex items-center gap-[1.6vmin]">
         {/* ================= LEFT SIDEBAR - PROPERTIES YOU OWN ================= */}
         <div className="flex max-h-[96vmin] w-[32vmin] flex-col self-start rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+          {/* Balance card - total cash on hand plus the player's own recent
+              gains/losses (green for +, red for -), pulled straight out of
+              the shared action log so it never drifts out of sync with it.
+              Includes BOTH directions of money movement: things this player
+              did themselves (bought/sold/paid tax) AND things other players
+              did that affected them directly, like someone else paying them
+              rent, so a payment received never fails to show up here. */}
+          <div className="mb-[1vmin] rounded-[1vmin] border border-white/10 bg-white/[0.05] p-[1vmin]">
+            <div className="flex items-center justify-between px-[0.2vmin]">
+              <span className="text-[1.15vmin] font-black uppercase tracking-widest text-gray-300">Balance</span>
+              <span className="text-[1.9vmin] font-black tracking-tight text-emerald-400">
+                ${players[0].money.toLocaleString()}
+              </span>
+            </div>
+            {(() => {
+              const myRecent = actionLog.filter((msg) => isBalanceRelevant(msg, players[0].name)).slice(0, 5);
+              if (myRecent.length === 0) return null;
+              return (
+                <div className="mt-[0.7vmin] flex flex-col gap-[0.35vmin] border-t border-white/10 pt-[0.6vmin]">
+                  {myRecent.map((msg, i) => (
+                    <p key={i} className="truncate px-[0.2vmin] text-[1.15vmin] font-semibold leading-snug text-gray-200">
+                      {renderLogMessage(msg)}
+                    </p>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+
           <div className="mb-[0.8vmin] flex items-center gap-[0.5vmin] px-[0.3vmin]">
             <span className="h-[1vmin] w-[1vmin] rounded-full" style={{ backgroundColor: players[0].color }} />
-            <h2 className="text-[1.15vmin] font-black uppercase tracking-widest text-gray-200">My Properties</h2>
+          <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">My Properties</h2>
           </div>
 
           {(() => {
