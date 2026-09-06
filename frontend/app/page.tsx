@@ -29,6 +29,7 @@ interface Player {
   inJail?: boolean;
   jailTurns?: number;
   isBankrupt?: boolean;
+  isResting?: boolean;
 }
 
 interface PlayerMovedEvent {
@@ -121,6 +122,7 @@ const UTILITY_RENT_TABLE: Record<string, number[]> = {
 
 const BOARD_SIZE = BOARD_TILES.length;
 const PASS_START_BONUS = 200;
+const LAND_START_BONUS = 300;
 
 const BOARD_VMIN = 96;
 const BOARD_BORDER_VMIN = 0.3 * 2;
@@ -242,6 +244,7 @@ export default function GameBoard() {
   const [winner, setWinner] = useState<Player | null>(null);
   const [escapingIds, setEscapingIds] = useState<number[]>([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
+  const [restHousePot, setRestHousePot] = useState(0);
 
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const playersRef = useRef(players);
@@ -320,6 +323,17 @@ export default function GameBoard() {
     setActionLog((prev) => [msg, ...prev].slice(0, 60));
   };
 
+  const collectToRestHouse = (amount: number) => {
+    if (amount <= 0) return;
+    setRestHousePot((prev) => prev + amount);
+  };
+
+  const getPlayerHouseCount = (playerId: number) =>
+    Object.entries(propertyHouses).reduce((total, [tileId, houses]) => {
+      if (propertyOwnership[Number(tileId)] === playerId) return total + Number(houses || 0);
+      return total;
+    }, 0);
+
   // Briefly flags a player as "breaking out" so their token plays the
   // jailBreak pop animation instead of the idle jail-rattle, right at the
   // moment they're released (doubles, bail, or the forced 3rd-turn release).
@@ -365,19 +379,21 @@ export default function GameBoard() {
       currentPos = (currentPos + 1) % BOARD_SIZE;
       remaining--;
 
+           const landsOnStart = currentPos === 0 && remaining <= 0;
+      const startBonus = currentPos === 0 ? (landsOnStart ? LAND_START_BONUS : PASS_START_BONUS) : 0;
+
       if (currentPos === 0) {
         setHasSkillCard(true);
-        addLog(`${player.name} passed START (+$${PASS_START_BONUS})`);
+        addLog(`${player.name} ${landsOnStart ? "landed on" : "passed"} START (+$${startBonus})`);
       }
 
       setPlayers((prev) =>
         prev.map((p) =>
           p.id === player.id
-            ? { ...p, position: currentPos, money: p.money + (currentPos === 0 ? PASS_START_BONUS : 0) }
+            ? { ...p, position: currentPos, money: p.money + startBonus }
             : p
         )
       );
-
       moveTimeoutRef.current = window.setTimeout(step, 260);
     };
 
@@ -443,15 +459,20 @@ export default function GameBoard() {
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
 
-    const wrapped = targetIndex < player.position;
+       const wrapped = targetIndex < player.position;
+    const landsOnStart = targetIndex === 0;
+    const startBonus = landsOnStart ? LAND_START_BONUS : wrapped ? PASS_START_BONUS : 0;
+
     setPlayers((prev) =>
       prev.map((p) =>
         p.id === playerId
-          ? { ...p, position: targetIndex, money: p.money + (wrapped ? PASS_START_BONUS : 0) }
+          ? { ...p, position: targetIndex, money: p.money + startBonus }
           : p
       )
     );
-    if (wrapped) addLog(`${player.name} passed START (+$${PASS_START_BONUS})`);
+    if (startBonus > 0) {
+      addLog(`${player.name} ${landsOnStart ? "landed on" : "passed"} START (+$${startBonus})`);
+    }
 
     moveTimeoutRef.current = window.setTimeout(() => handleLanding(BOARD_TILES[targetIndex], playerId), 300);
   };
@@ -522,6 +543,48 @@ export default function GameBoard() {
   const player = playersRef.current.find((p) => p.id === playerId);
   if (!player) return;
 
+  if (tile.id === 20) {
+    const potPayout = restHousePot;
+    setPlayers((prev) =>
+      prev.map((p) =>
+        p.id === playerId ? { ...p, money: p.money + potPayout, mood: "happy", isResting: true } : p
+      )
+    );
+    setRestHousePot(0);
+    if (potPayout > 0) {
+      addLog(`${player.name} landed on REST HOUSE and collected +$${potPayout}.`);
+    } else {
+      addLog(`${player.name} landed on REST HOUSE and rests for one turn.`);
+      setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, isResting: true } : p)));
+    }
+    return;
+  }
+
+  if (tile.id === 30) {
+    const cardCount = hasSkillCard ? 1 : 0;
+    const houseCount = getPlayerHouseCount(playerId);
+    const clubFee = cardCount * 50 + houseCount * 100;
+
+    if (clubFee <= 0) {
+      addLog(`${player.name} visited CLUB — no fee.`);
+      return;
+    }
+
+    if (player.money < clubFee) {
+      declareBankruptcy(playerId);
+      return;
+    }
+
+    setPlayers((prev) =>
+      prev.map((p) =>
+        p.id === playerId ? { ...p, money: Math.max(0, p.money - clubFee), mood: "flat" } : p
+      )
+    );
+    collectToRestHouse(clubFee);
+    addLog(`${player.name} paid -$${clubFee} at CLUB (${cardCount} card + ${houseCount} houses).`);
+    return;
+  }
+
   if (tile.type === "tax") {
     const amount = Math.abs(parsePrice(tile.price) || 0);
     if (player.money < amount) {
@@ -533,6 +596,7 @@ export default function GameBoard() {
         p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
       )
     );
+    collectToRestHouse(amount);
     addLog(`${player.name} paid -$${amount} tax.`);
     return;
   }
@@ -584,6 +648,10 @@ export default function GameBoard() {
 
   const rollDice = () => {
     if (isRolling || isMoving || gamePhase !== "YOUR TURN" || winner) return;
+    if (currentPlayer?.isResting) {
+      addLog(`${currentPlayer.name} is resting and cannot play this turn.`);
+      return;
+    }
 
     const result: [number, number] = [
       Math.floor(Math.random() * 6) + 1,
@@ -638,7 +706,7 @@ export default function GameBoard() {
   };
 
   const payBail = () => {
-    if (!currentPlayer?.inJail || gamePhase !== "YOUR TURN" || winner) return;
+    if (!currentPlayer || currentPlayer.isResting || !currentPlayer.inJail || gamePhase !== "YOUR TURN" || winner) return;
     const bail = 100;
     if (currentPlayer.money < bail) {
       addLog(`${currentPlayer.name} can't afford the $${bail} bail.`);
@@ -652,7 +720,7 @@ export default function GameBoard() {
   };
 
   const openSkillCard = () => {
-    if (!hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner || currentPlayer?.inJail) return;
+    if (!hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner || currentPlayer?.inJail || currentPlayer?.isResting) return;
     setShowCardSelector(true);
     setSelectedCardValue(null);
   };
@@ -673,11 +741,24 @@ export default function GameBoard() {
     setPlayers((prev) => {
       const currentIdx = prev.findIndex((p) => p.isCurrentPlayer);
       let nextIdx = currentIdx;
-      for (let i = 0; i < prev.length; i++) {
-        nextIdx = (nextIdx + 1) % prev.length;
-        if (!prev[nextIdx].isBankrupt) break;
+      let updated = prev;
+
+      for (let i = 0; i < updated.length; i++) {
+        nextIdx = (nextIdx + 1) % updated.length;
+        if (updated[nextIdx].isBankrupt) continue;
+
+        if (updated[nextIdx].isResting) {
+          updated = updated.map((p) =>
+            p.id === updated[nextIdx].id ? { ...p, isResting: false } : p
+          );
+          addLog(`${updated[nextIdx].name} rested and skipped this turn.`);
+          continue;
+        }
+
+        return updated.map((p, idx) => ({ ...p, isCurrentPlayer: idx === nextIdx }));
       }
-      return prev.map((p, i) => ({ ...p, isCurrentPlayer: i === nextIdx }));
+
+      return updated.map((p, idx) => ({ ...p, isCurrentPlayer: idx === nextIdx }));
     });
 
     setGamePhase("YOUR TURN");
