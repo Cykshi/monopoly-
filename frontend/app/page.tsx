@@ -246,7 +246,15 @@ export default function GameBoard() {
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
   const [restHousePot, setRestHousePot] = useState(0);
 
+  // Vote Kick & Voluntary Bankrupt states
+  const [isVoteKickOpen, setIsVoteKickOpen] = useState(false);
+  const [kickVotes, setKickVotes] = useState<Record<number, number[]>>({});
+  const [showBankruptModal, setShowBankruptModal] = useState(false);
+  const [bankruptCandidateId, setBankruptCandidateId] = useState<number | null>(null);
+
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
+  const alivePlayers = useMemo(() => players.filter((p) => !p.isBankrupt), [players]);
+
   const playersRef = useRef(players);
 
   useEffect(() => {
@@ -299,6 +307,8 @@ export default function GameBoard() {
         setSpecialModal(null);
         setShowCardSelector(false);
         setSelectedCardValue(null);
+        setIsVoteKickOpen(false);
+        setShowBankruptModal(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -436,13 +446,48 @@ export default function GameBoard() {
       });
     }
 
+    const wasCurrent = player.isCurrentPlayer;
+
     setPlayers((prev) => {
-      const updated = prev.map((p) =>
-        p.id === playerId ? { ...p, isBankrupt: true, money: 0, isCurrentPlayer: false } : p
-      );
+      let nextCurrentId: number | null = null;
+      if (wasCurrent) {
+        const currentIdx = prev.findIndex((p) => p.id === playerId);
+        for (let i = 1; i <= prev.length; i++) {
+          const candidate = prev[(currentIdx + i) % prev.length];
+          if (!candidate.isBankrupt && candidate.id !== playerId) {
+            nextCurrentId = candidate.id;
+            break;
+          }
+        }
+      }
+
+      const updated = prev.map((p) => {
+        if (p.id === playerId) {
+          return { ...p, isBankrupt: true, money: 0, isCurrentPlayer: false };
+        }
+        if (nextCurrentId !== null && p.id === nextCurrentId) {
+          return { ...p, isCurrentPlayer: true };
+        }
+        return p;
+      });
       checkForWinnerAmong(updated);
       return updated;
     });
+
+    // Clean up vote kick states for/by this player
+    setKickVotes((prev) => {
+      const next: Record<number, number[]> = {};
+      for (const [key, voters] of Object.entries(prev)) {
+        const tId = Number(key);
+        if (tId === playerId) continue;
+        const filtered = voters.filter((id) => id !== playerId);
+        if (filtered.length > 0) next[tId] = filtered;
+      }
+      return next;
+    });
+
+    setSelectedPlayerId((prev) => (prev === playerId ? null : prev));
+    setActiveModal(null);
 
     const creditor = creditorId ? playersRef.current.find((p) => p.id === creditorId) : undefined;
     addLog(
@@ -450,6 +495,63 @@ export default function GameBoard() {
         creditor ? ` — ${creditor.name} seized their properties` : " — properties returned to the bank"
       }.`
     );
+
+    if (wasCurrent) {
+      setGamePhase("YOUR TURN");
+      setIsMoving(false);
+      setIsRolling(false);
+    }
+  };
+
+  const handleVoluntaryBankruptcy = (playerId: number) => {
+    const player = playersRef.current.find((p) => p.id === playerId);
+    if (!player || player.isBankrupt) return;
+
+    addLog(`🏳️ ${player.name} surrendered and declared bankruptcy.`);
+    socketRef.current?.emit("player:bankrupt", { playerId });
+    setShowBankruptModal(false);
+    declareBankruptcy(playerId);
+  };
+
+  const togglePlayerKickVote = (targetId: number, voterId: number) => {
+    if (winner) return;
+    const target = playersRef.current.find((p) => p.id === targetId && !p.isBankrupt);
+    const voter = playersRef.current.find((p) => p.id === voterId && !p.isBankrupt);
+    if (!target || !voter || targetId === voterId) return;
+
+    const otherAlive = playersRef.current.filter((p) => !p.isBankrupt && p.id !== targetId);
+    const totalOthers = otherAlive.length;
+    if (totalOthers <= 0) return;
+
+    setKickVotes((prev) => {
+      const currentVoters = prev[targetId] || [];
+      const alreadyVoted = currentVoters.includes(voterId);
+
+      let nextVoters: number[];
+      if (alreadyVoted) {
+        nextVoters = currentVoters.filter((id) => id !== voterId);
+        addLog(`🗳️ ${voter.name} withdrew vote to kick ${target.name} (${nextVoters.length}/${totalOthers})`);
+      } else {
+        // Enforce: one player can only vote other player once!
+        nextVoters = [...currentVoters, voterId];
+        addLog(`🗳️ ${voter.name} voted to kick ${target.name} (${nextVoters.length}/${totalOthers})`);
+      }
+
+      if (nextVoters.length >= totalOthers) {
+        setTimeout(() => {
+          addLog(`🚨 ${target.name} received votes from all other players and was VOTE-KICKED out!`);
+          setKickVotes((kPrev) => {
+            const copy = { ...kPrev };
+            delete copy[targetId];
+            return copy;
+          });
+          socketRef.current?.emit("player:kicked", { targetId });
+          declareBankruptcy(targetId);
+        }, 150);
+      }
+
+      return { ...prev, [targetId]: nextVoters };
+    });
   };
 
   // Instantly moves a player to a target tile (for card-driven jumps rather
@@ -1365,29 +1467,29 @@ export default function GameBoard() {
           className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
           style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
         >
-          <div className="flex w-full items-start justify-between">
-            <div className="flex flex-col items-start">
-              <span className="text-[1vmin] font-bold uppercase tracking-[0.2em] text-gray-500">Current</span>
-              <div className="flex items-center gap-[0.5vmin]">
-                <span className="h-[1.2vmin] w-[1.2vmin] rounded-full" style={{ backgroundColor: currentPlayer?.color }} />
-                <span className="text-[1.6vmin] font-black text-white">{currentPlayer?.name}</span>
-              </div>
-              <span className="text-[1.3vmin] font-bold text-emerald-400">
-                ${(currentPlayer?.money ?? 0).toLocaleString()}
-              </span>
-            </div>
+          <div className="flex w-full items-center justify-between px-[0.4vmin]">
+            {/* Leftmost: Fullscreen button */}
+            <button
+              onClick={toggleFullscreen}
+              className="flex shrink-0 items-center gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95"
+              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+            >
+              <span className="text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
+              <span className="whitespace-nowrap tracking-wide">{isFullscreen ? "Exit" : "Fullscreen"}</span>
+            </button>
 
-            <div className="flex items-center gap-[0.8vmin]">
-              <button
-                onClick={toggleFullscreen}
-                className="rounded-full border border-white/10 bg-white/5 px-[1.2vmin] py-[0.5vmin] text-[1.1vmin] text-gray-300 hover:bg-white/10"
-              >
-                {isFullscreen ? "Exit" : "Fullscreen"}
-              </button>
-              <div className="flex items-center gap-[0.5vmin] rounded-full border border-white/10 bg-white/5 px-[1.2vmin] py-[0.5vmin]">
-                <div className={`h-[0.8vmin] w-[0.8vmin] rounded-full ${isConnected ? "animate-pulse bg-green-400" : "bg-red-500"}`} />
-                <span className="text-[1.1vmin] text-gray-300">{connectionLabel}</span>
-              </div>
+            {/* Rightmost: Room and LIVE connection indicator */}
+            <div className="flex shrink-0 items-center gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] shadow-md">
+              <div
+                className={`h-[1vmin] w-[1vmin] shrink-0 rounded-full ${
+                  isConnected
+                    ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
+                    : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
+                }`}
+              />
+              <span className="whitespace-nowrap text-[1.35vmin] font-extrabold tracking-wide text-white">
+                {connectionLabel}
+              </span>
             </div>
           </div>
 
@@ -1810,58 +1912,232 @@ export default function GameBoard() {
             </div>
           </div>
         )}
+
+        {/* ================= BANKRUPT CONFIRMATION MODAL ================= */}
+        {showBankruptModal && bankruptCandidateId !== null && (
+          <div
+            className="absolute inset-0 z-[120] flex items-center justify-center rounded-[2vmin] bg-black/80 p-[4vmin] backdrop-blur-md"
+            onClick={() => setShowBankruptModal(false)}
+          >
+            <div
+              className="w-[44vmin] rounded-[1.8vmin] border border-red-500/40 bg-[#120f1d] p-[2.6vmin] text-center shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-[0.8vmin] text-[3.8vmin]">🏳️</div>
+              <h3 className="mb-[0.5vmin] text-[2.2vmin] font-black uppercase tracking-wider text-red-400">
+                Declare Bankruptcy
+              </h3>
+              {(() => {
+                const targetPlayer = players.find((p) => p.id === bankruptCandidateId);
+                if (!targetPlayer) return null;
+                const ownedProps = BOARD_TILES.filter((t) => propertyOwnership[t.id] === targetPlayer.id);
+
+                return (
+                  <>
+                    <p className="text-[1.25vmin] text-gray-200">
+                      Are you sure{" "}
+                      <span className="font-bold" style={{ color: targetPlayer.color }}>
+                        {targetPlayer.name}
+                      </span>{" "}
+                      wants to surrender and declare bankruptcy?
+                    </p>
+                    <p className="mt-[0.8vmin] text-[1.05vmin] text-gray-400">
+                      Whoever clicks this gets out immediately. All {ownedProps.length} propert{ownedProps.length === 1 ? "y" : "ies"} will be returned to the bank.
+                    </p>
+                    <div className="mt-[2.2vmin] flex gap-[1vmin]">
+                      <button
+                        onClick={() => setShowBankruptModal(false)}
+                        className="flex-1 rounded-[0.9vmin] bg-white/10 py-[1.1vmin] text-[1.2vmin] font-bold text-gray-300 hover:bg-white/20"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => handleVoluntaryBankruptcy(targetPlayer.id)}
+                        className="flex-1 rounded-[0.9vmin] bg-gradient-to-r from-red-600 to-rose-600 py-[1.1vmin] text-[1.2vmin] font-black uppercase text-white shadow-lg shadow-red-600/30 hover:brightness-110 active:scale-95"
+                      >
+                        Yes, Bankrupt
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
       <div className="flex h-[96vmin] w-full flex-1 flex-col self-start overflow-hidden rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
-        <h2 className="mb-[0.8vmin] px-[0.3vmin] text-[1.4vmin] font-black uppercase tracking-widest text-white">
-          Players
-        </h2>
+        <div className="mb-[0.8vmin] flex items-center justify-between px-[0.3vmin]">
+          <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">
+            Players
+          </h2>
+          {isVoteKickOpen && (
+            <span className="rounded-full border border-purple-500/40 bg-purple-500/20 px-[0.6vmin] py-[0.15vmin] text-[0.85vmin] font-bold text-purple-300 animate-pulse">
+              Vote Kick Mode
+            </span>
+          )}
+        </div>
 
         <div className="flex flex-col gap-[0.7vmin]">
           {players.map((player) => {
             const isSelected = selectedPlayerId === player.id;
+            const isSelf = player.id === currentPlayer?.id;
+            const isTarget = isVoteKickOpen && !player.isBankrupt && !isSelf;
+
+            const voters = kickVotes[player.id] || [];
+            const otherEligibleVoters = alivePlayers.filter((p) => p.id !== player.id);
+            const totalOthers = otherEligibleVoters.length;
+            const votes = voters.length;
+            const hasCurrentVoted = currentPlayer ? voters.includes(currentPlayer.id) : false;
+
             return (
-              <button
+              <div
                 key={player.id}
-                onClick={() => setSelectedPlayerId((prev) => (prev === player.id ? null : player.id))}
+                onClick={() => {
+                  if (isVoteKickOpen) {
+                    if (isTarget && currentPlayer) {
+                      togglePlayerKickVote(player.id, currentPlayer.id);
+                    }
+                  } else {
+                    setSelectedPlayerId((prev) => (prev === player.id ? null : player.id));
+                  }
+                }}
                 className={`flex items-center justify-between rounded-[1vmin] border-[0.18vmin] px-[1.1vmin] py-[0.9vmin] text-left transition-all duration-200 ${
-                  player.isBankrupt ? "opacity-40 grayscale" : ""
-                } ${
-                  isSelected && !player.isCurrentPlayer ? "ring-[0.14vmin] ring-white/40" : ""
+                  player.isBankrupt
+                    ? "opacity-30 grayscale cursor-not-allowed"
+                    : isVoteKickOpen && isSelf
+                    ? "opacity-30 grayscale-[30%] cursor-not-allowed border-white/5 bg-white/[0.02]"
+                    : isVoteKickOpen && isTarget
+                    ? hasCurrentVoted
+                      ? "border-emerald-500/60 bg-emerald-500/10 cursor-pointer hover:bg-emerald-500/15"
+                      : "border-purple-500/40 bg-purple-500/5 cursor-pointer hover:border-purple-400/60 hover:bg-purple-500/15"
+                    : isSelected && !player.isCurrentPlayer
+                    ? "ring-[0.14vmin] ring-white/40 cursor-pointer"
+                    : "cursor-pointer"
                 }`}
                 style={{
-                  // Whoever's turn it is gets highlighted in THEIR OWN
-                  // color - a red player lights up red, a yellow player
-                  // lights up yellow, etc. - regardless of selection.
-                  borderColor: player.isCurrentPlayer ? `${player.color}cc` : "rgba(255,255,255,0.1)",
-                  backgroundColor: player.isCurrentPlayer ? `${player.color}2e` : "rgba(255,255,255,0.04)",
-                  boxShadow: player.isCurrentPlayer
-                    ? `0 0 1.6vmin ${player.color}88, inset 0 0 0.7vmin ${player.color}33`
-                    : undefined,
+                  borderColor:
+                    isVoteKickOpen && isSelf
+                      ? "rgba(255,255,255,0.05)"
+                      : isVoteKickOpen && isTarget
+                      ? hasCurrentVoted
+                        ? "#10b981aa"
+                        : "rgba(168,85,247,0.4)"
+                      : player.isCurrentPlayer
+                      ? `${player.color}cc`
+                      : "rgba(255,255,255,0.1)",
+                  backgroundColor:
+                    isVoteKickOpen && isSelf
+                      ? "rgba(255,255,255,0.02)"
+                      : isVoteKickOpen && isTarget
+                      ? hasCurrentVoted
+                        ? "rgba(16,185,129,0.08)"
+                        : "rgba(168,85,247,0.08)"
+                      : player.isCurrentPlayer
+                      ? `${player.color}2e`
+                      : "rgba(255,255,255,0.04)",
+                  boxShadow:
+                    !isVoteKickOpen && player.isCurrentPlayer
+                      ? `0 0 1.6vmin ${player.color}88, inset 0 0 0.7vmin ${player.color}33`
+                      : undefined,
                 }}
               >
                 <div className="flex items-center gap-[0.8vmin]">
                   {renderPlayerFace(player, "3.6vmin")}
                   <div className="flex flex-col leading-tight">
-                    <span className={`text-[1.25vmin] font-bold ${player.isCurrentPlayer ? "text-white" : "text-gray-300"}`}>
+                    <span
+                      className={`text-[1.25vmin] font-bold ${
+                        isVoteKickOpen && isSelf
+                          ? "text-gray-400"
+                          : player.isCurrentPlayer
+                          ? "text-white"
+                          : "text-gray-300"
+                      }`}
+                    >
                       {player.name}
                     </span>
-                    {(player.isBankrupt || player.inJail) && (
-                      <span className={`text-[0.9vmin] ${player.isBankrupt ? "text-red-400" : "text-amber-400"}`}>
-                        {player.isBankrupt ? "BANKRUPT" : "🔒 JAIL"}
-                      </span>
-                    )}
+
+                    {player.isBankrupt ? (
+                      <span className="text-[0.9vmin] text-red-400">BANKRUPT</span>
+                    ) : isVoteKickOpen && isSelf ? (
+                      <span className="text-[0.8vmin] font-medium text-gray-500">(Yourself)</span>
+                    ) : isVoteKickOpen && isTarget ? (
+                      <div className="mt-[0.15vmin] flex items-center gap-[0.3vmin]">
+                        {otherEligibleVoters.map((voter) => {
+                          const thisVoted = voters.includes(voter.id);
+                          return (
+                            <span
+                              key={voter.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                togglePlayerKickVote(player.id, voter.id);
+                              }}
+                              className={`flex cursor-pointer items-center gap-[0.2vmin] rounded-full border px-[0.45vmin] py-[0.05vmin] text-[0.7vmin] font-bold transition-all ${
+                                thisVoted
+                                  ? "border-emerald-500/50 bg-emerald-500/25 text-emerald-300"
+                                  : "border-white/10 bg-white/[0.03] text-gray-400 hover:border-white/30 hover:text-white"
+                              }`}
+                              title={`${voter.name}: ${thisVoted ? "Voted (click to remove)" : "Click to vote"} (1 vote per player)`}
+                            >
+                              <span
+                                className="h-[0.45vmin] w-[0.45vmin] rounded-full"
+                                style={{ backgroundColor: voter.color }}
+                              />
+                              <span>{voter.name}</span>
+                              <span>{thisVoted ? "✓" : "+"}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : player.inJail ? (
+                      <span className="text-[0.9vmin] text-amber-400">🔒 JAIL</span>
+                    ) : null}
                   </div>
                 </div>
-                <span
-                  className={`text-[1.35vmin] font-black tracking-tight ${
-                    player.isCurrentPlayer ? "text-emerald-300" : "text-emerald-400"
-                  }`}
-                >
-                  ${player.money.toLocaleString()}
-                </span>
-              </button>
+
+                {/* Right side: In Vote Kick mode, show vote count & button; otherwise show money */}
+                {isVoteKickOpen && isTarget ? (
+                  <div className="flex items-center gap-[0.7vmin]">
+                    <span
+                      className={`text-[1.25vmin] font-black ${
+                        votes > 0 ? "text-purple-300" : "text-gray-400"
+                      }`}
+                    >
+                      {votes}/{totalOthers}
+                    </span>
+
+                    {currentPlayer && currentPlayer.id !== player.id && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          togglePlayerKickVote(player.id, currentPlayer.id);
+                        }}
+                        className={`rounded-[0.65vmin] px-[0.85vmin] py-[0.35vmin] text-[0.9vmin] font-black uppercase transition-all hover:scale-105 active:scale-95 ${
+                          hasCurrentVoted
+                            ? "border border-emerald-500/60 bg-emerald-500/25 text-emerald-300 hover:border-red-500/50 hover:bg-red-500/20 hover:text-red-300"
+                            : "border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md"
+                        }`}
+                        title={hasCurrentVoted ? "Click to remove your vote" : `Vote to kick ${player.name}`}
+                      >
+                        {hasCurrentVoted ? "✓ Voted" : "+ Vote"}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <span
+                    className={`text-[1.35vmin] font-black tracking-tight ${
+                      isVoteKickOpen && isSelf
+                        ? "text-gray-500"
+                        : player.isCurrentPlayer
+                        ? "text-emerald-300"
+                        : "text-emerald-400"
+                    }`}
+                  >
+                    ${player.money.toLocaleString()}
+                  </span>
+                )}
+              </div>
             );
           })}
         </div>
@@ -1892,6 +2168,52 @@ export default function GameBoard() {
               </div>
             );
           })()}
+
+        {/* ================= SMALL BOX: PLAYER ACTIONS (VOTE KICK & BANKRUPT) ================= */}
+        <div className="mt-[1.2vmin] rounded-[1vmin] border border-white/10 bg-white/[0.03] p-[0.9vmin] shadow-sm">
+          <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
+            <span className="text-[1.05vmin] font-bold uppercase tracking-wider text-gray-400">
+              Player Actions
+            </span>
+            <span className="text-[0.9vmin] font-medium text-gray-400">
+              Turn:{" "}
+              <span className="font-bold" style={{ color: currentPlayer?.color }}>
+                {currentPlayer?.name}
+              </span>
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between px-[0.3vmin]">
+            {/* Left Button: Vote Kick (same design and color as Roll Dice) */}
+            <button
+              onClick={() => setIsVoteKickOpen((prev) => !prev)}
+              disabled={alivePlayers.length <= 1}
+              className={`flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
+                isVoteKickOpen ? "ring-2 ring-purple-300 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]" : ""
+              }`}
+              title={isVoteKickOpen ? "Click to close Vote Kick mode" : "Click to vote kick players in the panel above"}
+            >
+              <span className="text-[1.2vmin]">🗳️</span>
+              <span>Vote Kick</span>
+            </button>
+
+            {/* Right Button: Bankrupt (red, but same design as Roll Dice) */}
+            <button
+              onClick={() => {
+                if (currentPlayer && !currentPlayer.isBankrupt) {
+                  setBankruptCandidateId(currentPlayer.id);
+                  setShowBankruptModal(true);
+                }
+              }}
+              disabled={!currentPlayer || currentPlayer.isBankrupt || alivePlayers.length <= 1}
+              className="flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-red-600 to-rose-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Whoever clicks this gets out (surrender/bankrupt)"
+            >
+              <span className="text-[1.2vmin]">🏳️</span>
+              <span>Bankrupt</span>
+            </button>
+          </div>
+        </div>
       </div>
       </div>
     </main>
