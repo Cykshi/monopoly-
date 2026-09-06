@@ -777,7 +777,7 @@ export default function GameBoard() {
   };
 
   return (
-    <main className="flex h-screen w-screen items-center justify-center overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-[1vmin] font-sans">
+    <main className="flex h-screen w-screen items-center justify-start overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-[1vmin] font-sans">
       <style jsx global>{`
         @keyframes tokenBounce {
           0%, 100% { transform: translateY(0) scale(1); }
@@ -812,7 +812,66 @@ export default function GameBoard() {
         }
       `}</style>
 
-      <div
+      <div className="flex items-center gap-[1.6vmin]">
+        {/* ================= LEFT SIDEBAR - PROPERTIES YOU OWN ================= */}
+        <div className="flex max-h-[96vmin] w-[32vmin] flex-col self-start rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+          <div className="mb-[0.8vmin] flex items-center gap-[0.5vmin] px-[0.3vmin]">
+            <span className="h-[1vmin] w-[1vmin] rounded-full" style={{ backgroundColor: players[0].color }} />
+            <h2 className="text-[1.15vmin] font-black uppercase tracking-widest text-gray-200">My Properties</h2>
+          </div>
+
+          {(() => {
+            const myProperties = BOARD_TILES.filter((t) => propertyOwnership[t.id] === players[0].id);
+            if (myProperties.length === 0) {
+              return (
+                <p className="mt-[1vmin] px-[0.3vmin] text-[1vmin] leading-snug text-gray-500">
+                  You don't own any properties yet. Buy one when you land on it!
+                </p>
+              );
+            }
+            return (
+              <div className="flex flex-col gap-[0.8vmin]">
+                {myProperties.map((tile) => {
+                  const houses = propertyHouses[tile.id] || 0;
+                  const isHotel = houses >= 5;
+                  return (
+                    <button
+                      key={tile.id}
+                      onClick={() => setActiveModal(tile)}
+                      className="group flex w-full items-center gap-[0.9vmin] rounded-[0.9vmin] border border-white/10 bg-white/[0.05] px-[0.9vmin] py-[0.9vmin] text-left transition-all duration-200 hover:scale-[1.04] hover:border-white/40 hover:bg-white/[0.1] hover:shadow-[0_0_1.4vmin_rgba(255,255,255,0.2)]"
+                    >
+                      {tile.countryCode ? (
+                        <div className="h-[2.4vmin] w-[3.6vmin] shrink-0 overflow-hidden rounded-[0.35vmin] border border-white/25 shadow-md transition-transform duration-200 group-hover:scale-105">
+                          <Flag code={tile.countryCode} className="h-full w-full object-cover" />
+                        </div>
+                      ) : (
+                        <span className="shrink-0 text-[2.2vmin] leading-none transition-transform duration-200 group-hover:scale-110">
+                          {tile.icon}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[1.25vmin] font-black uppercase leading-tight text-white">
+                          {tile.name}
+                        </div>
+                        <div className="mt-[0.3vmin] flex items-center gap-[0.5vmin]">
+                          <span className="text-[1.4vmin] font-black leading-none text-emerald-400">{tile.price}</span>
+                          {PROPERTY_TYPES.has(tile.type) && houses > 0 && (
+                            <span className="flex items-center text-[1.05vmin] leading-none" title={isHotel ? "Hotel" : `${houses} house(s)`}>
+                              {isHotel ? "🏨" : "🏠"}
+                              {!isHotel && houses > 1 ? <span className="ml-[0.15vmin] text-[0.95vmin] text-gray-400">×{houses}</span> : null}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+
+        <div
         className="relative grid aspect-square h-[96vmin] w-[96vmin] rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)]"
         style={{
           gridTemplateColumns: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
@@ -1614,6 +1673,7 @@ export default function GameBoard() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </main>
   );
