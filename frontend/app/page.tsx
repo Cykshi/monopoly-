@@ -26,6 +26,9 @@ interface Player {
   position: number;
   isCurrentPlayer?: boolean;
   mood?: "happy" | "flat";
+  inJail?: boolean;
+  jailTurns?: number;
+  isBankrupt?: boolean;
 }
 
 interface PlayerMovedEvent {
@@ -87,15 +90,18 @@ const BOARD_TILES: Tile[] = [
   { id: 39, name: "Beijing", type: "china", countryCode: "CN", price: "$500", rent: 200, rents: [200, 600, 1400, 3000, 3500, 4000], houseCost: 300, hotelCost: 300 },
 ];
 
+const STARTING_MONEY = 2000;
+
 const INITIAL_PLAYERS: Player[] = [
-  { id: 1, name: "You", color: "#8b5cf6", money: 2400, position: 0, isCurrentPlayer: true, mood: "happy" },
-  { id: 2, name: "Alex", color: "#22c55e", money: 2100, position: 0, mood: "happy" },
-  { id: 3, name: "Sam", color: "#ef4444", money: 1950, position: 0, mood: "happy" },
-  { id: 4, name: "Jordan", color: "#f59e0b", money: 2250, position: 0, mood: "happy" },
+  { id: 1, name: "You", color: "#8b5cf6", money: STARTING_MONEY, position: 0, isCurrentPlayer: true, mood: "happy" },
+  { id: 2, name: "Alex", color: "#22c55e", money: STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 3, name: "Sam", color: "#ef4444", money: STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 4, name: "Jordan", color: "#f59e0b", money: STARTING_MONEY, position: 0, mood: "happy" },
 ];
 
-const INITIAL_HOUSES: Record<number, number> = { 1: 2, 4: 3, 17: 1, 26: 0, 29: 2 };
-const PROPERTY_OWNERSHIP: Record<number, number> = { 1: 1, 4: 1, 17: 2, 26: 3, 29: 4 };
+// Clean board at game start: nobody owns anything yet, no houses built.
+const INITIAL_HOUSES: Record<number, number> = {};
+const PROPERTY_OWNERSHIP: Record<number, number> = {};
 
 const PROPERTY_TYPES = new Set(["bangladesh", "france", "india", "china", "america", "uk", "pakistan", "japan"]);
 
@@ -142,6 +148,16 @@ const calculateRent = (tile: Tile, houses: number) => {
   if (tile.rents && tile.rents[houses] !== undefined) return tile.rents[houses];
   if (!tile.rent) return 0;
   return Math.floor(tile.rent * (1 + houses * 0.6));
+};
+
+// Cyclic forward search for the closest tile of a given type — used by the
+// Treasure Chest "advance to nearest Airport" outcome.
+const findNearestTileIndex = (fromPos: number, type: string) => {
+  for (let offset = 1; offset <= BOARD_SIZE; offset++) {
+    const idx = (fromPos + offset) % BOARD_SIZE;
+    if (BOARD_TILES[idx].type === type) return idx;
+  }
+  return fromPos;
 };
 
 const getTokenAnchor = (orientation: string) => {
@@ -209,6 +225,8 @@ export default function GameBoard() {
   const [players, setPlayers] = useState<Player[]>(INITIAL_PLAYERS);
   const [actionLog, setActionLog] = useState<string[]>(["Game started. Waiting for your move..."]);
   const [gamePhase, setGamePhase] = useState<"YOUR TURN" | "ROLLING..." | "MOVING..." | "ACTION" | "END TURN">("YOUR TURN");
+  const [winner, setWinner] = useState<Player | null>(null);
+  const [escapingIds, setEscapingIds] = useState<number[]>([]);
 
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const playersRef = useRef(players);
@@ -287,6 +305,16 @@ export default function GameBoard() {
     setActionLog((prev) => [msg, ...prev].slice(0, 8));
   };
 
+  // Briefly flags a player as "breaking out" so their token plays the
+  // jailBreak pop animation instead of the idle jail-rattle, right at the
+  // moment they're released (doubles, bail, or the forced 3rd-turn release).
+  const triggerJailBreak = (playerId: number) => {
+    setEscapingIds((prev) => (prev.includes(playerId) ? prev : [...prev, playerId]));
+    window.setTimeout(() => {
+      setEscapingIds((prev) => prev.filter((id) => id !== playerId));
+    }, 700);
+  };
+
   // How many tiles of this SAME utility type (e.g. all "airport" tiles) does
   // this owner currently hold? Drives the tiered rent lookup below.
   const getUtilityOwnerCount = (type: string, ownerId: number) =>
@@ -341,12 +369,150 @@ export default function GameBoard() {
     step();
   };
 
+  const checkForWinnerAmong = (list: Player[]) => {
+    const alive = list.filter((p) => !p.isBankrupt);
+    if (alive.length === 1) setWinner(alive[0]);
+  };
+
+  // A player who can't cover what they owe goes bankrupt: every property
+  // they own transfers to whoever they owed (or back to the bank for tax),
+  // any houses on those tiles are cleared, and they're marked out of the
+  // game so endTurn skips them from here on.
+  const declareBankruptcy = (playerId: number, creditorId?: number) => {
+    const player = playersRef.current.find((p) => p.id === playerId);
+    if (!player || player.isBankrupt) return;
+
+    const ownedTileIds = Object.keys(propertyOwnership)
+      .map(Number)
+      .filter((tileId) => propertyOwnership[tileId] === playerId);
+
+    setPropertyOwnership((prev) => {
+      const next = { ...prev };
+      ownedTileIds.forEach((tileId) => {
+        if (creditorId) next[tileId] = creditorId;
+        else delete next[tileId];
+      });
+      return next;
+    });
+
+    if (ownedTileIds.length) {
+      setPropertyHouses((prev) => {
+        const next = { ...prev };
+        ownedTileIds.forEach((tileId) => {
+          next[tileId] = 0;
+        });
+        return next;
+      });
+    }
+
+    setPlayers((prev) => {
+      const updated = prev.map((p) =>
+        p.id === playerId ? { ...p, isBankrupt: true, money: 0, isCurrentPlayer: false } : p
+      );
+      checkForWinnerAmong(updated);
+      return updated;
+    });
+
+    const creditor = creditorId ? playersRef.current.find((p) => p.id === creditorId) : undefined;
+    addLog(
+      `${player.name} went BANKRUPT${
+        creditor ? ` — ${creditor.name} seized their properties` : " — properties returned to the bank"
+      }.`
+    );
+  };
+
+  // Instantly moves a player to a target tile (for card-driven jumps rather
+  // than a dice roll), crediting the pass-START bonus if the jump wraps
+  // around, then resolves whatever they land on exactly like a normal move.
+  const teleportAndLand = (playerId: number, targetIndex: number) => {
+    const player = playersRef.current.find((p) => p.id === playerId);
+    if (!player) return;
+
+    const wrapped = targetIndex < player.position;
+    setPlayers((prev) =>
+      prev.map((p) =>
+        p.id === playerId
+          ? { ...p, position: targetIndex, money: p.money + (wrapped ? PASS_START_BONUS : 0) }
+          : p
+      )
+    );
+    if (wrapped) addLog(`${player.name} passed START (+$${PASS_START_BONUS})`);
+
+    moveTimeoutRef.current = window.setTimeout(() => handleLanding(BOARD_TILES[targetIndex], playerId), 300);
+  };
+
+  // Rolls and applies a Treasure/Surprise outcome. The odds and effects
+  // match exactly what the rules modal for these tiles already promises.
+  const resolveCard = (kind: "treasure" | "surprise", playerId: number) => {
+    const player = playersRef.current.find((p) => p.id === playerId);
+    if (!player) return;
+
+    const roll = Math.floor(Math.random() * 6) + 1;
+
+    if (kind === "treasure") {
+      if (roll <= 2) {
+        setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 100, mood: "happy" } : p)));
+        addLog(`${player.name} drew Treasure (${roll}): +$100 from the bank.`);
+      } else if (roll <= 4) {
+        setHasSkillCard(true);
+        setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 200, mood: "happy" } : p)));
+        addLog(`${player.name} drew Treasure (${roll}): +$200 and a free Movement Card.`);
+      } else if (roll === 5) {
+        const targetIdx = findNearestTileIndex(player.position, "airport");
+        addLog(`${player.name} drew Treasure (${roll}): advances to the nearest Airport.`);
+        teleportAndLand(playerId, targetIdx);
+      } else {
+        const amount = 150;
+        if (player.money < amount) {
+          declareBankruptcy(playerId);
+        } else {
+          setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money - amount, mood: "flat" } : p)));
+          addLog(`${player.name} drew Treasure (${roll}): pays -$150 luxury tax.`);
+        }
+      }
+      return;
+    }
+
+    if (roll <= 2) {
+      setPlayers((prev) =>
+        prev.map((p) => (p.id === playerId ? { ...p, position: 10, inJail: true, jailTurns: 0, mood: "flat" } : p))
+      );
+      addLog(`${player.name} drew Surprise (${roll}): sent straight to JAIL.`);
+    } else if (roll <= 4) {
+      const targetIdx = (player.position + 8) % BOARD_SIZE;
+      addLog(`${player.name} drew Surprise (${roll}): jumps forward 8 spaces.`);
+      teleportAndLand(playerId, targetIdx);
+    } else if (roll === 5) {
+      setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 250, mood: "happy" } : p)));
+      addLog(`${player.name} drew Surprise (${roll}): receives a $250 dividend.`);
+    } else {
+      const others = playersRef.current.filter((p) => p.id !== playerId && !p.isBankrupt);
+      if (others.length === 0) {
+        addLog(`${player.name} drew Surprise (${roll}): no one else to swap with.`);
+        return;
+      }
+      const target = others[Math.floor(Math.random() * others.length)];
+      setPlayers((prev) =>
+        prev.map((p) => {
+          if (p.id === playerId) return { ...p, position: target.position };
+          if (p.id === target.id) return { ...p, position: player.position };
+          return p;
+        })
+      );
+      addLog(`${player.name} drew Surprise (${roll}): swapped places with ${target.name}.`);
+    }
+  };
+
   const handleLanding = (tile: Tile, playerId: number) => {
   const player = playersRef.current.find((p) => p.id === playerId);
   if (!player) return;
 
   if (tile.type === "tax") {
     const amount = Math.abs(parsePrice(tile.price) || 0);
+    if (player.money < amount) {
+      declareBankruptcy(playerId);
+      return;
+    }
     setPlayers((prev) =>
       prev.map((p) =>
         p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
@@ -365,6 +531,11 @@ export default function GameBoard() {
         : calculateUtilityRent(tile, ownerId);
       const owner = playersRef.current.find((p) => p.id === ownerId);
 
+      if (player.money < rent) {
+        declareBankruptcy(playerId, ownerId);
+        return;
+      }
+
       setPlayers((prev) =>
         prev.map((p) => {
           if (p.id === playerId) return { ...p, money: Math.max(0, p.money - rent), mood: "flat" };
@@ -380,15 +551,24 @@ export default function GameBoard() {
     return;
   }
 
-  setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
-
   if (tile.type === "card") {
-    addLog(`${player.name} landed on ${tile.name}.`);
+    resolveCard(tile.name === "TREASURE" ? "treasure" : "surprise", playerId);
+    return;
   }
+
+  if (tile.id === 10 && !player.inJail) {
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === playerId ? { ...p, inJail: true, jailTurns: 0, mood: "flat" } : p))
+    );
+    addLog(`${player.name} landed on JAIL and got locked up!`);
+    return;
+  }
+
+  setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
 };
 
   const rollDice = () => {
-    if (isRolling || isMoving || gamePhase !== "YOUR TURN") return;
+    if (isRolling || isMoving || gamePhase !== "YOUR TURN" || winner) return;
 
     const result: [number, number] = [
       Math.floor(Math.random() * 6) + 1,
@@ -406,16 +586,58 @@ export default function GameBoard() {
 
     const [first, second] = dice;
     const total = first + second;
+    const isDoubles = first === second;
+    const player = playersRef.current.find((p) => p.isCurrentPlayer);
 
     setIsRolling(false);
-    addLog(`Rolled ${total} (${first} + ${second})`);
     socketRef.current?.emit("player:rolled", { dice: [first, second], total });
 
+    if (player?.inJail) {
+      if (isDoubles) {
+        addLog(`Rolled ${total} (${first} + ${second}) — doubles! ${player.name} breaks out of JAIL.`);
+        setPlayers((prev) => prev.map((p) => (p.id === player.id ? { ...p, inJail: false, jailTurns: 0 } : p)));
+        triggerJailBreak(player.id);
+        animateMovement(total);
+      } else {
+        const nextJailTurns = (player.jailTurns || 0) + 1;
+        if (nextJailTurns >= 3) {
+          const bail = 100;
+          addLog(`Rolled ${total} (${first} + ${second}) — no doubles. ${player.name} is forced to pay -$${bail} bail and is released.`);
+          setPlayers((prev) =>
+            prev.map((p) =>
+              p.id === player.id ? { ...p, inJail: false, jailTurns: 0, money: Math.max(0, p.money - bail) } : p
+            )
+          );
+          triggerJailBreak(player.id);
+        } else {
+          addLog(`Rolled ${total} (${first} + ${second}) — no doubles. ${player.name} stays in JAIL (${nextJailTurns}/3).`);
+          setPlayers((prev) => prev.map((p) => (p.id === player.id ? { ...p, jailTurns: nextJailTurns } : p)));
+        }
+        setGamePhase("ACTION");
+      }
+      return;
+    }
+
+    addLog(`Rolled ${total} (${first} + ${second})`);
     animateMovement(total);
   };
 
+  const payBail = () => {
+    if (!currentPlayer?.inJail || gamePhase !== "YOUR TURN" || winner) return;
+    const bail = 100;
+    if (currentPlayer.money < bail) {
+      addLog(`${currentPlayer.name} can't afford the $${bail} bail.`);
+      return;
+    }
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === currentPlayer.id ? { ...p, inJail: false, jailTurns: 0, money: p.money - bail } : p))
+    );
+    triggerJailBreak(currentPlayer.id);
+    addLog(`${currentPlayer.name} paid -$${bail} bail and is released from JAIL.`);
+  };
+
   const openSkillCard = () => {
-    if (!hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN") return;
+    if (!hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner || currentPlayer?.inJail) return;
     setShowCardSelector(true);
     setSelectedCardValue(null);
   };
@@ -430,11 +652,16 @@ export default function GameBoard() {
   };
 
   const endTurn = () => {
+    if (winner) return;
     if (gamePhase !== "ACTION" && gamePhase !== "END TURN") return;
 
     setPlayers((prev) => {
       const currentIdx = prev.findIndex((p) => p.isCurrentPlayer);
-      const nextIdx = (currentIdx + 1) % prev.length;
+      let nextIdx = currentIdx;
+      for (let i = 0; i < prev.length; i++) {
+        nextIdx = (nextIdx + 1) % prev.length;
+        if (!prev[nextIdx].isBankrupt) break;
+      }
       return prev.map((p, i) => ({ ...p, isCurrentPlayer: i === nextIdx }));
     });
 
@@ -443,7 +670,7 @@ export default function GameBoard() {
   };
 
   const buyProperty = (tile: Tile) => {
-    if (!currentPlayer || !OWNABLE_TYPES.has(tile.type) || propertyOwnership[tile.id]) return;
+    if (winner || !currentPlayer || !OWNABLE_TYPES.has(tile.type) || propertyOwnership[tile.id]) return;
     const cost = parsePrice(tile.price);
     if (cost === null || cost <= 0 || currentPlayer.money < cost) return;
 
@@ -569,6 +796,20 @@ export default function GameBoard() {
           35% { transform: translateY(160%); }
           100% { transform: translateY(0); }
         }
+        @keyframes jailRattle {
+          0%, 100% { transform: translateX(0) rotate(0deg); }
+          20% { transform: translateX(-6%) rotate(-4deg); }
+          40% { transform: translateX(5%) rotate(3deg); }
+          60% { transform: translateX(-4%) rotate(-3deg); }
+          80% { transform: translateX(3%) rotate(2deg); }
+        }
+        @keyframes jailBreak {
+          0% { transform: scale(1) rotate(0deg); }
+          35% { transform: scale(1.45) rotate(-12deg); }
+          60% { transform: scale(1.2) rotate(10deg); }
+          80% { transform: scale(1.08) rotate(-5deg); }
+          100% { transform: scale(1) rotate(0deg); }
+        }
       `}</style>
 
       <div
@@ -669,51 +910,74 @@ export default function GameBoard() {
 
                     return (
                       <>
-                        {visible.map((player, idx) => (
-                          <div
-                            key={player.id}
-                            title={player.name}
-                            className="relative flex items-center justify-center rounded-full transition-transform duration-300 hover:z-20 hover:scale-110"
-                            style={{
-                              height: size,
-                              width: size,
-                              marginLeft: idx === 0 ? 0 : "-1.15vmin",
-                              zIndex: player.isCurrentPlayer ? 10 : idx,
-                              background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
-                              border: `0.09vmin solid ${player.color}`,
-                              boxShadow: player.isCurrentPlayer
-                                ? `0 0 1.8vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.7vmin 1.3vmin rgba(0,0,0,0.75), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.45), inset 0 -0.3vmin 0.4vmin rgba(0,0,0,0.35)`
-                                : `0 0 0.6vmin ${player.color}aa, 0 0.5vmin 1vmin rgba(0,0,0,0.65), inset 0 0.22vmin 0.3vmin rgba(255,255,255,0.35), inset 0 -0.25vmin 0.35vmin rgba(0,0,0,0.3)`,
-                              animation: player.isCurrentPlayer
-                                ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s`
-                                : undefined,
-                            }}
-                          >
+                        {visible.map((player, idx) => {
+                          const isEscaping = escapingIds.includes(player.id);
+                          return (
                             <div
-                              className="pointer-events-none absolute left-[16%] top-[12%] h-[38%] w-[38%] rounded-full opacity-80"
-                              style={{ background: "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)" }}
-                            />
-                            <div className="absolute inset-0 flex flex-col items-center justify-center">
-                              {player.mood === "flat" ? (
-                                <>
-                                  <div className="flex gap-[0.45vmin]">
-                                    <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
-                                    <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
-                                  </div>
-                                  <div className="mt-[0.25vmin] h-[0.26vmin] w-[1.05vmin] rounded-full bg-white/85" />
-                                </>
-                              ) : (
-                                <>
-                                  <div className="flex gap-[0.45vmin]">
-                                    <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
-                                    <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
-                                  </div>
-                                  <div className="mt-[0.1vmin] h-[0.42vmin] w-[0.8vmin] rounded-b-full border-b-[0.16vmin] border-l-[0.16vmin] border-r-[0.16vmin] border-white/85 bg-transparent" />
-                                </>
+                              key={player.id}
+                              className="relative"
+                              style={{
+                                height: size,
+                                width: size,
+                                marginLeft: idx === 0 ? 0 : "-1.15vmin",
+                                zIndex: player.isCurrentPlayer ? 10 : idx,
+                                animation: player.inJail
+                                  ? isEscaping
+                                    ? "jailBreak 0.7s ease-out"
+                                    : "jailRattle 1.8s ease-in-out infinite"
+                                  : undefined,
+                              }}
+                            >
+                              <div
+                                title={player.name}
+                                className="relative flex h-full w-full items-center justify-center rounded-full transition-transform duration-300 hover:z-20 hover:scale-110"
+                                style={{
+                                  background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
+                                  border: `0.09vmin solid ${player.color}`,
+                                  boxShadow: player.isCurrentPlayer
+                                    ? `0 0 1.8vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.7vmin 1.3vmin rgba(0,0,0,0.75), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.45), inset 0 -0.3vmin 0.4vmin rgba(0,0,0,0.35)`
+                                    : `0 0 0.6vmin ${player.color}aa, 0 0.5vmin 1vmin rgba(0,0,0,0.65), inset 0 0.22vmin 0.3vmin rgba(255,255,255,0.35), inset 0 -0.25vmin 0.35vmin rgba(0,0,0,0.3)`,
+                                  animation: player.isCurrentPlayer
+                                    ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s`
+                                    : undefined,
+                                }}
+                              >
+                                <div
+                                  className="pointer-events-none absolute left-[16%] top-[12%] h-[38%] w-[38%] rounded-full opacity-80"
+                                  style={{ background: "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)" }}
+                                />
+                                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                  {player.mood === "flat" ? (
+                                    <>
+                                      <div className="flex gap-[0.45vmin]">
+                                        <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
+                                        <div className="h-[0.26vmin] w-[0.7vmin] rounded-full bg-white/95" />
+                                      </div>
+                                      <div className="mt-[0.25vmin] h-[0.26vmin] w-[1.05vmin] rounded-full bg-white/85" />
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div className="flex gap-[0.45vmin]">
+                                        <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
+                                        <div className="h-[0.52vmin] w-[0.52vmin] rounded-full bg-white/95" />
+                                      </div>
+                                      <div className="mt-[0.1vmin] h-[0.42vmin] w-[0.8vmin] rounded-b-full border-b-[0.16vmin] border-l-[0.16vmin] border-r-[0.16vmin] border-white/85 bg-transparent" />
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Jail bars overlay - visible while locked up, hidden during the breakout pop */}
+                              {player.inJail && !isEscaping && (
+                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-[0.16vmin] overflow-hidden rounded-full bg-black/15">
+                                  <div className="h-[85%] w-[0.16vmin] rounded-full bg-white/85 shadow-[0_0_0.3vmin_rgba(0,0,0,0.6)]" />
+                                  <div className="h-[85%] w-[0.16vmin] rounded-full bg-white/85 shadow-[0_0_0.3vmin_rgba(0,0,0,0.6)]" />
+                                  <div className="h-[85%] w-[0.16vmin] rounded-full bg-white/85 shadow-[0_0_0.3vmin_rgba(0,0,0,0.6)]" />
+                                </div>
                               )}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
 
                         {overflowCount > 0 && (
                           <div
@@ -924,21 +1188,33 @@ export default function GameBoard() {
           <div className="flex w-full max-w-[44vmin] gap-[1.2vmin]">
             {gamePhase === "YOUR TURN" ? (
               <>
+                {currentPlayer?.inJail && (
+                  <button
+                    onClick={payBail}
+                    disabled={(currentPlayer.money ?? 0) < 100}
+                    className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    🔓 Pay Bail $100
+                  </button>
+                )}
+
                 <button
                   onClick={rollDice}
                   disabled={isRolling || isMoving}
                   className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {isRolling ? "Rolling..." : "🎲 Roll Dice"}
+                  {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll for Doubles" : "🎲 Roll Dice"}
                 </button>
 
-                <button
-                  onClick={openSkillCard}
-                  disabled={!hasSkillCard || isRolling || isMoving}
-                  className="relative flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {hasSkillCard ? "🃏 Card" : "Exhausted"}
-                </button>
+                {!currentPlayer?.inJail && (
+                  <button
+                    onClick={openSkillCard}
+                    disabled={!hasSkillCard || isRolling || isMoving}
+                    className="relative flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {hasSkillCard ? "🃏 Card" : "Exhausted"}
+                  </button>
+                )}
               </>
             ) : (
               <button
@@ -956,6 +1232,8 @@ export default function GameBoard() {
               <div
                 key={player.id}
                 className={`flex items-center gap-[1vmin] rounded-[1.4vmin] border px-[2.2vmin] py-[1.3vmin] transition-all duration-300 ${
+                  player.isBankrupt ? "opacity-40 grayscale" : ""
+                } ${
                   player.isCurrentPlayer ? "scale-105" : "border-white/10 bg-white/[0.04]"
                 }`}
                 style={
@@ -974,6 +1252,8 @@ export default function GameBoard() {
                     className={`text-[1.4vmin] font-bold ${player.isCurrentPlayer ? "text-white" : "text-gray-300"}`}
                   >
                     {player.name}
+                    {player.isBankrupt && <span className="ml-[0.5vmin] text-[1vmin] text-red-400">BANKRUPT</span>}
+                    {player.inJail && !player.isBankrupt && <span className="ml-[0.5vmin] text-[1vmin] text-amber-400">🔒 JAIL</span>}
                   </span>
                   <span
                     className={`text-[1.7vmin] font-black tracking-tight ${
@@ -1306,6 +1586,31 @@ export default function GameBoard() {
                   Confirm {selectedCardValue ? `→ ${selectedCardValue}` : ""}
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= GAME OVER ================= */}
+        {winner && (
+          <div className="absolute inset-0 z-[130] flex items-center justify-center rounded-[2vmin] bg-black/85 p-[4vmin] backdrop-blur-md">
+            <div
+              className="w-[46vmin] rounded-[1.8vmin] border-2 p-[3vmin] text-center shadow-2xl"
+              style={{ borderColor: winner.color, backgroundColor: "#111018" }}
+            >
+              <div className="mb-[1vmin] text-[4vmin]">🏆</div>
+              <h2 className="mb-[0.5vmin] text-[2.6vmin] font-black uppercase tracking-widest text-white">
+                Game Over
+              </h2>
+              <p className="mb-[2vmin] text-[1.6vmin] font-bold" style={{ color: winner.color }}>
+                {winner.name} wins!
+              </p>
+              <p className="mb-[2vmin] text-[1.2vmin] text-gray-400">Every other player has gone bankrupt.</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="w-full rounded-[1vmin] bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-white hover:scale-[1.02]"
+              >
+                New Game
+              </button>
             </div>
           </div>
         )}
