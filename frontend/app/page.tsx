@@ -241,6 +241,7 @@ export default function GameBoard() {
   const [gamePhase, setGamePhase] = useState<"YOUR TURN" | "ROLLING..." | "MOVING..." | "ACTION" | "END TURN">("YOUR TURN");
   const [winner, setWinner] = useState<Player | null>(null);
   const [escapingIds, setEscapingIds] = useState<number[]>([]);
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
 
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const playersRef = useRef(players);
@@ -790,6 +791,50 @@ export default function GameBoard() {
     if (tile.type !== "corner") setActiveModal(tile);
   };
 
+  // Small reusable rendering of a player's board token face, sized down
+  // for use in the sidebars - mirrors the same happy/flat expression logic
+  // used on the actual board tokens, so a mood change updates everywhere
+  // this player's face appears at once.
+  const renderPlayerFace = (player: Player, size: string) => (
+    <div
+      className="relative flex shrink-0 items-center justify-center rounded-full"
+      style={{
+        height: size,
+        width: size,
+        background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
+        border: `0.09vmin solid ${player.color}`,
+        boxShadow: player.isCurrentPlayer
+          ? `0 0 1.8vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.7vmin 1.3vmin rgba(0,0,0,0.75), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.45), inset 0 -0.3vmin 0.4vmin rgba(0,0,0,0.35)`
+          : `0 0 0.6vmin ${player.color}aa, 0 0.5vmin 1vmin rgba(0,0,0,0.65), inset 0 0.22vmin 0.3vmin rgba(255,255,255,0.35), inset 0 -0.25vmin 0.35vmin rgba(0,0,0,0.3)`,
+        animation: player.isCurrentPlayer ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s` : undefined,
+      }}
+    >
+      <div
+        className="pointer-events-none absolute left-[16%] top-[12%] h-[38%] w-[38%] rounded-full opacity-80"
+        style={{ background: "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)" }}
+      />
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        {player.mood === "flat" ? (
+          <>
+            <div className="flex gap-[0.4vmin]">
+              <div className="h-[0.22vmin] w-[0.6vmin] rounded-full bg-white/95" />
+              <div className="h-[0.22vmin] w-[0.6vmin] rounded-full bg-white/95" />
+            </div>
+            <div className="mt-[0.22vmin] h-[0.22vmin] w-[0.9vmin] rounded-full bg-white/85" />
+          </>
+        ) : (
+          <>
+            <div className="flex gap-[0.4vmin]">
+              <div className="h-[0.44vmin] w-[0.44vmin] rounded-full bg-white/95" />
+              <div className="h-[0.44vmin] w-[0.44vmin] rounded-full bg-white/95" />
+            </div>
+            <div className="mt-[0.08vmin] h-[0.36vmin] w-[0.68vmin] rounded-b-full border-b-[0.14vmin] border-l-[0.14vmin] border-r-[0.14vmin] border-white/85 bg-transparent" />
+          </>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <main className="flex h-screen w-screen items-center justify-start overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-[1vmin] font-sans">
       <style jsx global>{`
@@ -826,7 +871,7 @@ export default function GameBoard() {
         }
       `}</style>
 
-      <div className="flex items-center gap-[1.6vmin]">
+      <div className="flex h-[96vmin] w-full items-center gap-[1.6vmin]">
         {/* ================= LEFT SIDEBAR - PROPERTIES YOU OWN ================= */}
         <div className="flex max-h-[96vmin] w-[32vmin] flex-col self-start rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
           {/* Balance card - total cash on hand plus the player's own recent
@@ -915,7 +960,7 @@ export default function GameBoard() {
         </div>
 
         <div
-        className="relative grid aspect-square h-[96vmin] w-[96vmin] rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)]"
+        className="relative grid aspect-square h-[96vmin] w-[96vmin] shrink-0 rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)]"
         style={{
           gridTemplateColumns: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
           gridTemplateRows: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
@@ -947,18 +992,20 @@ export default function GameBoard() {
           const ownedBorder = owner ? getTransparentColor(owner.color, "90") : undefined;
           const houses = propertyHouses[tile.id] || 0;
           const isHotel = houses >= 5;
+          const isSelectedOwner = selectedPlayerId != null && owner?.id === selectedPlayerId;
+          const isDimmedBySelection = selectedPlayerId != null && !isSelectedOwner;
 
           return (
             <div
               key={tile.id}
               onClick={() => handleTileClick(tile)}
-              className={`relative flex cursor-pointer items-center justify-center rounded-[0.9vmin] transition-all duration-200 hover:z-30 hover:scale-[1.04] ${
+              className={`relative flex cursor-pointer items-center justify-center rounded-[0.9vmin] transition-all duration-300 hover:z-30 hover:scale-[1.04] ${
                 owner ? "" : "shadow-lg hover:shadow-[0_0_2vmin_rgba(255,255,255,0.35)]"
               } ${
                 isCorner
   ? "border-[0.25vmin] border-indigo-400/60 bg-gradient-to-br from-[#1e143c] to-[#120b24]"
   : "border border-[#34404d] bg-[#171e26]/80"
-              }`}
+              } ${isDimmedBySelection ? "opacity-30 saturate-50" : ""} ${isSelectedOwner ? "scale-[1.05]" : ""}`}
               style={{
                 gridRow,
                 gridColumn,
@@ -969,16 +1016,22 @@ export default function GameBoard() {
                 // overflow regardless of the badge's own z-index, since
                 // z-index only resolves within the same stacking parent -
                 // that's what was cutting a line through the badge.
-                zIndex: houses > 0 ? 20 : undefined,
+                zIndex: houses > 0 || isSelectedOwner ? 25 : undefined,
                 ...(owner
                   ? {
                       backgroundColor: ownedBackground,
-                      borderColor: ownedBorder,
-                      boxShadow: `0 0 1.8vmin ${owner.color}99, 0 0 0.5vmin ${owner.color}, inset 0 0 0.8vmin ${owner.color}33`,
+                      borderColor: isSelectedOwner ? "#ffffff" : ownedBorder,
+                      boxShadow: isSelectedOwner
+                        ? `0 0 0 0.25vmin #ffffff, 0 0 2.4vmin ${owner.color}, 0 0 1vmin ${owner.color}`
+                        : `0 0 1.8vmin ${owner.color}99, 0 0 0.5vmin ${owner.color}, inset 0 0 0.8vmin ${owner.color}33`,
                     }
                   : {}),
               }}
             >
+              {isSelectedOwner && (
+                <div className="pointer-events-none absolute inset-0 z-40 animate-pulse rounded-[0.9vmin] ring-[0.3vmin] ring-white" />
+              )}
+
               {!isCorner && tile.countryCode && (
                 <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[0.9vmin]">
                   <div className="absolute inset-0 flex scale-150 items-center justify-center opacity-25">
@@ -1277,7 +1330,7 @@ export default function GameBoard() {
           </div>
 
           {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
-          <div className="flex h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center">
+                    <div className="flex h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center -translate-y-[3.5vmin]">
             <div>
               {actionLog.slice(0, 3).map((msg, i) => (
                 <p key={i} className={`text-[1.55vmin] leading-snug ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
@@ -1287,7 +1340,7 @@ export default function GameBoard() {
             </div>
           </div>
 
-          <div className="flex w-full max-w-[44vmin] gap-[1.2vmin]">
+                    <div className="flex w-full max-w-[44vmin] gap-[1.2vmin] -translate-y-[3.5vmin]">
             {gamePhase === "YOUR TURN" ? (
               <>
                 {currentPlayer?.inJail && (
@@ -1327,46 +1380,6 @@ export default function GameBoard() {
                 End Turn
               </button>
             )}
-          </div>
-
-          <div className="flex flex-wrap justify-center gap-[1.2vmin]">
-            {players.map((player) => (
-              <div
-                key={player.id}
-                className={`flex items-center gap-[1vmin] rounded-[1.4vmin] border px-[2.2vmin] py-[1.3vmin] transition-all duration-300 ${
-                  player.isBankrupt ? "opacity-40 grayscale" : ""
-                } ${
-                  player.isCurrentPlayer ? "scale-105" : "border-white/10 bg-white/[0.04]"
-                }`}
-                style={
-                  player.isCurrentPlayer
-                    ? {
-                        borderColor: `${player.color}aa`,
-                        backgroundColor: `${player.color}22`,
-                        boxShadow: `0 0 1.6vmin ${player.color}88, inset 0 0 0.7vmin ${player.color}33`,
-                      }
-                    : undefined
-                }
-              >
-                <span className="h-[1.6vmin] w-[1.6vmin] shrink-0 rounded-full" style={{ backgroundColor: player.color }} />
-                <div className="flex flex-col items-start leading-tight">
-                  <span
-                    className={`text-[1.4vmin] font-bold ${player.isCurrentPlayer ? "text-white" : "text-gray-300"}`}
-                  >
-                    {player.name}
-                    {player.isBankrupt && <span className="ml-[0.5vmin] text-[1vmin] text-red-400">BANKRUPT</span>}
-                    {player.inJail && !player.isBankrupt && <span className="ml-[0.5vmin] text-[1vmin] text-amber-400">🔒 JAIL</span>}
-                  </span>
-                  <span
-                    className={`text-[1.7vmin] font-black tracking-tight ${
-                      player.isCurrentPlayer ? "text-emerald-400" : "text-white"
-                    }`}
-                  >
-                    ${player.money.toLocaleString()}
-                  </span>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
 
@@ -1716,6 +1729,88 @@ export default function GameBoard() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
+      <div className="flex h-[96vmin] w-full flex-1 flex-col self-start overflow-hidden rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+        <h2 className="mb-[0.8vmin] px-[0.3vmin] text-[1.4vmin] font-black uppercase tracking-widest text-white">
+          Players
+        </h2>
+
+        <div className="flex flex-col gap-[0.7vmin]">
+          {players.map((player) => {
+            const isSelected = selectedPlayerId === player.id;
+            return (
+              <button
+                key={player.id}
+                onClick={() => setSelectedPlayerId((prev) => (prev === player.id ? null : player.id))}
+                className={`flex items-center justify-between rounded-[1vmin] border-[0.18vmin] px-[1.1vmin] py-[0.9vmin] text-left transition-all duration-200 ${
+                  player.isBankrupt ? "opacity-40 grayscale" : ""
+                } ${
+                  isSelected && !player.isCurrentPlayer ? "ring-[0.14vmin] ring-white/40" : ""
+                }`}
+                style={{
+                  // Whoever's turn it is gets highlighted in THEIR OWN
+                  // color - a red player lights up red, a yellow player
+                  // lights up yellow, etc. - regardless of selection.
+                  borderColor: player.isCurrentPlayer ? `${player.color}cc` : "rgba(255,255,255,0.1)",
+                  backgroundColor: player.isCurrentPlayer ? `${player.color}2e` : "rgba(255,255,255,0.04)",
+                  boxShadow: player.isCurrentPlayer
+                    ? `0 0 1.6vmin ${player.color}88, inset 0 0 0.7vmin ${player.color}33`
+                    : undefined,
+                }}
+              >
+                <div className="flex items-center gap-[0.8vmin]">
+                  {renderPlayerFace(player, "3.6vmin")}
+                  <div className="flex flex-col leading-tight">
+                    <span className={`text-[1.25vmin] font-bold ${player.isCurrentPlayer ? "text-white" : "text-gray-300"}`}>
+                      {player.name}
+                    </span>
+                    {(player.isBankrupt || player.inJail) && (
+                      <span className={`text-[0.9vmin] ${player.isBankrupt ? "text-red-400" : "text-amber-400"}`}>
+                        {player.isBankrupt ? "BANKRUPT" : "🔒 JAIL"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <span
+                  className={`text-[1.35vmin] font-black tracking-tight ${
+                    player.isCurrentPlayer ? "text-emerald-300" : "text-emerald-400"
+                  }`}
+                >
+                  ${player.money.toLocaleString()}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedPlayerId &&
+          (() => {
+            const selectedPlayer = players.find((p) => p.id === selectedPlayerId);
+            if (!selectedPlayer) return null;
+            const ownedCount = BOARD_TILES.filter((t) => propertyOwnership[t.id] === selectedPlayer.id).length;
+
+            return (
+              <div className="mt-[1.3vmin] flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/[0.05] px-[1vmin] py-[0.9vmin]">
+                <div className="flex min-w-0 items-center gap-[0.6vmin]">
+                  <span className="h-[1vmin] w-[1vmin] shrink-0 rounded-full" style={{ backgroundColor: selectedPlayer.color }} />
+                  <span className="truncate text-[1.1vmin] font-semibold text-gray-200">
+                    {ownedCount > 0
+                      ? `Highlighting ${selectedPlayer.name}'s ${ownedCount} propert${ownedCount === 1 ? "y" : "ies"} on the board`
+                      : `${selectedPlayer.name} doesn't own any properties yet`}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedPlayerId(null)}
+                  title="Clear selection"
+                  className="ml-[0.6vmin] flex h-[1.8vmin] w-[1.8vmin] shrink-0 items-center justify-center rounded-full text-[1.3vmin] leading-none text-gray-400 hover:bg-white/10 hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })()}
       </div>
       </div>
     </main>
