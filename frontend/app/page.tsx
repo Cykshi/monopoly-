@@ -235,16 +235,24 @@ export default function GameBoard() {
   const [selectedCardValue, setSelectedCardValue] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeModal, setActiveModal] = useState<Tile | null>(null);
-  const [specialModal, setSpecialModal] = useState<"treasure" | "surprise" | "tax" | null>(null);
+  const [specialModal, setSpecialModal] = useState<"treasure" | "surprise" | "tax" | "resthouse" | null>(null);
   const [propertyHouses, setPropertyHouses] = useState<Record<number, number>>(INITIAL_HOUSES);
   const [propertyOwnership, setPropertyOwnership] = useState<Record<number, number>>(PROPERTY_OWNERSHIP);
   const [players, setPlayers] = useState<Player[]>(INITIAL_PLAYERS);
-  const [actionLog, setActionLog] = useState<string[]>(["Game started. Waiting for your move..."]);
+  const [actionLog, setActionLog] = useState<string[]>(["Game setup ready. Configure settings below or roll dice to start!"]);
   const [gamePhase, setGamePhase] = useState<"YOUR TURN" | "ROLLING..." | "MOVING..." | "ACTION" | "END TURN">("YOUR TURN");
   const [winner, setWinner] = useState<Player | null>(null);
   const [escapingIds, setEscapingIds] = useState<number[]>([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
   const [restHousePot, setRestHousePot] = useState(0);
+
+  // Game Setup & Settings states (editable before game start, locked after)
+  const [isGameStarted, setIsGameStarted] = useState(false);
+  const [startingCash, setStartingCash] = useState(STARTING_MONEY);
+  const [passStartBonus, setPassStartBonus] = useState(PASS_START_BONUS);
+  const [landStartBonus, setLandStartBonus] = useState(LAND_START_BONUS);
+  const [fastMode, setFastMode] = useState(false);
+  const [enableRestHousePot, setEnableRestHousePot] = useState(true);
 
   // Vote Kick & Voluntary Bankrupt states
   const [isVoteKickOpen, setIsVoteKickOpen] = useState(false);
@@ -254,6 +262,26 @@ export default function GameBoard() {
 
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const alivePlayers = useMemo(() => players.filter((p) => !p.isBankrupt), [players]);
+
+  const handleStartingCashChange = (cash: number) => {
+    if (isGameStarted) return;
+    setStartingCash(cash);
+    setPlayers((prev) => prev.map((p) => ({ ...p, money: cash })));
+    addLog(`⚙️ Starting cash updated to $${cash.toLocaleString()}`);
+  };
+
+  const handleBonusPresetChange = (passBonus: number, landBonus: number) => {
+    if (isGameStarted) return;
+    setPassStartBonus(passBonus);
+    setLandStartBonus(landBonus);
+    addLog(`⚙️ START bonus updated: Pass +$${passBonus} / Land +$${landBonus}`);
+  };
+
+  const handleStartGame = () => {
+    if (isGameStarted) return;
+    setIsGameStarted(true);
+    addLog(`🎮 Game started! Settings are now locked in.`);
+  };
 
   const playersRef = useRef(players);
 
@@ -334,7 +362,7 @@ export default function GameBoard() {
   };
 
   const collectToRestHouse = (amount: number) => {
-    if (amount <= 0) return;
+    if (!enableRestHousePot || amount <= 0) return;
     setRestHousePot((prev) => prev + amount);
   };
 
@@ -390,7 +418,7 @@ export default function GameBoard() {
       remaining--;
 
            const landsOnStart = currentPos === 0 && remaining <= 0;
-      const startBonus = currentPos === 0 ? (landsOnStart ? LAND_START_BONUS : PASS_START_BONUS) : 0;
+      const startBonus = currentPos === 0 ? (landsOnStart ? landStartBonus : passStartBonus) : 0;
 
       if (currentPos === 0) {
         setHasSkillCard(true);
@@ -404,7 +432,7 @@ export default function GameBoard() {
             : p
         )
       );
-      moveTimeoutRef.current = window.setTimeout(step, 260);
+      moveTimeoutRef.current = window.setTimeout(step, fastMode ? 130 : 260);
     };
 
     step();
@@ -563,7 +591,7 @@ export default function GameBoard() {
 
        const wrapped = targetIndex < player.position;
     const landsOnStart = targetIndex === 0;
-    const startBonus = landsOnStart ? LAND_START_BONUS : wrapped ? PASS_START_BONUS : 0;
+    const startBonus = landsOnStart ? landStartBonus : wrapped ? passStartBonus : 0;
 
     setPlayers((prev) =>
       prev.map((p) =>
@@ -605,6 +633,7 @@ export default function GameBoard() {
           declareBankruptcy(playerId);
         } else {
           setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money - amount, mood: "flat" } : p)));
+          collectToRestHouse(amount);
           addLog(`${player.name} drew Treasure (${roll}): pays -$150 luxury tax.`);
         }
       }
@@ -755,6 +784,11 @@ export default function GameBoard() {
       return;
     }
 
+    if (!isGameStarted) {
+      setIsGameStarted(true);
+      addLog(`🎲 Game started! Settings are now locked.`);
+    }
+
     const result: [number, number] = [
       Math.floor(Math.random() * 6) + 1,
       Math.floor(Math.random() * 6) + 1,
@@ -793,6 +827,7 @@ export default function GameBoard() {
               p.id === player.id ? { ...p, inJail: false, jailTurns: 0, money: Math.max(0, p.money - bail) } : p
             )
           );
+          collectToRestHouse(bail);
           triggerJailBreak(player.id);
         } else {
           addLog(`Rolled ${total} (${first} + ${second}) — no doubles. ${player.name} stays in JAIL (${nextJailTurns}/3).`);
@@ -817,6 +852,7 @@ export default function GameBoard() {
     setPlayers((prev) =>
       prev.map((p) => (p.id === currentPlayer.id ? { ...p, inJail: false, jailTurns: 0, money: p.money - bail } : p))
     );
+    collectToRestHouse(bail);
     triggerJailBreak(currentPlayer.id);
     addLog(`${currentPlayer.name} paid -$${bail} bail and is released from JAIL.`);
   };
@@ -829,6 +865,10 @@ export default function GameBoard() {
 
   const confirmSkillCard = () => {
     if (!selectedCardValue || !hasSkillCard) return;
+    if (!isGameStarted) {
+      setIsGameStarted(true);
+      addLog(`🃏 Game started! Settings are now locked.`);
+    }
     setHasSkillCard(false);
     setShowCardSelector(false);
     addLog(`Used Movement Card → ${selectedCardValue} spaces`);
@@ -969,6 +1009,10 @@ export default function GameBoard() {
     }
     if (tile.type === "tax") {
       setSpecialModal("tax");
+      return;
+    }
+    if (tile.id === 20) {
+      setSpecialModal("resthouse");
       return;
     }
     if (tile.type !== "corner") setActiveModal(tile);
@@ -1341,12 +1385,34 @@ export default function GameBoard() {
 
               {isCorner ? (
                 <div className="z-10 flex flex-col items-center justify-center gap-[0.3vmin]">
-                  <span className="text-[3.8vmin] drop-shadow-[0_0_1vmin_rgba(255,255,255,0.4)]">
+                  <span
+                    className={`${
+                      tile.id === 20 ? "text-[3.2vmin]" : "text-[3.8vmin]"
+                    } drop-shadow-[0_0_1vmin_rgba(255,255,255,0.4)]`}
+                  >
                     {tile.icon}
                   </span>
-                  <div className="text-center text-[1.35vmin] font-black uppercase leading-tight tracking-widest text-white drop-shadow-md">
+                  <div className="text-center text-[1.3vmin] font-black uppercase leading-tight tracking-wider text-white drop-shadow-md">
                     {tile.name}
                   </div>
+                  {tile.id === 20 && (
+                    <div
+                      className={`mt-[0.3vmin] flex items-center gap-[0.35vmin] rounded-full border px-[0.9vmin] py-[0.2vmin] shadow-md transition-all ${
+                        restHousePot > 0
+                          ? "border-emerald-400 bg-[#072518] shadow-[0_0_1.4vmin_rgba(16,185,129,0.65)] animate-pulse"
+                          : "border-white/20 bg-white/10"
+                      }`}
+                    >
+                      <span className="text-[1.1vmin] leading-none">💰</span>
+                      <span
+                        className={`text-[1.35vmin] font-black leading-none ${
+                          restHousePot > 0 ? "text-emerald-300" : "text-gray-300"
+                        }`}
+                      >
+                        ${restHousePot.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="relative z-40 flex h-full w-full items-center justify-center p-[0.6vmin]">
@@ -1820,6 +1886,26 @@ export default function GameBoard() {
                 </>
               )}
 
+              {specialModal === "resthouse" && (
+                <>
+                  <div className="mb-[1.5vmin] text-center text-[3.8vmin]">🏨</div>
+                  <h3 className="mb-[1vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-emerald-400">
+                    Rest House Pot
+                  </h3>
+                  <div className="mb-[1.8vmin] flex flex-col items-center justify-center rounded-[1.2vmin] border-2 border-emerald-400/40 bg-emerald-950/40 p-[1.6vmin] text-center">
+                    <span className="text-[1.2vmin] font-bold uppercase tracking-wider text-gray-300">Current JackPot:</span>
+                    <span className="text-[3.2vmin] font-black text-emerald-300 drop-shadow-lg">
+                      ${restHousePot.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="space-y-[0.8vmin] text-[1.3vmin] text-gray-300">
+                    <p>• All luxury taxes, fines, bail, and club fees accumulate in this pot.</p>
+                    <p>• Whoever lands directly on <span className="font-bold text-white">REST HOUSE</span> collects all stored money!</p>
+                    <p>• You also take a relaxing rest for one turn.</p>
+                  </div>
+                </>
+              )}
+
               <button
                 onClick={() => setSpecialModal(null)}
                 className="mt-[2.5vmin] w-full rounded-[1vmin] bg-white/10 py-[1.3vmin] text-[1.3vmin] font-bold text-white hover:bg-white/20"
@@ -1967,7 +2053,7 @@ export default function GameBoard() {
       </div>
 
       {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
-      <div className="flex h-[96vmin] w-full flex-1 flex-col self-start overflow-hidden rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+      <div className="flex h-[96vmin] w-full min-w-[36vmin] flex-1 flex-col self-start overflow-y-auto rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
         <div className="mb-[0.8vmin] flex items-center justify-between px-[0.3vmin]">
           <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">
             Players
@@ -2212,6 +2298,166 @@ export default function GameBoard() {
               <span className="text-[1.2vmin]">🏳️</span>
               <span>Bankrupt</span>
             </button>
+          </div>
+        </div>
+
+        {/* ================= SETTINGS PANEL ================= */}
+        <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] p-[1.6vmin] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)]">
+          <div className="flex flex-col gap-[1.6vmin]">
+            {/* Header with Title and Locked / Editable status */}
+            <div className="flex items-center justify-between border-b-2 border-white/10 pb-[1.1vmin]">
+              <div className="flex items-center gap-[0.8vmin]">
+                <span className="text-[2.2vmin]">⚙️</span>
+                <span className="text-[1.8vmin] font-black uppercase tracking-wider text-white">
+                  Game Settings
+                </span>
+              </div>
+              <span
+                className={`rounded-full border-2 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider transition-all ${
+                  isGameStarted
+                    ? "border-amber-400/60 bg-amber-500/25 text-amber-300 shadow-[0_0_1.2vmin_rgba(245,158,11,0.3)]"
+                    : "border-emerald-400/80 bg-emerald-500/25 text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse"
+                }`}
+              >
+                {isGameStarted ? "🔒 Settings Locked" : "🟢 Setup (Editable)"}
+              </span>
+            </div>
+
+            {/* Setting 1: Starting Cash */}
+            <div className="flex flex-col gap-[0.8vmin]">
+              <div className="flex items-center justify-between">
+                <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                  💵 Starting Cash:
+                </span>
+                <span className="text-[1.7vmin] font-black text-emerald-400">
+                  ${startingCash.toLocaleString()}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-[0.6vmin]">
+                {[1500, 2000, 2500, 3000].map((cash) => (
+                  <button
+                    key={cash}
+                    onClick={() => handleStartingCashChange(cash)}
+                    disabled={isGameStarted}
+                    className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all ${
+                      startingCash === cash
+                        ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
+                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                    } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
+                    title={isGameStarted ? "Game has started. Settings cannot be changed." : `Set starting cash to $${cash.toLocaleString()}`}
+                  >
+                    ${cash >= 1000 ? `${cash / 1000}k` : cash}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Setting 2: START Bonus (Pass / Land) */}
+            <div className="flex flex-col gap-[0.8vmin]">
+              <div className="flex items-center justify-between">
+                <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                  🚩 START Bonus:
+                </span>
+                <span className="text-[1.35vmin] font-bold text-gray-200">
+                  Pass <span className="font-black text-emerald-400">+${passStartBonus}</span> / Land{" "}
+                  <span className="font-black text-emerald-400">+${landStartBonus}</span>
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-[0.6vmin]">
+                {[
+                  { label: "Standard", pass: 200, land: 300 },
+                  { label: "Boosted", pass: 300, land: 450 },
+                  { label: "High", pass: 400, land: 600 },
+                ].map((preset) => {
+                  const isActive = passStartBonus === preset.pass && landStartBonus === preset.land;
+                  return (
+                    <button
+                      key={preset.label}
+                      onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
+                      disabled={isGameStarted}
+                      className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.3vmin] font-black transition-all ${
+                        isActive
+                          ? "border-[0.25vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.4vmin_rgba(99,102,241,0.55)] scale-[1.03]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                      } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
+                      title={isGameStarted ? "Game has started. Settings cannot be changed." : `${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Setting 3: Movement Speed & Free Parking Pot */}
+            <div className="grid grid-cols-2 gap-[1vmin]">
+              {/* Speed Toggle */}
+              <div className="flex flex-col gap-[0.6vmin]">
+                <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
+                  ⚡ Game Speed:
+                </span>
+                <div className="flex gap-[0.5vmin]">
+                  <button
+                    onClick={() => !isGameStarted && setFastMode(false)}
+                    disabled={isGameStarted}
+                    className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
+                      !fastMode
+                        ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.2vmin_rgba(168,85,247,0.45)]"
+                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                    } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                  >
+                    1x Normal
+                  </button>
+                  <button
+                    onClick={() => !isGameStarted && setFastMode(true)}
+                    disabled={isGameStarted}
+                    className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
+                      fastMode
+                        ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(245,158,11,0.45)]"
+                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                    } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                  >
+                    ⚡ Fast
+                  </button>
+                </div>
+              </div>
+
+              {/* Rest House Pot Toggle */}
+              <div className="flex flex-col gap-[0.6vmin]">
+                <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
+                  🎁 Rest House Pot:
+                </span>
+                <button
+                  onClick={() => !isGameStarted && setEnableRestHousePot((prev) => !prev)}
+                  disabled={isGameStarted}
+                  className={`w-full rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
+                    enableRestHousePot
+                      ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
+                      : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                  } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                >
+                  {enableRestHousePot ? "🎁 Pot Active" : "Off (To Bank)"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Action or status note */}
+          <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
+            {!isGameStarted ? (
+              <button
+                onClick={handleStartGame}
+                className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
+              >
+                <span className="text-[1.8vmin]">▶</span>
+                <span>Start Game & Lock Settings</span>
+              </button>
+            ) : (
+              <div className="flex items-center justify-center gap-[0.7vmin] rounded-[1vmin] border-2 border-amber-500/40 bg-amber-500/15 py-[1.1vmin] text-center text-[1.3vmin] font-black text-amber-200 shadow-md">
+                <span className="text-[1.6vmin]">🔒</span>
+                <span>Settings Locked For This Match</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
