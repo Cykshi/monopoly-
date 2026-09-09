@@ -48,6 +48,50 @@ interface HouseUpgradedEvent {
   houses: number;
 }
 
+interface TradeProposal {
+  id: string;
+  initiatorId: number;
+  targetId: number;
+  initiatorMoney: number;
+  targetMoney: number;
+  initiatorPropertyIds: number[];
+  targetPropertyIds: number[];
+  status: "pending" | "accepted" | "rejected" | "cancelled";
+  createdAt: number;
+  lastModifiedBy: number;
+}
+
+interface ChatMessage {
+  id: string;
+  senderId: number;
+  senderName: string;
+  senderColor: string;
+  text: string;
+  timestamp: string;
+}
+
+const COUNTRY_FLAG_EMOJIS: Record<string, string> = {
+  BD: "🇧🇩",
+  FR: "🇫🇷",
+  IN: "🇮🇳",
+  CN: "🇨🇳",
+  US: "🇺🇸",
+  GB: "🇬🇧",
+  PK: "🇵🇰",
+  JP: "🇯🇵",
+};
+
+const renderTileIconOrFlag = (tile: Tile, sizeClass = "w-[2.2vmin] h-[1.5vmin]") => {
+  if (tile.countryCode) {
+    return (
+      <span className="inline-flex items-center justify-center shrink-0">
+        <Flag code={tile.countryCode} className={`${sizeClass} object-cover rounded-[0.25vmin] shadow-sm`} />
+      </span>
+    );
+  }
+  return <span className="text-[1.6vmin] shrink-0">{tile.icon || "🏢"}</span>;
+};
+
 const BOARD_TILES: Tile[] = [
   { id: 0, name: "START", type: "corner", icon: "🏁" },
   { id: 1, name: "Dhaka", type: "bangladesh", countryCode: "BD", price: "$60", rent: 10, rents: [10, 30, 90, 270, 400, 550], houseCost: 50, hotelCost: 50 },
@@ -281,6 +325,34 @@ export default function GameBoard() {
   const [showBankruptModal, setShowBankruptModal] = useState(false);
   const [bankruptCandidateId, setBankruptCandidateId] = useState<number | null>(null);
 
+  // Trading & Negotiation states
+  const [trades, setTrades] = useState<TradeProposal[]>([]);
+  const [activeTradeModal, setActiveTradeModal] = useState<"create" | "view" | null>(null);
+  const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
+  const [tradeDraftTargetId, setTradeDraftTargetId] = useState<number | null>(null);
+  const [tradeDraftOfferedMoney, setTradeDraftOfferedMoney] = useState<number>(0);
+  const [tradeDraftRequestedMoney, setTradeDraftRequestedMoney] = useState<number>(0);
+  const [tradeDraftOfferedPropIds, setTradeDraftOfferedPropIds] = useState<number[]>([]);
+  const [tradeDraftRequestedPropIds, setTradeDraftRequestedPropIds] = useState<number[]>([]);
+  const [negotiatingTradeId, setNegotiatingTradeId] = useState<string | null>(null);
+  const [isTradesExpanded, setIsTradesExpanded] = useState<boolean>(true);
+
+  // Chat system states
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const isChatOpenRef = useRef(isChatOpen);
+  isChatOpenRef.current = isChatOpen;
+
+  useEffect(() => {
+    if (isChatOpen) {
+      setUnreadChatCount(0);
+      chatMessagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [isChatOpen, chatMessages]);
+
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const alivePlayers = useMemo(() => players.filter((p) => !p.isBankrupt), [players]);
 
@@ -380,6 +452,58 @@ export default function GameBoard() {
       setPropertyHouses((prev) => ({ ...prev, [data.tileId]: data.houses }));
     });
 
+    newSocket.on("trade:created", (trade: TradeProposal) => {
+      setTrades((prev) => [trade, ...prev.filter((t) => t.id !== trade.id)]);
+      const sender = playersRef.current.find((p) => p.id === trade.initiatorId);
+      const receiver = playersRef.current.find((p) => p.id === trade.targetId);
+      addLog(`🤝 Trade proposed: ${sender?.name || "Player"} ➔ ${receiver?.name || "Player"}`);
+    });
+
+    newSocket.on("trade:updated", (trade: TradeProposal) => {
+      setTrades((prev) => prev.map((t) => (t.id === trade.id ? trade : t)));
+      const sender = playersRef.current.find((p) => p.id === trade.lastModifiedBy);
+      addLog(`🔄 Trade counter-offer from ${sender?.name || "Player"}`);
+    });
+
+    newSocket.on("trade:accepted", (data: { trade: TradeProposal }) => {
+      setTrades((prev) => prev.map((t) => (t.id === data.trade.id ? { ...t, status: "accepted" } : t)));
+      const p1 = playersRef.current.find((p) => p.id === data.trade.initiatorId);
+      const p2 = playersRef.current.find((p) => p.id === data.trade.targetId);
+      if (p1 && p2) {
+        setPlayers((prev) =>
+          prev.map((p) => {
+            if (p.id === p1.id) return { ...p, money: p.money - data.trade.initiatorMoney + data.trade.targetMoney };
+            if (p.id === p2.id) return { ...p, money: p.money - data.trade.targetMoney + data.trade.initiatorMoney };
+            return p;
+          })
+        );
+        setPropertyOwnership((prev) => {
+          const next = { ...prev };
+          for (const id of data.trade.initiatorPropertyIds) next[id] = p2.id;
+          for (const id of data.trade.targetPropertyIds) next[id] = p1.id;
+          return next;
+        });
+        addLog(`🎉 Trade completed between ${p1.name} and ${p2.name}!`);
+      }
+    });
+
+    newSocket.on("trade:rejected", (data: { tradeId: string }) => {
+      setTrades((prev) => prev.map((t) => (t.id === data.tradeId ? { ...t, status: "rejected" } : t)));
+      addLog("❌ Trade was declined.");
+    });
+
+    newSocket.on("trade:cancelled", (data: { tradeId: string }) => {
+      setTrades((prev) => prev.filter((t) => t.id !== data.tradeId));
+      addLog("🗑️ Trade was cancelled.");
+    });
+
+    newSocket.on("chat:message", (msg: ChatMessage) => {
+      setChatMessages((prev) => [...prev, msg]);
+      if (!isChatOpenRef.current) {
+        setUnreadChatCount((prev) => prev + 1);
+      }
+    });
+
     newSocket.on("connect", handleConnect);
     newSocket.on("disconnect", handleDisconnect);
     newSocket.on("connect_error", handleDisconnect);
@@ -405,6 +529,7 @@ export default function GameBoard() {
         setSelectedCardValue(null);
         setIsVoteKickOpen(false);
         setShowBankruptModal(false);
+        setActiveTradeModal(null);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -1047,6 +1172,211 @@ export default function GameBoard() {
     addLog(`${currentPlayer.name} bought ${tile.name} for -${tile.price}`);
     socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: currentPlayer.id });
     setActiveModal(null);
+  };
+
+  // ================= TRADE & NEGOTIATION HANDLERS =================
+  const openCreateTradeModal = (targetPlayerId?: number) => {
+    if (!currentPlayer || alivePlayers.length <= 1) return;
+    const defaultTarget =
+      targetPlayerId && targetPlayerId !== currentPlayer.id
+        ? targetPlayerId
+        : alivePlayers.find((p) => p.id !== currentPlayer.id)?.id || null;
+
+    setTradeDraftTargetId(defaultTarget);
+    setTradeDraftOfferedMoney(0);
+    setTradeDraftRequestedMoney(0);
+    setTradeDraftOfferedPropIds([]);
+    setTradeDraftRequestedPropIds([]);
+    setNegotiatingTradeId(null);
+    setActiveTradeModal("create");
+  };
+
+  const handleSendTrade = () => {
+    if (!currentPlayer || !tradeDraftTargetId) return;
+    const targetPlayer = players.find((p) => p.id === tradeDraftTargetId);
+    if (!targetPlayer) return;
+
+    if (
+      tradeDraftOfferedMoney === 0 &&
+      tradeDraftRequestedMoney === 0 &&
+      tradeDraftOfferedPropIds.length === 0 &&
+      tradeDraftRequestedPropIds.length === 0
+    ) {
+      addLog("⚠️ Trade offer cannot be completely empty.");
+      return;
+    }
+
+    if (currentPlayer.money < tradeDraftOfferedMoney) {
+      addLog(`⚠️ You don't have $${tradeDraftOfferedMoney.toLocaleString()} to offer.`);
+      return;
+    }
+
+    if (targetPlayer.money < tradeDraftRequestedMoney) {
+      addLog(`⚠️ ${targetPlayer.name} doesn't have $${tradeDraftRequestedMoney.toLocaleString()}.`);
+      return;
+    }
+
+    if (negotiatingTradeId) {
+      const updatedTrade: TradeProposal = {
+        id: negotiatingTradeId,
+        initiatorId: currentPlayer.id,
+        targetId: tradeDraftTargetId,
+        initiatorMoney: tradeDraftOfferedMoney,
+        targetMoney: tradeDraftRequestedMoney,
+        initiatorPropertyIds: tradeDraftOfferedPropIds,
+        targetPropertyIds: tradeDraftRequestedPropIds,
+        status: "pending",
+        createdAt: Date.now(),
+        lastModifiedBy: currentPlayer.id,
+      };
+
+      setTrades((prev) => prev.map((t) => (t.id === negotiatingTradeId ? updatedTrade : t)));
+      socketRef.current?.emit("trade:updated", updatedTrade);
+      addLog(`🔄 ${currentPlayer.name} sent a counter-offer to ${targetPlayer.name}!`);
+    } else {
+      const newTrade: TradeProposal = {
+        id: `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        initiatorId: currentPlayer.id,
+        targetId: tradeDraftTargetId,
+        initiatorMoney: tradeDraftOfferedMoney,
+        targetMoney: tradeDraftRequestedMoney,
+        initiatorPropertyIds: tradeDraftOfferedPropIds,
+        targetPropertyIds: tradeDraftRequestedPropIds,
+        status: "pending",
+        createdAt: Date.now(),
+        lastModifiedBy: currentPlayer.id,
+      };
+
+      setTrades((prev) => [newTrade, ...prev]);
+      socketRef.current?.emit("trade:created", newTrade);
+      addLog(`🤝 ${currentPlayer.name} proposed a trade to ${targetPlayer.name}!`);
+    }
+
+    setActiveTradeModal(null);
+    setNegotiatingTradeId(null);
+  };
+
+  const handleAcceptTrade = (tradeId: string) => {
+    const trade = trades.find((t) => t.id === tradeId);
+    if (!trade || trade.status !== "pending") return;
+
+    const p1 = players.find((p) => p.id === trade.initiatorId);
+    const p2 = players.find((p) => p.id === trade.targetId);
+    if (!p1 || !p2) return;
+
+    if (p1.money < trade.initiatorMoney) {
+      addLog(`⚠️ Trade failed: ${p1.name} doesn't have enough cash.`);
+      return;
+    }
+    if (p2.money < trade.targetMoney) {
+      addLog(`⚠️ Trade failed: ${p2.name} doesn't have enough cash.`);
+      return;
+    }
+
+    for (const propId of trade.initiatorPropertyIds) {
+      if (propertyOwnership[propId] !== p1.id) {
+        addLog("⚠️ Trade failed: property ownership changed.");
+        return;
+      }
+    }
+    for (const propId of trade.targetPropertyIds) {
+      if (propertyOwnership[propId] !== p2.id) {
+        addLog("⚠️ Trade failed: property ownership changed.");
+        return;
+      }
+    }
+
+    // Execute atomic exchange
+    setPlayers((prev) =>
+      prev.map((p) => {
+        if (p.id === p1.id) {
+          return { ...p, money: p.money - trade.initiatorMoney + trade.targetMoney };
+        }
+        if (p.id === p2.id) {
+          return { ...p, money: p.money - trade.targetMoney + trade.initiatorMoney };
+        }
+        return p;
+      })
+    );
+
+    setPropertyOwnership((prev) => {
+      const next = { ...prev };
+      for (const id of trade.initiatorPropertyIds) next[id] = p2.id;
+      for (const id of trade.targetPropertyIds) next[id] = p1.id;
+      return next;
+    });
+
+    const acceptedTrade: TradeProposal = { ...trade, status: "accepted" };
+    setTrades((prev) => prev.map((t) => (t.id === tradeId ? acceptedTrade : t)));
+    socketRef.current?.emit("trade:accepted", { trade: acceptedTrade });
+    addLog(`🎉 Trade completed between ${p1.name} and ${p2.name}!`);
+    setActiveTradeModal(null);
+  };
+
+  const handleDeclineTrade = (tradeId: string) => {
+    const trade = trades.find((t) => t.id === tradeId);
+    if (!trade) return;
+    const target = players.find((p) => p.id === trade.targetId);
+    const initiator = players.find((p) => p.id === trade.initiatorId);
+
+    setTrades((prev) => prev.map((t) => (t.id === tradeId ? { ...t, status: "rejected" } : t)));
+    socketRef.current?.emit("trade:rejected", { tradeId });
+    addLog(`❌ ${target?.name || "Player"} declined the trade from ${initiator?.name || "Player"}.`);
+    setActiveTradeModal(null);
+  };
+
+  const handleCancelTrade = (tradeId: string) => {
+    const trade = trades.find((t) => t.id === tradeId);
+    if (!trade) return;
+    const initiator = players.find((p) => p.id === trade.initiatorId);
+
+    setTrades((prev) => prev.filter((t) => t.id !== tradeId));
+    socketRef.current?.emit("trade:cancelled", { tradeId });
+    addLog(`🗑️ ${initiator?.name || "Player"} cancelled their trade proposal.`);
+    setActiveTradeModal(null);
+  };
+
+  const handleStartNegotiation = (trade: TradeProposal) => {
+    const isViewerTarget = currentPlayer?.id === trade.targetId;
+    const otherPartnerId = isViewerTarget ? trade.initiatorId : trade.targetId;
+
+    setTradeDraftTargetId(otherPartnerId);
+    if (isViewerTarget) {
+      setTradeDraftOfferedMoney(trade.targetMoney);
+      setTradeDraftRequestedMoney(trade.initiatorMoney);
+      setTradeDraftOfferedPropIds([...trade.targetPropertyIds]);
+      setTradeDraftRequestedPropIds([...trade.initiatorPropertyIds]);
+    } else {
+      setTradeDraftOfferedMoney(trade.initiatorMoney);
+      setTradeDraftRequestedMoney(trade.targetMoney);
+      setTradeDraftOfferedPropIds([...trade.initiatorPropertyIds]);
+      setTradeDraftRequestedPropIds([...trade.targetPropertyIds]);
+    }
+
+    setNegotiatingTradeId(trade.id);
+    setActiveTradeModal("create");
+  };
+
+  const handleSendChatMessage = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const sender = currentPlayer || players[0];
+    const newMsg: ChatMessage = {
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      senderId: sender?.id || 1,
+      senderName: sender?.name || `Player ${sender?.id || 1}`,
+      senderColor: sender?.color || "#a855f7",
+      text: chatInput.trim(),
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
+
+    setChatMessages((prev) => [...prev, newMsg]);
+    setChatInput("");
+
+    if (socketRef.current) {
+      socketRef.current.emit("chat:message", newMsg);
+    }
   };
 
   const upgradeHouse = (tileId: number) => {
@@ -2254,6 +2584,492 @@ export default function GameBoard() {
             </div>
           </div>
         )}
+
+        {/* ================= CREATE / NEGOTIATE TRADE MODAL ================= */}
+        {activeTradeModal === "create" && currentPlayer && (
+          <div
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
+            onClick={() => setActiveTradeModal(null)}
+          >
+            <div
+              className="relative flex max-h-[92vh] w-[86vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/40 bg-[#120d24] text-white shadow-[0_0_4.5vmin_rgba(139,92,246,0.35)]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="relative border-b border-purple-500/25 bg-[#17112e] py-[1.5vmin] text-center">
+                <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-white">
+                  {negotiatingTradeId ? "Negotiate Trade" : "Create a trade"}
+                </h3>
+                <button
+                  onClick={() => setActiveTradeModal(null)}
+                  className="absolute right-[1.6vmin] top-[1.4vmin] flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Target Player Selector (Tabs) */}
+              {alivePlayers.filter((p) => p.id !== currentPlayer.id).length > 1 && (
+                <div className="flex items-center gap-[0.8vmin] border-b border-white/5 bg-[#140f29] px-[2.4vmin] py-[1vmin]">
+                  <span className="text-[1.15vmin] font-bold uppercase tracking-wider text-gray-400">
+                    Trade With:
+                  </span>
+                  <div className="flex flex-wrap gap-[0.6vmin]">
+                    {alivePlayers
+                      .filter((p) => p.id !== currentPlayer.id)
+                      .map((partner) => {
+                        const isSelected = tradeDraftTargetId === partner.id;
+                        return (
+                          <button
+                            key={partner.id}
+                            onClick={() => {
+                              setTradeDraftTargetId(partner.id);
+                              setTradeDraftRequestedMoney(0);
+                              setTradeDraftRequestedPropIds([]);
+                            }}
+                            className={`flex items-center gap-[0.5vmin] rounded-[0.8vmin] px-[1.2vmin] py-[0.5vmin] text-[1.15vmin] font-black transition-all cursor-pointer ${
+                              isSelected
+                                ? "border border-cyan-400/80 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1vmin_rgba(6,182,212,0.4)]"
+                                : "border border-white/10 bg-white/5 text-gray-300 hover:border-purple-400/50 hover:bg-white/10"
+                            }`}
+                          >
+                            <span className="h-[1vmin] w-[1vmin] rounded-full" style={{ backgroundColor: partner.color }} />
+                            <span>{partner.name || `Player ${partner.id}`}</span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {/* Dual-Column Trade Content */}
+              {(() => {
+                const targetPlayer = players.find((p) => p.id === tradeDraftTargetId);
+                const initiatorProps = BOARD_TILES.filter((t) => propertyOwnership[t.id] === currentPlayer.id);
+                const targetProps = targetPlayer
+                  ? BOARD_TILES.filter((t) => propertyOwnership[t.id] === targetPlayer.id)
+                  : [];
+
+                return (
+                  <div className="flex flex-1 overflow-y-auto p-[2.2vmin]">
+                    {/* Left Column: Initiator (Your Offer) */}
+                    <div className="flex flex-1 flex-col gap-[1.4vmin] pr-[1.8vmin]">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-[0.8vmin]">
+                          <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: currentPlayer.color }} />
+                          <span className="text-[1.6vmin] font-black text-white">
+                            {currentPlayer.name || `Player ${currentPlayer.id}`}
+                          </span>
+                          <span className="rounded-full bg-purple-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-purple-300">
+                            You
+                          </span>
+                        </div>
+                        <span className="text-[1.2vmin] font-bold text-gray-400">
+                          Balance: <span className="font-mono text-emerald-400">${currentPlayer.money.toLocaleString()}</span>
+                        </span>
+                      </div>
+
+                      {/* Cash Slider */}
+                      <div className="flex flex-col gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-[#17122e] p-[1.2vmin]">
+                        <input
+                          type="range"
+                          min="0"
+                          max={Math.max(0, currentPlayer.money)}
+                          value={tradeDraftOfferedMoney}
+                          onChange={(e) => setTradeDraftOfferedMoney(Math.min(currentPlayer.money, Math.max(0, Number(e.target.value))))}
+                          className="h-[0.8vmin] w-full cursor-pointer accent-purple-500"
+                        />
+                        <div className="flex items-center justify-between text-[1.1vmin] text-gray-400 font-bold">
+                          <span>0</span>
+                          <span className="rounded-full border border-purple-400/70 bg-purple-900/60 px-[1.6vmin] py-[0.35vmin] font-mono text-[1.45vmin] font-black text-purple-200 shadow">
+                            {tradeDraftOfferedMoney} $
+                          </span>
+                          <span>{currentPlayer.money}</span>
+                        </div>
+                      </div>
+
+                      {/* Properties Offered */}
+                      <div className="flex flex-1 flex-col gap-[0.8vmin]">
+                        <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                          Properties to Give ({tradeDraftOfferedPropIds.length} selected):
+                        </span>
+                        <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                          {initiatorProps.length === 0 ? (
+                            <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[3vmin] text-center text-[1.15vmin] text-gray-500">
+                              You don't own any properties yet
+                            </div>
+                          ) : (
+                            initiatorProps.map((tile) => {
+                              const isSelected = tradeDraftOfferedPropIds.includes(tile.id);
+                              return (
+                                <button
+                                  key={tile.id}
+                                  type="button"
+                                  onClick={() =>
+                                    setTradeDraftOfferedPropIds((prev) =>
+                                      prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
+                                    )
+                                  }
+                                  className={`flex items-center justify-between rounded-[0.9vmin] px-[1.2vmin] py-[0.9vmin] transition-all cursor-pointer ${
+                                    isSelected
+                                      ? "border-2 border-purple-300 bg-gradient-to-r from-purple-700 to-indigo-700 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.5)] scale-[1.01]"
+                                      : "border border-white/10 bg-[#1a1433] text-gray-300 hover:border-purple-400/50 hover:text-white"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-[0.8vmin]">
+                                    {renderTileIconOrFlag(tile)}
+                                    <span className="text-[1.35vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                    {isSelected && <span className="text-[1.1vmin] font-black text-purple-200">✓</span>}
+                                  </div>
+                                  <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                    {tile.price}
+                                  </span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Center Divider with ↔ */}
+                    <div className="relative flex flex-col items-center justify-center px-[1vmin]">
+                      <div className="h-full w-[0.2vmin] bg-purple-500/25" />
+                      <div className="absolute flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full border-2 border-purple-400 bg-[#1f163d] text-[1.5vmin] text-purple-200 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]">
+                        ↔
+                      </div>
+                    </div>
+
+                    {/* Right Column: Target Player (Requested from them) */}
+                    <div className="flex flex-1 flex-col gap-[1.4vmin] pl-[1.8vmin]">
+                      {targetPlayer ? (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-[0.8vmin]">
+                              <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: targetPlayer.color }} />
+                              <span className="text-[1.6vmin] font-black text-white">
+                                {targetPlayer.name || `Player ${targetPlayer.id}`}
+                              </span>
+                            </div>
+                            <span className="text-[1.2vmin] font-bold text-gray-400">
+                              Balance: <span className="font-mono text-emerald-400">${targetPlayer.money.toLocaleString()}</span>
+                            </span>
+                          </div>
+
+                          {/* Cash Slider for Target */}
+                          <div className="flex flex-col gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-[#17122e] p-[1.2vmin]">
+                            <input
+                              type="range"
+                              min="0"
+                              max={Math.max(0, targetPlayer.money)}
+                              value={tradeDraftRequestedMoney}
+                              onChange={(e) => setTradeDraftRequestedMoney(Math.min(targetPlayer.money, Math.max(0, Number(e.target.value))))}
+                              className="h-[0.8vmin] w-full cursor-pointer accent-cyan-500"
+                            />
+                            <div className="flex items-center justify-between text-[1.1vmin] text-gray-400 font-bold">
+                              <span>0</span>
+                              <span className="rounded-full border border-cyan-400/70 bg-indigo-900/60 px-[1.6vmin] py-[0.35vmin] font-mono text-[1.45vmin] font-black text-cyan-200 shadow">
+                                {tradeDraftRequestedMoney} $
+                              </span>
+                              <span>{targetPlayer.money}</span>
+                            </div>
+                          </div>
+
+                          {/* Properties Requested from Target */}
+                          <div className="flex flex-1 flex-col gap-[0.8vmin]">
+                            <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                              Properties to Receive ({tradeDraftRequestedPropIds.length} selected):
+                            </span>
+                            <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                              {targetProps.length === 0 ? (
+                                <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[3vmin] text-center text-[1.15vmin] text-gray-500">
+                                  {targetPlayer.name} doesn't own any properties
+                                </div>
+                              ) : (
+                                targetProps.map((tile) => {
+                                  const isSelected = tradeDraftRequestedPropIds.includes(tile.id);
+                                  return (
+                                    <button
+                                      key={tile.id}
+                                      type="button"
+                                      onClick={() =>
+                                        setTradeDraftRequestedPropIds((prev) =>
+                                          prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
+                                        )
+                                      }
+                                      className={`flex items-center justify-between rounded-[0.9vmin] px-[1.2vmin] py-[0.9vmin] transition-all cursor-pointer ${
+                                        isSelected
+                                          ? "border-2 border-cyan-300 bg-gradient-to-r from-indigo-700 to-cyan-700 text-white shadow-[0_0_1.4vmin_rgba(6,182,212,0.5)] scale-[1.01]"
+                                          : "border border-white/10 bg-[#1a1433] text-gray-300 hover:border-cyan-400/50 hover:text-white"
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-[0.8vmin]">
+                                        {renderTileIconOrFlag(tile)}
+                                        <span className="text-[1.35vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                        {isSelected && <span className="text-[1.1vmin] font-black text-cyan-200">✓</span>}
+                                      </div>
+                                      <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                        {tile.price}
+                                      </span>
+                                    </button>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-gray-400 text-[1.2vmin]">
+                          Select a player to trade with
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-between border-t border-purple-500/25 bg-[#17112e] px-[2.4vmin] py-[1.4vmin]">
+                <button
+                  onClick={() => setActiveTradeModal(null)}
+                  className="rounded-[0.9vmin] border border-white/15 bg-white/5 px-[2vmin] py-[1vmin] text-[1.2vmin] font-bold text-gray-300 transition hover:bg-white/10 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSendTrade}
+                  disabled={!tradeDraftTargetId}
+                  className="flex items-center gap-[0.8vmin] rounded-[0.9vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[3vmin] py-[1.1vmin] text-[1.4vmin] font-black uppercase tracking-wider text-white shadow-[0_0_2vmin_rgba(139,92,246,0.5)] transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                >
+                  <span className="text-[1.5vmin]">✈️</span>
+                  <span>{negotiatingTradeId ? "Send Counter-Offer" : "Send Trade"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= VIEW TRADE MODAL ================= */}
+        {activeTradeModal === "view" && selectedTradeId && (
+          <div
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
+            onClick={() => setActiveTradeModal(null)}
+          >
+            {(() => {
+              const trade = trades.find((t) => t.id === selectedTradeId);
+              if (!trade) {
+                return (
+                  <div className="rounded-[1.4vmin] bg-[#120d24] p-[3vmin] text-center text-white" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-[1.3vmin]">Trade not found or already completed.</p>
+                    <button onClick={() => setActiveTradeModal(null)} className="mt-[1vmin] rounded-[0.8vmin] bg-white/10 px-[2vmin] py-[0.8vmin] text-[1.1vmin]">
+                      Close
+                    </button>
+                  </div>
+                );
+              }
+
+              const initiator = players.find((p) => p.id === trade.initiatorId);
+              const target = players.find((p) => p.id === trade.targetId);
+              const isViewerSender = currentPlayer?.id === trade.initiatorId;
+              const isViewerRecipient = currentPlayer?.id === trade.targetId;
+              const initiatorOfferedTiles = BOARD_TILES.filter((t) => trade.initiatorPropertyIds.includes(t.id));
+              const targetRequestedTiles = BOARD_TILES.filter((t) => trade.targetPropertyIds.includes(t.id));
+
+              return (
+                <div
+                  className="relative flex max-h-[90vh] w-[86vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/40 bg-[#120d24] text-white shadow-[0_0_4.5vmin_rgba(139,92,246,0.35)]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Header */}
+                  <div className="relative border-b border-purple-500/25 bg-[#17112e] py-[1.5vmin] text-center">
+                    <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-white">
+                      View Trade
+                    </h3>
+                    <button
+                      onClick={() => setActiveTradeModal(null)}
+                      className="absolute right-[1.6vmin] top-[1.4vmin] flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Body: Two Columns */}
+                  <div className="flex flex-1 overflow-y-auto p-[2.4vmin]">
+                    {/* Left: Initiator terms */}
+                    <div className="flex flex-1 flex-col gap-[1.4vmin] pr-[1.8vmin]">
+                      <div className="flex items-center gap-[0.8vmin]">
+                        <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: initiator?.color }} />
+                        <span className="text-[1.6vmin] font-black text-white">
+                          {initiator?.name || `Player ${trade.initiatorId}`}
+                        </span>
+                        {isViewerSender && (
+                          <span className="rounded-full bg-purple-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-purple-300">
+                            You
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Cash Offered Badge */}
+                      <div className="flex items-center justify-between rounded-[1.2vmin] border border-purple-500/30 bg-[#191336] p-[1.2vmin]">
+                        <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
+                          Offered Cash:
+                        </span>
+                        <span className="rounded-full border border-purple-400/80 bg-purple-900/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-purple-200 shadow">
+                          ${trade.initiatorMoney.toLocaleString()}
+                        </span>
+                      </div>
+
+                      {/* Offered Properties */}
+                      <div className="flex flex-col gap-[0.8vmin]">
+                        <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                          Properties Offered ({initiatorOfferedTiles.length}):
+                        </span>
+                        <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                          {initiatorOfferedTiles.length === 0 ? (
+                            <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
+                              No properties offered ($ cash only)
+                            </div>
+                          ) : (
+                            initiatorOfferedTiles.map((tile) => (
+                              <div
+                                key={tile.id}
+                                className="flex items-center justify-between rounded-[0.9vmin] border border-purple-400/40 bg-[#1f173d] px-[1.2vmin] py-[0.9vmin]"
+                              >
+                                <div className="flex items-center gap-[0.8vmin]">
+                                  {renderTileIconOrFlag(tile)}
+                                  <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                </div>
+                                <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                  {tile.price}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Center ↔ */}
+                    <div className="relative flex flex-col items-center justify-center px-[1vmin]">
+                      <div className="h-full w-[0.2vmin] bg-purple-500/25" />
+                      <div className="absolute flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full border-2 border-purple-400 bg-[#1f163d] text-[1.5vmin] text-purple-200 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]">
+                        ↔
+                      </div>
+                    </div>
+
+                    {/* Right: Target terms */}
+                    <div className="flex flex-1 flex-col gap-[1.4vmin] pl-[1.8vmin]">
+                      <div className="flex items-center gap-[0.8vmin]">
+                        <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: target?.color }} />
+                        <span className="text-[1.6vmin] font-black text-white">
+                          {target?.name || `Player ${trade.targetId}`}
+                        </span>
+                        {isViewerRecipient && (
+                          <span className="rounded-full bg-emerald-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-emerald-300">
+                            You
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Cash Requested Badge */}
+                      <div className="flex items-center justify-between rounded-[1.2vmin] border border-cyan-500/30 bg-[#141b33] p-[1.2vmin]">
+                        <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
+                          Requested Cash:
+                        </span>
+                        <span className="rounded-full border border-cyan-400/80 bg-cyan-950/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-cyan-200 shadow">
+                          ${trade.targetMoney.toLocaleString()}
+                        </span>
+                      </div>
+
+                      {/* Requested Properties */}
+                      <div className="flex flex-col gap-[0.8vmin]">
+                        <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                          Properties Requested ({targetRequestedTiles.length}):
+                        </span>
+                        <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                          {targetRequestedTiles.length === 0 ? (
+                            <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
+                              No properties requested ($ cash only)
+                            </div>
+                          ) : (
+                            targetRequestedTiles.map((tile) => (
+                              <div
+                                key={tile.id}
+                                className="flex items-center justify-between rounded-[0.9vmin] border border-cyan-400/40 bg-[#16213d] px-[1.2vmin] py-[0.9vmin]"
+                              >
+                                <div className="flex items-center gap-[0.8vmin]">
+                                  {renderTileIconOrFlag(tile)}
+                                  <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                </div>
+                                <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                  {tile.price}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footer Actions */}
+                  <div className="flex items-center justify-between border-t border-purple-500/25 bg-[#17112e] px-[2.4vmin] py-[1.4vmin]">
+                    {isViewerSender ? (
+                      <div className="flex w-full items-center justify-center">
+                        <button
+                          onClick={() => handleCancelTrade(trade.id)}
+                          className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-red-600 via-rose-600 to-red-700 px-[3.5vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 transition hover:brightness-110 active:scale-95 cursor-pointer"
+                        >
+                          <span>✕</span>
+                          <span>Delete Trade</span>
+                        </button>
+                      </div>
+                    ) : isViewerRecipient ? (
+                      <div className="flex w-full items-center justify-between gap-[1.2vmin]">
+                        <button
+                          onClick={() => handleDeclineTrade(trade.id)}
+                          className="rounded-[1vmin] border border-red-500/40 bg-red-950/40 px-[2.2vmin] py-[1.1vmin] text-[1.25vmin] font-black uppercase text-red-300 transition hover:bg-red-900/60 active:scale-95 cursor-pointer"
+                        >
+                          ✕ Decline
+                        </button>
+                        <div className="flex items-center gap-[1.2vmin]">
+                          <button
+                            onClick={() => handleStartNegotiation(trade)}
+                            className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-amber-500 to-orange-600 px-[2.5vmin] py-[1.1vmin] text-[1.35vmin] font-black uppercase tracking-wide text-white shadow-lg shadow-amber-500/30 transition hover:brightness-110 active:scale-95 cursor-pointer"
+                          >
+                            <span>🔄</span>
+                            <span>Negotiate</span>
+                          </button>
+                          <button
+                            onClick={() => handleAcceptTrade(trade.id)}
+                            className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-[3vmin] py-[1.1vmin] text-[1.4vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2vmin_rgba(16,185,129,0.5)] transition hover:brightness-110 active:scale-95 cursor-pointer"
+                          >
+                            <span>✓</span>
+                            <span>Accept Trade</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex w-full items-center justify-between">
+                        <span className="text-[1.15vmin] text-gray-400 font-medium">
+                          Spectating active trade between {initiator?.name || `Player ${trade.initiatorId}`} and {target?.name || `Player ${trade.targetId}`}
+                        </span>
+                        <button
+                          onClick={() => setActiveTradeModal(null)}
+                          className="rounded-[0.9vmin] bg-white/10 px-[2.4vmin] py-[0.9vmin] text-[1.2vmin] font-bold text-white hover:bg-white/20 cursor-pointer"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </div>
 
       {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
@@ -2528,242 +3344,473 @@ export default function GameBoard() {
           </div>
         </div>
 
-        {/* ================= SETTINGS PANEL ================= */}
-        <div
-          onClick={() => {
-            if (isGameStarted && !isSettingsExpanded) {
-              setIsSettingsExpanded(true);
-            }
-          }}
-          className={`rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)] transition-all ${
-            !isGameStarted || isSettingsExpanded
-              ? "mt-[1.4vmin] flex flex-1 flex-col justify-between p-[1.6vmin]"
-              : "mt-[1.2vmin] shrink-0 cursor-pointer p-[1.4vmin] hover:border-purple-400/60 hover:bg-[#18122a]"
-          }`}
-        >
-          <div className="flex flex-col gap-[1.6vmin]">
-            {/* Header with Title and Locked / Editable status */}
-            <div
-              onClick={(e) => {
-                if (isGameStarted) {
-                  e.stopPropagation();
-                  setIsSettingsExpanded((prev) => !prev);
-                }
-              }}
-              className={`flex items-center justify-between border-b border-purple-500/25 pb-[1.1vmin] ${
-                isGameStarted ? "cursor-pointer select-none" : ""
-              }`}
-              title={
-                isGameStarted
-                  ? isSettingsExpanded
-                    ? "Click to collapse settings"
-                    : "Click to expand settings"
-                  : undefined
-              }
-            >
-              <div className="flex items-center gap-[0.8vmin]">
-                <span className="text-[2.2vmin]">⚙️</span>
-                <span className="text-[1.8vmin] font-black uppercase tracking-wider text-white">
-                  GAME SETTINGS
+        {/* ================= TRADE PANEL (BETWEEN PLAYER ACTIONS & SETTINGS) ================= */}
+        <div className="mt-[1.2vmin] rounded-[1.2vmin] border-2 border-indigo-500/35 bg-[#141024] p-[1.1vmin] shadow-[0_0_2vmin_rgba(99,102,241,0.15)] transition-all">
+          <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
+            <div className="flex items-center gap-[0.6vmin]">
+              <span className="text-[1.15vmin] font-black uppercase tracking-wider text-white flex items-center gap-[0.4vmin]">
+                <span>🤝</span>
+                <span>Active Trades</span>
+              </span>
+              {trades.filter((t) => t.status === "pending").length > 0 && (
+                <span className="rounded-full border border-emerald-400/60 bg-emerald-500/20 px-[0.6vmin] py-[0.1vmin] text-[0.8vmin] font-black uppercase text-emerald-300 animate-pulse">
+                  {trades.filter((t) => t.status === "pending").length} active
                 </span>
-              </div>
-              <div className="flex items-center gap-[0.7vmin]">
-                <span
-                  className={`rounded-full transition-all ${
-                    isGameStarted
-                      ? "border-[0.22vmin] border-amber-400 bg-[#3a2007]/60 px-[1.4vmin] py-[0.45vmin] text-[1.2vmin] font-black uppercase tracking-wider text-amber-300 shadow-[0_0_1.4vmin_rgba(245,158,11,0.45)] hover:brightness-110"
-                      : "border-2 border-emerald-400/80 bg-emerald-500/25 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse"
-                  }`}
-                >
-                  {isGameStarted ? "🔒 SETTINGS LOCKED" : "🟢 SETUP (EDITABLE)"}
-                </span>
-                {isGameStarted && (
-                  <span className="text-[1.3vmin] text-amber-300/80 transition-transform duration-200">
-                    {isSettingsExpanded ? "▲" : "▼"}
-                  </span>
-                )}
-              </div>
+              )}
             </div>
+            <button
+              onClick={() => openCreateTradeModal()}
+              disabled={alivePlayers.length <= 1}
+              className="flex items-center gap-[0.4vmin] rounded-[0.8vmin] border border-purple-400/40 bg-gradient-to-r from-purple-600 to-indigo-600 px-[1vmin] py-[0.5vmin] text-[1.05vmin] font-black uppercase tracking-wide text-white shadow transition hover:scale-[1.03] hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+              title="Propose a new trade offer"
+            >
+              <span>+ Propose</span>
+            </button>
+          </div>
 
-            {(!isGameStarted || isSettingsExpanded) && (
-              <>
-                {/* Setting: Number of Players (2 to 6) */}
-                <div className="flex flex-col gap-[0.8vmin]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                      👥 Number of Players:
-                    </span>
-                    <span className="text-[1.6vmin] font-black text-purple-400">
-                      {players.length} Players
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-5 gap-[0.6vmin]">
-                    {[2, 3, 4, 5, 6].map((count) => {
-                      const isActive = players.length === count;
-                      return (
-                        <button
-                          key={count}
-                          onClick={() => handlePlayerCountChange(count)}
-                          disabled={isGameStarted}
-                          className={`rounded-[0.9vmin] py-[0.85vmin] text-[1.35vmin] font-black transition-all ${
-                            isActive
-                              ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] scale-[1.03]"
-                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                          } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
-                          title={isGameStarted ? "Game has started. Settings cannot be changed." : `Set player count to ${count}`}
+          {/* Active Trades List */}
+          {(() => {
+            const pendingTrades = trades.filter((t) => t.status === "pending");
+            if (pendingTrades.length === 0) {
+              return (
+                <div className="rounded-[0.9vmin] border border-white/5 bg-black/25 py-[1vmin] px-[0.8vmin] text-center">
+                  <p className="text-[1.05vmin] text-gray-400 font-medium">No active trade offers.</p>
+                  <button
+                    onClick={() => openCreateTradeModal()}
+                    disabled={alivePlayers.length <= 1}
+                    className="mt-[0.4vmin] text-[1vmin] font-black text-purple-300 hover:text-purple-200 underline decoration-purple-400/50 cursor-pointer disabled:opacity-40"
+                  >
+                    Start a trade offer
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <div className="flex flex-col gap-[0.7vmin] max-h-[18vmin] overflow-y-auto pr-[0.3vmin]">
+                {pendingTrades.map((trade) => {
+                  const initiator = players.find((p) => p.id === trade.initiatorId);
+                  const target = players.find((p) => p.id === trade.targetId);
+                  const isRecipient = currentPlayer?.id === trade.targetId;
+                  const isSender = currentPlayer?.id === trade.initiatorId;
+
+                  return (
+                    <div
+                      key={trade.id}
+                      className={`rounded-[0.9vmin] border p-[0.8vmin] transition-all flex flex-col gap-[0.5vmin] ${
+                        isRecipient
+                          ? "border-emerald-500/50 bg-[#0c1f17] shadow-[0_0_1.2vmin_rgba(16,185,129,0.2)]"
+                          : isSender
+                          ? "border-amber-500/40 bg-[#1c1810]"
+                          : "border-purple-500/30 bg-[#141026]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[1vmin]">
+                        <div className="flex items-center gap-[0.5vmin] truncate">
+                          <span className="font-black truncate max-w-[8vmin]" style={{ color: initiator?.color }}>
+                            {initiator?.name || `P${trade.initiatorId}`}
+                          </span>
+                          <span className="text-gray-400 text-[0.9vmin]">⇄</span>
+                          <span className="font-black truncate max-w-[8vmin]" style={{ color: target?.color }}>
+                            {target?.name || `P${trade.targetId}`}
+                          </span>
+                        </div>
+                        <span
+                          className={`rounded-full px-[0.7vmin] py-[0.15vmin] text-[0.8vmin] font-black uppercase tracking-wider ${
+                            isRecipient
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/60 animate-pulse"
+                              : isSender
+                              ? "bg-amber-500/20 text-amber-300 border border-amber-400/50"
+                              : "bg-purple-500/20 text-purple-300 border border-purple-400/40"
+                          }`}
                         >
-                          {count}P
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                          {isRecipient ? "📩 Action Needed" : isSender ? "⏳ Sent" : "👀 Public"}
+                        </span>
+                      </div>
 
-                {/* Setting 1: Starting Cash */}
-                <div className="flex flex-col gap-[0.8vmin]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                      💵 Starting Cash:
-                    </span>
-                    <span className="text-[1.7vmin] font-black text-emerald-400">
-                      ${startingCash.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-4 gap-[0.6vmin]">
-                    {[1500, 2000, 2500, 3000].map((cash) => (
-                      <button
-                        key={cash}
-                        onClick={() => handleStartingCashChange(cash)}
-                        disabled={isGameStarted}
-                        className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all ${
-                          startingCash === cash
-                            ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
-                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                        } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
-                        title={isGameStarted ? "Game has started. Settings cannot be changed." : `Set starting cash to $${cash.toLocaleString()}`}
-                      >
-                        ${cash >= 1000 ? `${cash / 1000}k` : cash}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                      <div className="flex items-center justify-between text-[0.95vmin] text-gray-300 bg-black/30 rounded-[0.6vmin] px-[0.7vmin] py-[0.35vmin]">
+                        <span>
+                          Gives: <span className="font-black text-white">${trade.initiatorMoney}</span>
+                          {trade.initiatorPropertyIds.length > 0 && ` +${trade.initiatorPropertyIds.length} prop`}
+                        </span>
+                        <span>
+                          Asks: <span className="font-black text-white">${trade.targetMoney}</span>
+                          {trade.targetPropertyIds.length > 0 && ` +${trade.targetPropertyIds.length} prop`}
+                        </span>
+                      </div>
 
-                {/* Setting 2: START Bonus (Pass / Land) */}
-                <div className="flex flex-col gap-[0.8vmin]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                      🚩 START Bonus:
-                    </span>
-                    <span className="text-[1.35vmin] font-bold text-gray-200">
-                      Pass <span className="font-black text-emerald-400">+${passStartBonus}</span> / Land{" "}
-                      <span className="font-black text-emerald-400">+${landStartBonus}</span>
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-[0.6vmin]">
-                    {[
-                      { label: "Standard", pass: 200, land: 300 },
-                      { label: "Boosted", pass: 300, land: 450 },
-                      { label: "High", pass: 400, land: 600 },
-                    ].map((preset) => {
-                      const isActive = passStartBonus === preset.pass && landStartBonus === preset.land;
-                      return (
-                        <button
-                          key={preset.label}
-                          onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
-                          disabled={isGameStarted}
-                          className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.3vmin] font-black transition-all ${
-                            isActive
-                              ? "border-[0.25vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.4vmin_rgba(99,102,241,0.55)] scale-[1.03]"
-                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                          } ${isGameStarted ? "cursor-not-allowed opacity-40" : "active:scale-95 cursor-pointer"}`}
-                          title={isGameStarted ? "Game has started. Settings cannot be changed." : `${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
-                        >
-                          {preset.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Setting 3: Movement Speed & Free Parking Pot */}
-                <div className="grid grid-cols-2 gap-[1vmin]">
-                  {/* Speed Toggle */}
-                  <div className="flex flex-col gap-[0.6vmin]">
-                    <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
-                      ⚡ Game Speed:
-                    </span>
-                    <div className="flex gap-[0.5vmin]">
                       <button
-                        onClick={() => !isGameStarted && setFastMode(false)}
-                        disabled={isGameStarted}
-                        className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
-                          !fastMode
-                            ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.2vmin_rgba(168,85,247,0.45)]"
-                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                        } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                        onClick={() => {
+                          setSelectedTradeId(trade.id);
+                          setActiveTradeModal("view");
+                        }}
+                        className={`w-full rounded-[0.6vmin] py-[0.5vmin] text-[1vmin] font-black uppercase tracking-wider transition hover:brightness-110 active:scale-95 cursor-pointer ${
+                          isRecipient
+                            ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-[0_0_1vmin_rgba(16,185,129,0.3)]"
+                            : isSender
+                            ? "bg-gradient-to-r from-amber-600 to-orange-600 text-white"
+                            : "bg-white/10 hover:bg-white/20 text-gray-200"
+                        }`}
                       >
-                        1x Normal
-                      </button>
-                      <button
-                        onClick={() => !isGameStarted && setFastMode(true)}
-                        disabled={isGameStarted}
-                        className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
-                          fastMode
-                            ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(245,158,11,0.45)]"
-                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                        } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
-                      >
-                        ⚡ Fast
+                        {isRecipient ? "Review & Negotiate ➔" : isSender ? "View / Cancel ➔" : "View Details ➔"}
                       </button>
                     </div>
-                  </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
 
-                  {/* Rest House Pot Toggle */}
-                  <div className="flex flex-col gap-[0.6vmin]">
-                    <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
-                      🎁 Rest House Pot:
-                    </span>
+        {/* ================= SETTINGS PANEL (ONLY IN SIDEBAR BEFORE GAME START) ================= */}
+        {!isGameStarted && (
+          <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] p-[1.6vmin] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)]">
+            <div className="flex flex-col gap-[1.6vmin]">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-purple-500/25 pb-[1.1vmin]">
+                <div className="flex items-center gap-[0.8vmin]">
+                  <span className="text-[2.2vmin]">⚙️</span>
+                  <span className="text-[1.8vmin] font-black uppercase tracking-wider text-white">
+                    GAME SETTINGS
+                  </span>
+                </div>
+                <span className="rounded-full border-2 border-emerald-400/80 bg-emerald-500/25 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse">
+                  🟢 SETUP (EDITABLE)
+                </span>
+              </div>
+
+              {/* Setting: Number of Players (2 to 6) */}
+              <div className="flex flex-col gap-[0.8vmin]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                    👥 Number of Players:
+                  </span>
+                  <span className="text-[1.6vmin] font-black text-purple-400">
+                    {players.length} Players
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-[0.6vmin]">
+                  {[2, 3, 4, 5, 6].map((count) => {
+                    const isActive = players.length === count;
+                    return (
+                      <button
+                        key={count}
+                        onClick={() => handlePlayerCountChange(count)}
+                        className={`rounded-[0.9vmin] py-[0.85vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${
+                          isActive
+                            ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] scale-[1.03]"
+                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                        }`}
+                        title={`Set player count to ${count}`}
+                      >
+                        {count}P
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Setting 1: Starting Cash */}
+              <div className="flex flex-col gap-[0.8vmin]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                    💵 Starting Cash:
+                  </span>
+                  <span className="text-[1.7vmin] font-black text-emerald-400">
+                    ${startingCash.toLocaleString()}
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-[0.6vmin]">
+                  {[1500, 2000, 2500, 3000].map((cash) => (
                     <button
-                      onClick={() => !isGameStarted && setEnableRestHousePot((prev) => !prev)}
-                      disabled={isGameStarted}
-                      className={`w-full rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all ${
-                        enableRestHousePot
-                          ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                      } ${isGameStarted ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95"}`}
+                      key={cash}
+                      onClick={() => handleStartingCashChange(cash)}
+                      className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${
+                        startingCash === cash
+                          ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                      }`}
+                      title={`Set starting cash to $${cash.toLocaleString()}`}
                     >
-                      {enableRestHousePot ? "🎁 Pot Active" : "Off (To Bank)"}
+                      ${cash >= 1000 ? `${cash / 1000}k` : cash}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Setting 2: START Bonus (Pass / Land) */}
+              <div className="flex flex-col gap-[0.8vmin]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                    🚩 START Bonus:
+                  </span>
+                  <span className="text-[1.35vmin] font-bold text-gray-200">
+                    Pass <span className="font-black text-emerald-400">+${passStartBonus}</span> / Land{" "}
+                    <span className="font-black text-emerald-400">+${landStartBonus}</span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-[0.6vmin]">
+                  {[
+                    { label: "Standard", pass: 200, land: 300 },
+                    { label: "Boosted", pass: 300, land: 450 },
+                    { label: "High", pass: 400, land: 600 },
+                  ].map((preset) => {
+                    const isActive = passStartBonus === preset.pass && landStartBonus === preset.land;
+                    return (
+                      <button
+                        key={preset.label}
+                        onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
+                        className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.3vmin] font-black transition-all cursor-pointer ${
+                          isActive
+                            ? "border-[0.25vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.4vmin_rgba(99,102,241,0.55)] scale-[1.03]"
+                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                        }`}
+                        title={`${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Setting 3: Movement Speed & Free Parking Pot */}
+              <div className="grid grid-cols-2 gap-[1vmin]">
+                {/* Speed Toggle */}
+                <div className="flex flex-col gap-[0.6vmin]">
+                  <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
+                    ⚡ Game Speed:
+                  </span>
+                  <div className="flex gap-[0.5vmin]">
+                    <button
+                      onClick={() => setFastMode(false)}
+                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${
+                        !fastMode
+                          ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.2vmin_rgba(168,85,247,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      }`}
+                    >
+                      1x Normal
+                    </button>
+                    <button
+                      onClick={() => setFastMode(true)}
+                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${
+                        fastMode
+                          ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(245,158,11,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      }`}
+                    >
+                      ⚡ Fast
                     </button>
                   </div>
                 </div>
-              </>
-            )}
-          </div>
 
-          {/* Bottom Action or status note */}
-          {(!isGameStarted || isSettingsExpanded) && (
-            <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
-              {!isGameStarted ? (
-                <button
-                  onClick={handleStartGame}
-                  className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
-                >
-                  <span className="text-[1.8vmin]">▶</span>
-                  <span>Start Game & Lock Settings</span>
-                </button>
-              ) : (
-                <div
-                  onClick={() => setIsSettingsExpanded(false)}
-                  className="flex cursor-pointer items-center justify-center gap-[0.7vmin] rounded-[1vmin] border-2 border-amber-500/40 bg-amber-500/15 py-[1.1vmin] text-center text-[1.3vmin] font-black text-amber-200 shadow-md hover:bg-amber-500/25 transition-all"
-                  title="Click to collapse settings"
-                >
-                  <span className="text-[1.6vmin]">🔒</span>
-                  <span>Settings Locked (Click to Collapse ▲)</span>
+                {/* Rest House Pot Toggle */}
+                <div className="flex flex-col gap-[0.6vmin]">
+                  <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
+                    🎁 Rest House Pot:
+                  </span>
+                  <button
+                    onClick={() => setEnableRestHousePot((prev) => !prev)}
+                    className={`w-full rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${
+                      enableRestHousePot
+                        ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
+                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                    }`}
+                  >
+                    {enableRestHousePot ? "🎁 Pot Active" : "Off (To Bank)"}
+                  </button>
                 </div>
-              )}
+              </div>
             </div>
+
+            {/* Start Game Button */}
+            <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
+              <button
+                onClick={handleStartGame}
+                className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
+              >
+                <span className="text-[1.8vmin]">▶</span>
+                <span>Start Game & Lock Settings</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ================= FLOATING SETTINGS ICON (WHEN GAME IS STARTED) ================= */}
+        {isGameStarted && (
+          <>
+            <button
+              onClick={() => setIsSettingsExpanded(true)}
+              className="fixed bottom-[2.5vmin] left-[2.5vmin] z-[150] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-purple-400/80 bg-gradient-to-br from-[#241a45] to-[#120b24] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(168,85,247,0.5)] transition-all hover:scale-110 hover:border-purple-300 hover:shadow-[0_0_3.5vmin_rgba(168,85,247,0.8)] active:scale-95 cursor-pointer"
+              title="Open Locked Game Settings"
+            >
+              ⚙️
+              <span className="absolute -top-[0.3vmin] -right-[0.3vmin] flex h-[2vmin] w-[2vmin] items-center justify-center rounded-full bg-amber-500 text-[1.1vmin] font-black text-black shadow">
+                🔒
+              </span>
+            </button>
+
+            {/* Settings Overlay Popover */}
+            {isSettingsExpanded && (
+              <div
+                className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-[2vmin] backdrop-blur-sm"
+                onClick={() => setIsSettingsExpanded(false)}
+              >
+                <div
+                  className="relative flex max-h-[85vh] w-[50vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#141024] p-[2.4vmin] text-white shadow-[0_0_4vmin_rgba(139,92,246,0.45)]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between border-b border-purple-500/30 pb-[1.4vmin] mb-[1.8vmin]">
+                    <div className="flex items-center gap-[0.8vmin]">
+                      <span className="text-[2.4vmin]">⚙️</span>
+                      <span className="text-[2vmin] font-black uppercase tracking-wider text-white">Game Settings</span>
+                      <span className="ml-[0.6vmin] rounded-full border border-amber-400/80 bg-amber-500/20 px-[1.2vmin] py-[0.3vmin] text-[1.1vmin] font-black text-amber-300">
+                        🔒 LOCKED
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setIsSettingsExpanded(false)}
+                      className="flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Settings list (Read Only) */}
+                  <div className="flex flex-col gap-[1.4vmin]">
+                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                      <span className="text-[1.35vmin] font-bold text-gray-300">👥 Number of Players</span>
+                      <span className="text-[1.45vmin] font-black text-purple-300">{players.length} Players</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                      <span className="text-[1.35vmin] font-bold text-gray-300">💵 Starting Cash</span>
+                      <span className="text-[1.45vmin] font-black text-emerald-400">${startingCash.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                      <span className="text-[1.35vmin] font-bold text-gray-300">🚩 START Pass / Land Bonus</span>
+                      <span className="text-[1.4vmin] font-black text-cyan-300">+${passStartBonus} / +${landStartBonus}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                      <span className="text-[1.35vmin] font-bold text-gray-300">⚡ Game Speed</span>
+                      <span className="text-[1.4vmin] font-black text-amber-300">{fastMode ? "Fast Speed" : "Normal Speed"}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                      <span className="text-[1.35vmin] font-bold text-gray-300">🎁 Rest House Pot</span>
+                      <span className="text-[1.4vmin] font-black text-emerald-300">{enableRestHousePot ? "Active" : "Off"}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setIsSettingsExpanded(false)}
+                    className="mt-[2.2vmin] w-full rounded-[1vmin] bg-gradient-to-r from-purple-600 to-indigo-600 py-[1.1vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 cursor-pointer"
+                  >
+                    Close Settings
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ================= FLOATING CHAT SYSTEM (BOTTOM RIGHT) ================= */}
+        <button
+          onClick={() => {
+            setIsChatOpen((prev) => !prev);
+            if (!isChatOpen) setUnreadChatCount(0);
+          }}
+          className="fixed bottom-[2.5vmin] right-[2.5vmin] z-[160] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-indigo-400/80 bg-gradient-to-br from-[#1e153b] via-[#140e2b] to-[#0d091d] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(99,102,241,0.5)] transition-all hover:scale-110 hover:border-cyan-300 hover:shadow-[0_0_3.5vmin_rgba(6,182,212,0.7)] active:scale-95 cursor-pointer"
+          title="Open Player Chat"
+        >
+          💬
+          {!isChatOpen && unreadChatCount > 0 && (
+            <span className="absolute -top-[0.4vmin] -right-[0.4vmin] flex h-[2.2vmin] w-[2.2vmin] items-center justify-center rounded-full bg-gradient-to-r from-red-500 to-rose-500 text-[1.1vmin] font-black text-white shadow-lg animate-bounce">
+              {unreadChatCount > 9 ? "9+" : unreadChatCount}
+            </span>
           )}
-        </div>
+        </button>
+
+        {/* Chat Window Popover */}
+        {isChatOpen && (
+          <div className="fixed bottom-[9vmin] right-[2.5vmin] z-[180] flex h-[54vmin] w-[42vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-indigo-500/50 bg-[#120c24] text-white shadow-[0_0_4.5vmin_rgba(99,102,241,0.45)] backdrop-blur-md">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-indigo-500/30 bg-[#191133] px-[1.8vmin] py-[1.2vmin]">
+              <div className="flex items-center gap-[0.8vmin]">
+                <span className="text-[2vmin]">💬</span>
+                <span className="text-[1.65vmin] font-black uppercase tracking-wider text-white">Player Chat</span>
+                <span className="rounded-full bg-emerald-500/20 border border-emerald-400/50 px-[0.8vmin] py-[0.1vmin] text-[0.85vmin] font-bold text-emerald-300">
+                  ● Live
+                </span>
+              </div>
+              <button
+                onClick={() => setIsChatOpen(false)}
+                className="flex h-[3vmin] w-[3vmin] items-center justify-center rounded-full bg-white/10 text-[1.2vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                title="Close chat"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Messages Body */}
+            <div className="flex flex-1 flex-col gap-[1vmin] overflow-y-auto p-[1.4vmin] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden bg-[#0d091a]">
+              {chatMessages.length === 0 ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-[0.8vmin] text-center text-gray-400">
+                  <span className="text-[3vmin] opacity-60">👋</span>
+                  <p className="text-[1.2vmin] font-medium">No messages yet.</p>
+                  <p className="text-[1vmin] text-gray-500">Say hello to other players!</p>
+                </div>
+              ) : (
+                chatMessages.map((msg) => {
+                  const isSelf = currentPlayer && msg.senderId === currentPlayer.id;
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col gap-[0.2vmin] ${isSelf ? "items-end" : "items-start"}`}
+                    >
+                      <div className="flex items-center gap-[0.6vmin] px-[0.2vmin]">
+                        <span className="text-[0.95vmin] font-black" style={{ color: msg.senderColor }}>
+                          {msg.senderName} {isSelf ? "(You)" : ""}
+                        </span>
+                        <span className="text-[0.8vmin] text-gray-400">{msg.timestamp}</span>
+                      </div>
+                      <div
+                        className={`max-w-[85%] rounded-[1.2vmin] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium leading-normal shadow ${
+                          isSelf
+                            ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-tr-none"
+                            : "bg-[#1c1538] border border-purple-500/30 text-gray-100 rounded-tl-none"
+                        }`}
+                      >
+                        {msg.text}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={chatMessagesEndRef} />
+            </div>
+
+            {/* Input Footer */}
+            <form onSubmit={handleSendChatMessage} className="flex items-center gap-[0.8vmin] border-t border-indigo-500/30 bg-[#160f2e] p-[1.1vmin]">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Type a message..."
+                maxLength={200}
+                className="flex-1 rounded-[0.9vmin] border border-purple-500/40 bg-[#0e091f] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium text-white placeholder:text-gray-500 focus:border-cyan-400 focus:bg-[#140c2c] focus:outline-none transition-all"
+              />
+              <button
+                type="submit"
+                disabled={!chatInput.trim()}
+                className="flex items-center justify-center rounded-[0.9vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[1.6vmin] py-[0.8vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                title="Send message"
+              >
+                ✈️
+              </button>
+            </form>
+          </div>
+        )}
       </div>
       </div>
     </main>

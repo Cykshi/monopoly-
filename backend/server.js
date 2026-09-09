@@ -16,9 +16,13 @@ const io = new Server(server, {
   }
 });
 
-// Listen for players connecting
 io.on('connection', (socket) => {
   console.log(`🟢 A player connected: ${socket.id}`);
+
+  // Relay all game and trade events to other players
+  socket.onAny((event, ...args) => {
+    socket.broadcast.emit(event, ...args);
+  });
 
   // Listen for players disconnecting
   socket.on('disconnect', () => {
