@@ -2592,30 +2592,34 @@ export default function GameBoard() {
             onClick={() => setActiveTradeModal(null)}
           >
             <div
-              className="relative flex max-h-[92vh] w-[86vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/40 bg-[#120d24] text-white shadow-[0_0_4.5vmin_rgba(139,92,246,0.35)]"
+              className="relative flex max-h-[92vh] w-[88vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#120c24] text-white shadow-[0_0_5vmin_rgba(139,92,246,0.45)]"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="relative border-b border-purple-500/25 bg-[#17112e] py-[1.5vmin] text-center">
-                <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-white">
-                  {negotiatingTradeId ? "Negotiate Trade" : "Create a trade"}
+              <div className="relative border-b border-purple-500/30 bg-[#181133] py-[1.8vmin] text-center">
+                <h3 className="text-[2.3vmin] font-black uppercase tracking-wider text-white flex items-center justify-center gap-[0.8vmin]">
+                  <span>🤝</span>
+                  <span>{negotiatingTradeId ? "Negotiate Trade Offer" : "Create Trade Offer"}</span>
                 </h3>
+                <p className="mt-[0.2vmin] text-[1.1vmin] font-medium text-gray-300">
+                  Exchange cash and property ownership with any active player
+                </p>
                 <button
                   onClick={() => setActiveTradeModal(null)}
-                  className="absolute right-[1.6vmin] top-[1.4vmin] flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
-                  title="Close"
+                  className="absolute right-[1.8vmin] top-[1.6vmin] flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full bg-white/10 text-[1.5vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                  title="Close Modal"
                 >
                   ✕
                 </button>
               </div>
 
               {/* Target Player Selector (Tabs) */}
-              {alivePlayers.filter((p) => p.id !== currentPlayer.id).length > 1 && (
-                <div className="flex items-center gap-[0.8vmin] border-b border-white/5 bg-[#140f29] px-[2.4vmin] py-[1vmin]">
-                  <span className="text-[1.15vmin] font-bold uppercase tracking-wider text-gray-400">
-                    Trade With:
+              {alivePlayers.filter((p) => p.id !== currentPlayer.id).length > 0 && (
+                <div className="flex items-center gap-[1vmin] border-b border-white/10 bg-[#160e2e] px-[2.4vmin] py-[1.2vmin]">
+                  <span className="text-[1.2vmin] font-black uppercase tracking-wider text-purple-300 shrink-0">
+                    Trade Partner:
                   </span>
-                  <div className="flex flex-wrap gap-[0.6vmin]">
+                  <div className="flex flex-wrap gap-[0.8vmin]">
                     {alivePlayers
                       .filter((p) => p.id !== currentPlayer.id)
                       .map((partner) => {
@@ -2628,13 +2632,13 @@ export default function GameBoard() {
                               setTradeDraftRequestedMoney(0);
                               setTradeDraftRequestedPropIds([]);
                             }}
-                            className={`flex items-center gap-[0.5vmin] rounded-[0.8vmin] px-[1.2vmin] py-[0.5vmin] text-[1.15vmin] font-black transition-all cursor-pointer ${
+                            className={`flex items-center gap-[0.7vmin] rounded-[0.9vmin] px-[1.5vmin] py-[0.65vmin] text-[1.25vmin] font-black transition-all cursor-pointer ${
                               isSelected
-                                ? "border border-cyan-400/80 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1vmin_rgba(6,182,212,0.4)]"
-                                : "border border-white/10 bg-white/5 text-gray-300 hover:border-purple-400/50 hover:bg-white/10"
+                                ? "border-2 border-cyan-300 bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 text-white shadow-[0_0_1.5vmin_rgba(6,182,212,0.5)] scale-[1.03]"
+                                : "border border-white/15 bg-white/5 text-gray-200 hover:border-purple-400/60 hover:bg-white/10"
                             }`}
                           >
-                            <span className="h-[1vmin] w-[1vmin] rounded-full" style={{ backgroundColor: partner.color }} />
+                            <span className="h-[1.2vmin] w-[1.2vmin] rounded-full shadow" style={{ backgroundColor: partner.color }} />
                             <span>{partner.name || `Player ${partner.id}`}</span>
                           </button>
                         );
@@ -2652,52 +2656,62 @@ export default function GameBoard() {
                   : [];
 
                 return (
-                  <div className="flex flex-1 overflow-y-auto p-[2.2vmin]">
+                  <div className="flex flex-1 overflow-y-auto p-[2.4vmin] gap-[1vmin]">
                     {/* Left Column: Initiator (Your Offer) */}
-                    <div className="flex flex-1 flex-col gap-[1.4vmin] pr-[1.8vmin]">
-                      <div className="flex items-center justify-between">
+                    <div className="flex flex-1 flex-col gap-[1.5vmin] pr-[1.4vmin]">
+                      <div className="flex items-center justify-between border-b border-purple-500/20 pb-[0.8vmin]">
                         <div className="flex items-center gap-[0.8vmin]">
-                          <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: currentPlayer.color }} />
-                          <span className="text-[1.6vmin] font-black text-white">
+                          <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: currentPlayer.color }} />
+                          <span className="text-[1.75vmin] font-black text-white">
                             {currentPlayer.name || `Player ${currentPlayer.id}`}
                           </span>
-                          <span className="rounded-full bg-purple-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-purple-300">
+                          <span className="rounded-full bg-purple-500/25 border border-purple-400/50 px-[0.8vmin] py-[0.15vmin] text-[0.9vmin] font-black uppercase text-purple-200">
                             You
                           </span>
                         </div>
-                        <span className="text-[1.2vmin] font-bold text-gray-400">
-                          Balance: <span className="font-mono text-emerald-400">${currentPlayer.money.toLocaleString()}</span>
+                        <span className="text-[1.25vmin] font-bold text-gray-300">
+                          Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${currentPlayer.money.toLocaleString()}</span>
                         </span>
                       </div>
 
                       {/* Cash Slider */}
-                      <div className="flex flex-col gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-[#17122e] p-[1.2vmin]">
+                      <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-purple-500/30 bg-[#181133] p-[1.4vmin]">
+                        <div className="flex items-center justify-between text-[1.2vmin] font-black text-purple-200 uppercase tracking-wide">
+                          <span>💵 Offer Cash:</span>
+                          <span className="rounded-full border border-purple-400/80 bg-purple-900/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-purple-100 shadow-[0_0_1vmin_rgba(168,85,247,0.4)]">
+                            ${tradeDraftOfferedMoney.toLocaleString()}
+                          </span>
+                        </div>
                         <input
                           type="range"
                           min="0"
                           max={Math.max(0, currentPlayer.money)}
                           value={tradeDraftOfferedMoney}
                           onChange={(e) => setTradeDraftOfferedMoney(Math.min(currentPlayer.money, Math.max(0, Number(e.target.value))))}
-                          className="h-[0.8vmin] w-full cursor-pointer accent-purple-500"
+                          className="h-[0.9vmin] w-full cursor-pointer accent-purple-500"
                         />
-                        <div className="flex items-center justify-between text-[1.1vmin] text-gray-400 font-bold">
-                          <span>0</span>
-                          <span className="rounded-full border border-purple-400/70 bg-purple-900/60 px-[1.6vmin] py-[0.35vmin] font-mono text-[1.45vmin] font-black text-purple-200 shadow">
-                            {tradeDraftOfferedMoney} $
-                          </span>
-                          <span>{currentPlayer.money}</span>
+                        <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
+                          <span>$0</span>
+                          <span>${currentPlayer.money.toLocaleString()}</span>
                         </div>
                       </div>
 
                       {/* Properties Offered */}
                       <div className="flex flex-1 flex-col gap-[0.8vmin]">
-                        <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
-                          Properties to Give ({tradeDraftOfferedPropIds.length} selected):
-                        </span>
-                        <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[1.25vmin] font-black uppercase tracking-wider text-purple-300">
+                            Properties to Give:
+                          </span>
+                          <span className="text-[1.1vmin] font-bold text-gray-400">
+                            {tradeDraftOfferedPropIds.length} selected
+                          </span>
+                        </div>
+                        <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
                           {initiatorProps.length === 0 ? (
-                            <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[3vmin] text-center text-[1.15vmin] text-gray-500">
-                              You don't own any properties yet
+                            <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
+                              <span className="text-[2.4vmin] opacity-70">🏚️</span>
+                              <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
+                              <span className="text-[1.1vmin] text-gray-400">You don't own any properties to give in this trade</span>
                             </div>
                           ) : (
                             initiatorProps.map((tile) => {
@@ -2711,18 +2725,18 @@ export default function GameBoard() {
                                       prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
                                     )
                                   }
-                                  className={`flex items-center justify-between rounded-[0.9vmin] px-[1.2vmin] py-[0.9vmin] transition-all cursor-pointer ${
+                                  className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${
                                     isSelected
-                                      ? "border-2 border-purple-300 bg-gradient-to-r from-purple-700 to-indigo-700 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.5)] scale-[1.01]"
-                                      : "border border-white/10 bg-[#1a1433] text-gray-300 hover:border-purple-400/50 hover:text-white"
+                                      ? "border-2 border-purple-300 bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 text-white shadow-[0_0_1.6vmin_rgba(168,85,247,0.6)] scale-[1.01]"
+                                      : "border border-white/15 bg-[#1b1438] text-gray-200 hover:border-purple-400/60 hover:bg-[#231b47] hover:text-white"
                                   }`}
                                 >
-                                  <div className="flex items-center gap-[0.8vmin]">
-                                    {renderTileIconOrFlag(tile)}
-                                    <span className="text-[1.35vmin] font-black tracking-wide text-white">{tile.name}</span>
-                                    {isSelected && <span className="text-[1.1vmin] font-black text-purple-200">✓</span>}
+                                  <div className="flex items-center gap-[0.9vmin]">
+                                    {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
+                                    <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                    {isSelected && <span className="text-[1.2vmin] font-black text-purple-200">✓</span>}
                                   </div>
-                                  <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                  <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
                                     {tile.price}
                                   </span>
                                 </button>
@@ -2734,57 +2748,67 @@ export default function GameBoard() {
                     </div>
 
                     {/* Center Divider with ↔ */}
-                    <div className="relative flex flex-col items-center justify-center px-[1vmin]">
-                      <div className="h-full w-[0.2vmin] bg-purple-500/25" />
-                      <div className="absolute flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full border-2 border-purple-400 bg-[#1f163d] text-[1.5vmin] text-purple-200 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]">
+                    <div className="relative flex flex-col items-center justify-center px-[0.8vmin]">
+                      <div className="h-full w-[0.25vmin] bg-purple-500/30" />
+                      <div className="absolute flex h-[3.8vmin] w-[3.8vmin] items-center justify-center rounded-full border-2 border-purple-300 bg-[#211642] text-[1.6vmin] text-purple-200 shadow-[0_0_1.6vmin_rgba(168,85,247,0.5)]">
                         ↔
                       </div>
                     </div>
 
                     {/* Right Column: Target Player (Requested from them) */}
-                    <div className="flex flex-1 flex-col gap-[1.4vmin] pl-[1.8vmin]">
+                    <div className="flex flex-1 flex-col gap-[1.5vmin] pl-[1.4vmin]">
                       {targetPlayer ? (
                         <>
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between border-b border-cyan-500/20 pb-[0.8vmin]">
                             <div className="flex items-center gap-[0.8vmin]">
-                              <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: targetPlayer.color }} />
-                              <span className="text-[1.6vmin] font-black text-white">
+                              <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: targetPlayer.color }} />
+                              <span className="text-[1.75vmin] font-black text-white">
                                 {targetPlayer.name || `Player ${targetPlayer.id}`}
                               </span>
                             </div>
-                            <span className="text-[1.2vmin] font-bold text-gray-400">
-                              Balance: <span className="font-mono text-emerald-400">${targetPlayer.money.toLocaleString()}</span>
+                            <span className="text-[1.25vmin] font-bold text-gray-300">
+                              Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${targetPlayer.money.toLocaleString()}</span>
                             </span>
                           </div>
 
                           {/* Cash Slider for Target */}
-                          <div className="flex flex-col gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-[#17122e] p-[1.2vmin]">
+                          <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-cyan-500/30 bg-[#111933] p-[1.4vmin]">
+                            <div className="flex items-center justify-between text-[1.2vmin] font-black text-cyan-200 uppercase tracking-wide">
+                              <span>💵 Ask Cash:</span>
+                              <span className="rounded-full border border-cyan-400/80 bg-cyan-950/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-cyan-100 shadow-[0_0_1vmin_rgba(6,182,212,0.4)]">
+                                ${tradeDraftRequestedMoney.toLocaleString()}
+                              </span>
+                            </div>
                             <input
                               type="range"
                               min="0"
                               max={Math.max(0, targetPlayer.money)}
                               value={tradeDraftRequestedMoney}
                               onChange={(e) => setTradeDraftRequestedMoney(Math.min(targetPlayer.money, Math.max(0, Number(e.target.value))))}
-                              className="h-[0.8vmin] w-full cursor-pointer accent-cyan-500"
+                              className="h-[0.9vmin] w-full cursor-pointer accent-cyan-500"
                             />
-                            <div className="flex items-center justify-between text-[1.1vmin] text-gray-400 font-bold">
-                              <span>0</span>
-                              <span className="rounded-full border border-cyan-400/70 bg-indigo-900/60 px-[1.6vmin] py-[0.35vmin] font-mono text-[1.45vmin] font-black text-cyan-200 shadow">
-                                {tradeDraftRequestedMoney} $
-                              </span>
-                              <span>{targetPlayer.money}</span>
+                            <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
+                              <span>$0</span>
+                              <span>${targetPlayer.money.toLocaleString()}</span>
                             </div>
                           </div>
 
                           {/* Properties Requested from Target */}
                           <div className="flex flex-1 flex-col gap-[0.8vmin]">
-                            <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
-                              Properties to Receive ({tradeDraftRequestedPropIds.length} selected):
-                            </span>
-                            <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[1.25vmin] font-black uppercase tracking-wider text-cyan-300">
+                                Properties to Receive:
+                              </span>
+                              <span className="text-[1.1vmin] font-bold text-gray-400">
+                                {tradeDraftRequestedPropIds.length} selected
+                              </span>
+                            </div>
+                            <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
                               {targetProps.length === 0 ? (
-                                <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[3vmin] text-center text-[1.15vmin] text-gray-500">
-                                  {targetPlayer.name} doesn't own any properties
+                                <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
+                                  <span className="text-[2.4vmin] opacity-70">🏚️</span>
+                                  <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
+                                  <span className="text-[1.1vmin] text-gray-400">{targetPlayer.name} doesn't own any properties to give</span>
                                 </div>
                               ) : (
                                 targetProps.map((tile) => {
@@ -2798,18 +2822,18 @@ export default function GameBoard() {
                                           prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
                                         )
                                       }
-                                      className={`flex items-center justify-between rounded-[0.9vmin] px-[1.2vmin] py-[0.9vmin] transition-all cursor-pointer ${
+                                      className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${
                                         isSelected
-                                          ? "border-2 border-cyan-300 bg-gradient-to-r from-indigo-700 to-cyan-700 text-white shadow-[0_0_1.4vmin_rgba(6,182,212,0.5)] scale-[1.01]"
-                                          : "border border-white/10 bg-[#1a1433] text-gray-300 hover:border-cyan-400/50 hover:text-white"
+                                          ? "border-2 border-cyan-300 bg-gradient-to-r from-indigo-700 via-cyan-700 to-indigo-800 text-white shadow-[0_0_1.6vmin_rgba(6,182,212,0.6)] scale-[1.01]"
+                                          : "border border-white/15 bg-[#141b38] text-gray-200 hover:border-cyan-400/60 hover:bg-[#1a2347] hover:text-white"
                                       }`}
                                     >
-                                      <div className="flex items-center gap-[0.8vmin]">
-                                        {renderTileIconOrFlag(tile)}
-                                        <span className="text-[1.35vmin] font-black tracking-wide text-white">{tile.name}</span>
-                                        {isSelected && <span className="text-[1.1vmin] font-black text-cyan-200">✓</span>}
+                                      <div className="flex items-center gap-[0.9vmin]">
+                                        {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
+                                        <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                        {isSelected && <span className="text-[1.2vmin] font-black text-cyan-200">✓</span>}
                                       </div>
-                                      <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                      <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
                                         {tile.price}
                                       </span>
                                     </button>
@@ -2820,8 +2844,8 @@ export default function GameBoard() {
                           </div>
                         </>
                       ) : (
-                        <div className="flex h-full items-center justify-center text-gray-400 text-[1.2vmin]">
-                          Select a player to trade with
+                        <div className="flex h-full items-center justify-center text-gray-300 font-bold text-[1.3vmin]">
+                          Select a player to start trading
                         </div>
                       )}
                     </div>
@@ -2830,20 +2854,20 @@ export default function GameBoard() {
               })()}
 
               {/* Modal Footer */}
-              <div className="flex items-center justify-between border-t border-purple-500/25 bg-[#17112e] px-[2.4vmin] py-[1.4vmin]">
+              <div className="flex items-center justify-between border-t border-purple-500/30 bg-[#181133] px-[2.4vmin] py-[1.5vmin]">
                 <button
                   onClick={() => setActiveTradeModal(null)}
-                  className="rounded-[0.9vmin] border border-white/15 bg-white/5 px-[2vmin] py-[1vmin] text-[1.2vmin] font-bold text-gray-300 transition hover:bg-white/10 hover:text-white cursor-pointer"
+                  className="rounded-[1vmin] border border-white/20 bg-white/5 px-[2.2vmin] py-[1vmin] text-[1.25vmin] font-bold text-gray-300 transition hover:bg-white/15 hover:text-white cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSendTrade}
                   disabled={!tradeDraftTargetId}
-                  className="flex items-center gap-[0.8vmin] rounded-[0.9vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[3vmin] py-[1.1vmin] text-[1.4vmin] font-black uppercase tracking-wider text-white shadow-[0_0_2vmin_rgba(139,92,246,0.5)] transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[3.5vmin] py-[1.2vmin] text-[1.45vmin] font-black uppercase tracking-wider text-white shadow-[0_0_2.5vmin_rgba(139,92,246,0.55)] transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                 >
-                  <span className="text-[1.5vmin]">✈️</span>
-                  <span>{negotiatingTradeId ? "Send Counter-Offer" : "Send Trade"}</span>
+                  <span className="text-[1.6vmin]">✈️</span>
+                  <span>{negotiatingTradeId ? "Send Counter-Offer" : "Send Trade Offer"}</span>
                 </button>
               </div>
             </div>
