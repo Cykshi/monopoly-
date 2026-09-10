@@ -314,6 +314,15 @@ export default function GameBoard() {
   const [landStartBonus, setLandStartBonus] = useState(LAND_START_BONUS);
   const [fastMode, setFastMode] = useState(false);
   const [enableRestHousePot, setEnableRestHousePot] = useState(true);
+  // Rest House mode: "pot" = classic pot that pays out to whoever lands on it,
+  // "rest" = no money at all, landing just makes the player skip one turn.
+  const [restHouseMode, setRestHouseMode] = useState<"pot" | "rest">("pot");
+  const [enableMovementCards, setEnableMovementCards] = useState(true);
+  const [enableTrading, setEnableTrading] = useState(true);
+  // Mortgage = selling property back to bank / selling houses off (half price)
+  const [enableMortgage, setEnableMortgage] = useState(true);
+  // If true, players in JAIL still collect rent when others land on their tiles
+  const [jailCollectsRent, setJailCollectsRent] = useState(false);
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
   // Turn Timer state (120 seconds per turn)
   const [turnTimeLeft, setTurnTimeLeft] = useState(TURN_TIME_LIMIT);
@@ -412,6 +421,18 @@ export default function GameBoard() {
     setPassStartBonus(passBonus);
     setLandStartBonus(landBonus);
     addLog(`⚙️ START bonus updated: Pass +$${passBonus} / Land +$${landBonus}`);
+  };
+
+  const handlePassBonusChange = (value: number) => {
+    if (isGameStarted) return;
+    setPassStartBonus(value);
+    addLog(`⚙️ Pass START bonus updated to +$${value}`);
+  };
+
+  const handleLandBonusChange = (value: number) => {
+    if (isGameStarted) return;
+    setLandStartBonus(value);
+    addLog(`⚙️ Land START bonus updated to +$${value}`);
   };
 
   const handleStartGame = () => {
@@ -610,7 +631,7 @@ export default function GameBoard() {
       currentPos = (currentPos + 1) % BOARD_SIZE;
       remaining--;
 
-           const landsOnStart = currentPos === 0 && remaining <= 0;
+      const landsOnStart = currentPos === 0 && remaining <= 0;
       const startBonus = currentPos === 0 ? (landsOnStart ? landStartBonus : passStartBonus) : 0;
 
       if (currentPos === 0) {
@@ -712,8 +733,7 @@ export default function GameBoard() {
 
     const creditor = creditorId ? playersRef.current.find((p) => p.id === creditorId) : undefined;
     addLog(
-      `${player.name} went BANKRUPT${
-        creditor ? ` — ${creditor.name} seized their properties` : " — properties returned to the bank"
+      `${player.name} went BANKRUPT${creditor ? ` — ${creditor.name} seized their properties` : " — properties returned to the bank"
       }.`
     );
 
@@ -782,7 +802,7 @@ export default function GameBoard() {
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
 
-       const wrapped = targetIndex < player.position;
+    const wrapped = targetIndex < player.position;
     const landsOnStart = targetIndex === 0;
     const startBonus = landsOnStart ? landStartBonus : wrapped ? passStartBonus : 0;
 
@@ -864,111 +884,124 @@ export default function GameBoard() {
   };
 
   const handleLanding = (tile: Tile, playerId: number) => {
-  const player = playersRef.current.find((p) => p.id === playerId);
-  if (!player) return;
+    const player = playersRef.current.find((p) => p.id === playerId);
+    if (!player) return;
 
-  if (tile.id === 20) {
-    const potPayout = restHousePot;
-    setPlayers((prev) =>
-      prev.map((p) =>
-        p.id === playerId ? { ...p, money: p.money + potPayout, mood: "happy", isResting: true } : p
-      )
-    );
-    setRestHousePot(0);
-    if (potPayout > 0) {
-      addLog(`${player.name} landed on REST HOUSE and collected +$${potPayout}.`);
-    } else {
-      addLog(`${player.name} landed on REST HOUSE and rests for one turn.`);
-      setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, isResting: true } : p)));
-    }
-    return;
-  }
-
-  if (tile.id === 30) {
-    const cardCount = hasSkillCard ? 1 : 0;
-    const houseCount = getPlayerHouseCount(playerId);
-    const clubFee = cardCount * 50 + houseCount * 100;
-
-    if (clubFee <= 0) {
-      addLog(`${player.name} visited CLUB — no fee.`);
+    if (tile.id === 20) {
+      // "rest" mode: no money system at rest house — just skip one turn.
+      if (restHouseMode === "rest" || !enableRestHousePot) {
+        addLog(`${player.name} landed on REST HOUSE and rests for one turn (no money).`);
+        setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, isResting: true } : p)));
+        return;
+      }
+      const potPayout = restHousePot;
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === playerId ? { ...p, money: p.money + potPayout, mood: "happy", isResting: true } : p
+        )
+      );
+      setRestHousePot(0);
+      if (potPayout > 0) {
+        addLog(`${player.name} landed on REST HOUSE and collected +$${potPayout}.`);
+      } else {
+        addLog(`${player.name} landed on REST HOUSE and rests for one turn.`);
+        setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, isResting: true } : p)));
+      }
       return;
     }
 
-    if (player.money < clubFee) {
-      declareBankruptcy(playerId);
-      return;
-    }
+    if (tile.id === 30) {
+      const cardCount = hasSkillCard ? 1 : 0;
+      const houseCount = getPlayerHouseCount(playerId);
+      const clubFee = cardCount * 50 + houseCount * 100;
 
-    setPlayers((prev) =>
-      prev.map((p) =>
-        p.id === playerId ? { ...p, money: Math.max(0, p.money - clubFee), mood: "flat" } : p
-      )
-    );
-    collectToRestHouse(clubFee);
-    addLog(`${player.name} paid -$${clubFee} at CLUB (${cardCount} card + ${houseCount} houses).`);
-    return;
-  }
+      if (clubFee <= 0) {
+        addLog(`${player.name} visited CLUB — no fee.`);
+        return;
+      }
 
-  if (tile.type === "tax") {
-    const amount = Math.abs(parsePrice(tile.price) || 0);
-    if (player.money < amount) {
-      declareBankruptcy(playerId);
-      return;
-    }
-    setPlayers((prev) =>
-      prev.map((p) =>
-        p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
-      )
-    );
-    collectToRestHouse(amount);
-    addLog(`${player.name} paid -$${amount} tax.`);
-    return;
-  }
-
-  if (PROPERTY_TYPES.has(tile.type) || UTILITY_TYPES.has(tile.type)) {
-    const ownerId = propertyOwnership[tile.id];
-    if (ownerId && ownerId !== playerId) {
-      const houses = propertyHouses[tile.id] || 0;
-      const rent = PROPERTY_TYPES.has(tile.type)
-        ? calculateRent(tile, houses)
-        : calculateUtilityRent(tile, ownerId);
-      const owner = playersRef.current.find((p) => p.id === ownerId);
-
-      if (player.money < rent) {
-        declareBankruptcy(playerId, ownerId);
+      if (player.money < clubFee) {
+        declareBankruptcy(playerId);
         return;
       }
 
       setPlayers((prev) =>
-        prev.map((p) => {
-          if (p.id === playerId) return { ...p, money: Math.max(0, p.money - rent), mood: "flat" };
-          if (p.id === ownerId) return { ...p, money: p.money + rent };
-          return p;
-        })
+        prev.map((p) =>
+          p.id === playerId ? { ...p, money: Math.max(0, p.money - clubFee), mood: "flat" } : p
+        )
       );
-      addLog(`${player.name} paid -$${rent} rent to ${owner?.name} (+$${rent}) on ${tile.name}.`);
-    } else {
-      setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
-      if (!ownerId) setActiveModal(tile);
+      collectToRestHouse(clubFee);
+      addLog(`${player.name} paid -$${clubFee} at CLUB (${cardCount} card + ${houseCount} houses).`);
+      return;
     }
-    return;
-  }
 
-  if (tile.type === "card") {
-    resolveCard(tile.name === "TREASURE" ? "treasure" : "surprise", playerId);
-    return;
-  }
+    if (tile.type === "tax") {
+      const amount = Math.abs(parsePrice(tile.price) || 0);
+      if (player.money < amount) {
+        declareBankruptcy(playerId);
+        return;
+      }
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
+        )
+      );
+      collectToRestHouse(amount);
+      addLog(`${player.name} paid -$${amount} tax.`);
+      return;
+    }
 
-  if (tile.id === 10 && !player.inJail) {
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === playerId ? { ...p, inJail: true, jailTurns: 0, mood: "flat" } : p))
-    );
-    addLog(`${player.name} landed on JAIL and got locked up!`);
-    return;
-  }
+    if (PROPERTY_TYPES.has(tile.type) || UTILITY_TYPES.has(tile.type)) {
+      const ownerId = propertyOwnership[tile.id];
+      if (ownerId && ownerId !== playerId) {
+        const owner = playersRef.current.find((p) => p.id === ownerId);
+        // If owner is in jail and jail doesn't collect rent, no rent is paid
+        if (owner?.inJail && !jailCollectsRent) {
+          setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
+          addLog(`${player.name} landed on ${tile.name} (owned by ${owner?.name}) but they're in JAIL and don't collect rent.`);
+          return;
+        }
 
-  setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
-};
+        const houses = propertyHouses[tile.id] || 0;
+        const rent = PROPERTY_TYPES.has(tile.type)
+          ? calculateRent(tile, houses)
+          : calculateUtilityRent(tile, ownerId);
+
+        if (player.money < rent) {
+          declareBankruptcy(playerId, ownerId);
+          return;
+        }
+
+        setPlayers((prev) =>
+          prev.map((p) => {
+            if (p.id === playerId) return { ...p, money: Math.max(0, p.money - rent), mood: "flat" };
+            if (p.id === ownerId) return { ...p, money: p.money + rent };
+            return p;
+          })
+        );
+        addLog(`${player.name} paid -$${rent} rent to ${owner?.name} (+$${rent}) on ${tile.name}.`);
+      } else {
+        setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
+        if (!ownerId) setActiveModal(tile);
+      }
+      return;
+    }
+
+    if (tile.type === "card") {
+      resolveCard(tile.name === "TREASURE" ? "treasure" : "surprise", playerId);
+      return;
+    }
+
+    if (tile.id === 10 && !player.inJail) {
+      setPlayers((prev) =>
+        prev.map((p) => (p.id === playerId ? { ...p, inJail: true, jailTurns: 0, mood: "flat" } : p))
+      );
+      addLog(`${player.name} landed on JAIL and got locked up!`);
+      return;
+    }
+
+    setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
+  };
 
   const rollDice = () => {
     if (isRolling || isMoving || gamePhase !== "YOUR TURN" || winner) return;
@@ -1054,7 +1087,7 @@ export default function GameBoard() {
   };
 
   const openSkillCard = () => {
-    if (!hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner || currentPlayer?.inJail || currentPlayer?.isResting) return;
+    if (!enableMovementCards || !hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner || currentPlayer?.inJail || currentPlayer?.isResting) return;
     setShowCardSelector(true);
     setSelectedCardValue(null);
   };
@@ -1132,33 +1165,17 @@ export default function GameBoard() {
 
     const pName = currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`;
 
-    if (gamePhase === "YOUR TURN") {
-      if (!isRolling && !isMoving) {
-        isTurnTimedOutRef.current = true;
-        addLog(`⏰ Time expired (120s) for ${pName}! Auto-rolling dice.`);
-        rollDice();
-      }
-    } else if (gamePhase === "ACTION" || gamePhase === "END TURN") {
-      setActiveModal(null);
-      addLog(`⏰ Time expired (120s) for ${pName}! Turn ended.`);
-      endTurn();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turnTimeLeft, isGameStarted, winner, gamePhase, isRolling, isMoving]);
-
-  // If time expired while dice was rolling or moving, immediately end turn once settled
-  useEffect(() => {
-    if (!isGameStarted || winner) return;
-
-    if (gamePhase === "ACTION" && (isTurnTimedOutRef.current || turnTimeLeft === 0)) {
+    // Eliminate player for timeout
+    if (currentPlayer && !currentPlayer.isBankrupt) {
+      addLog(`⏰ TIME EXPIRED! ${pName} failed to play within 120 seconds and is ELIMINATED!`);
+      declareBankruptcy(currentPlayer.id);
+      setTurnTimeLeft(TURN_TIME_LIMIT);
       isTurnTimedOutRef.current = false;
-      setActiveModal(null);
-      const pName = currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`;
-      addLog(`⏰ Time expired for ${pName}! Turn ended.`);
-      endTurn();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamePhase, isGameStarted, winner, turnTimeLeft]);
+  }, [turnTimeLeft, isGameStarted, winner, currentPlayer?.id]);
+
+  // This effect is no longer needed since we handle timeout by eliminating the player
 
   const buyProperty = (tile: Tile) => {
     if (winner || !currentPlayer || !OWNABLE_TYPES.has(tile.type) || propertyOwnership[tile.id]) return;
@@ -1590,7 +1607,7 @@ export default function GameBoard() {
 
           <div className="mb-[0.8vmin] flex items-center gap-[0.5vmin] px-[0.3vmin]">
             <span className="h-[1vmin] w-[1vmin] rounded-full" style={{ backgroundColor: players[0].color }} />
-          <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">My Properties</h2>
+            <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">My Properties</h2>
           </div>
 
           {(() => {
@@ -1645,1962 +1662,1989 @@ export default function GameBoard() {
         </div>
 
         <div
-        className="relative grid aspect-square h-[96vmin] w-[96vmin] shrink-0 rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)]"
-        style={{
-          gridTemplateColumns: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
-          gridTemplateRows: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
-          gap: `${BOARD_GAP_VMIN}vmin`,
-        }}
-      >
-        {/* BOARD TILES */}
-        {BOARD_TILES.map((tile, i) => {
-          const { gridRow, gridColumn, orientation } = getTilePosition(i);
-          const isCorner = [0, 10, 20, 30].includes(i);
-          const isProperty = PROPERTY_TYPES.has(tile.type);
-          const isUtility = UTILITY_TYPES.has(tile.type);
-          const owner = isProperty || isUtility ? getTileOwner(tile.id) : undefined;
-          const playersHere = players.filter((p) => p.position === tile.id);
-          const isOccupied = playersHere.length > 0;
-          const occupantsKey = playersHere.map((p) => p.id).join("-");
-          const tokenAnchor = getTokenAnchor(orientation, isCorner, tile.id);
+          className="relative grid aspect-square h-[96vmin] w-[96vmin] shrink-0 rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)]"
+          style={{
+            gridTemplateColumns: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
+            gridTemplateRows: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
+            gap: `${BOARD_GAP_VMIN}vmin`,
+          }}
+        >
+          {/* BOARD TILES */}
+          {BOARD_TILES.map((tile, i) => {
+            const { gridRow, gridColumn, orientation } = getTilePosition(i);
+            const isCorner = [0, 10, 20, 30].includes(i);
+            const isProperty = PROPERTY_TYPES.has(tile.type);
+            const isUtility = UTILITY_TYPES.has(tile.type);
+            const owner = isProperty || isUtility ? getTileOwner(tile.id) : undefined;
+            const playersHere = players.filter((p) => p.position === tile.id);
+            const isOccupied = playersHere.length > 0;
+            const occupantsKey = playersHere.map((p) => p.id).join("-");
+            const tokenAnchor = getTokenAnchor(orientation, isCorner, tile.id);
 
-          const ownerStripClass =
-            orientation === "top"
-              ? "absolute left-0 right-0 top-0 z-30 h-[0.55vmin]"
-              : orientation === "left"
-              ? "absolute bottom-0 left-0 top-0 z-30 w-[0.55vmin]"
-              : orientation === "right"
-              ? "absolute bottom-0 right-0 top-0 z-30 w-[0.55vmin]"
-              : "absolute bottom-0 left-0 right-0 z-30 h-[0.55vmin]";
+            const ownerStripClass =
+              orientation === "top"
+                ? "absolute left-0 right-0 top-0 z-30 h-[0.55vmin]"
+                : orientation === "left"
+                  ? "absolute bottom-0 left-0 top-0 z-30 w-[0.55vmin]"
+                  : orientation === "right"
+                    ? "absolute bottom-0 right-0 top-0 z-30 w-[0.55vmin]"
+                    : "absolute bottom-0 left-0 right-0 z-30 h-[0.55vmin]";
 
-          const ownedBackground = owner ? getTransparentColor(owner.color, "25") : undefined;
-          const ownedBorder = owner ? getTransparentColor(owner.color, "90") : undefined;
-          const houses = propertyHouses[tile.id] || 0;
-          const isHotel = houses >= 5;
-          const isSelectedOwner = selectedPlayerId != null && owner?.id === selectedPlayerId;
-          const isDimmedBySelection = selectedPlayerId != null && !isSelectedOwner;
+            const ownedBackground = owner ? getTransparentColor(owner.color, "25") : undefined;
+            const ownedBorder = owner ? getTransparentColor(owner.color, "90") : undefined;
+            const houses = propertyHouses[tile.id] || 0;
+            const isHotel = houses >= 5;
+            const isSelectedOwner = selectedPlayerId != null && owner?.id === selectedPlayerId;
+            const isDimmedBySelection = selectedPlayerId != null && !isSelectedOwner;
 
-          return (
-            <div
-              key={tile.id}
-              onClick={() => handleTileClick(tile)}
-              className={`relative flex cursor-pointer items-center justify-center rounded-[0.9vmin] transition-all duration-300 hover:z-30 hover:scale-[1.04] ${
-                owner ? "" : "shadow-lg hover:shadow-[0_0_2vmin_rgba(255,255,255,0.35)]"
-              } ${
-                isCorner
-  ? "border-[0.25vmin] border-indigo-400/60 bg-gradient-to-br from-[#1e143c] to-[#120b24]"
-  : "border border-[#34404d] bg-[#171e26]/80"
-              } ${isDimmedBySelection ? "opacity-30 saturate-50" : ""} ${isSelectedOwner ? "scale-[1.05]" : ""}`}
-              style={{
-                gridRow,
-                gridColumn,
-                // Once a house/hotel badge is built, it deliberately pokes
-                // outside this tile's own box (like the flag does on the
-                // opposite edge). Without a raised z-index here, the NEXT
-                // tile in the grid (a DOM sibling) paints on top of that
-                // overflow regardless of the badge's own z-index, since
-                // z-index only resolves within the same stacking parent -
-                // that's what was cutting a line through the badge.
-                zIndex: houses > 0 || isSelectedOwner ? 25 : undefined,
-                ...(owner
-                  ? {
+            return (
+              <div
+                key={tile.id}
+                onClick={() => handleTileClick(tile)}
+                className={`relative flex cursor-pointer items-center justify-center rounded-[0.9vmin] transition-all duration-300 hover:z-30 hover:scale-[1.04] ${owner ? "" : "shadow-lg hover:shadow-[0_0_2vmin_rgba(255,255,255,0.35)]"
+                  } ${isCorner
+                    ? "border-[0.25vmin] border-indigo-400/60 bg-gradient-to-br from-[#1e143c] to-[#120b24]"
+                    : "border border-[#34404d] bg-[#171e26]/80"
+                  } ${isDimmedBySelection ? "opacity-30 saturate-50" : ""} ${isSelectedOwner ? "scale-[1.05]" : ""}`}
+                style={{
+                  gridRow,
+                  gridColumn,
+                  // Once a house/hotel badge is built, it deliberately pokes
+                  // outside this tile's own box (like the flag does on the
+                  // opposite edge). Without a raised z-index here, the NEXT
+                  // tile in the grid (a DOM sibling) paints on top of that
+                  // overflow regardless of the badge's own z-index, since
+                  // z-index only resolves within the same stacking parent -
+                  // that's what was cutting a line through the badge.
+                  zIndex: houses > 0 || isSelectedOwner ? 25 : undefined,
+                  ...(owner
+                    ? {
                       backgroundColor: ownedBackground,
                       borderColor: isSelectedOwner ? "#ffffff" : ownedBorder,
                       boxShadow: isSelectedOwner
                         ? `0 0 0 0.25vmin #ffffff, 0 0 2.4vmin ${owner.color}, 0 0 1vmin ${owner.color}`
                         : `0 0 1.8vmin ${owner.color}99, 0 0 0.5vmin ${owner.color}, inset 0 0 0.8vmin ${owner.color}33`,
                     }
-                  : {}),
-              }}
-            >
-              {isSelectedOwner && (
-                <div className="pointer-events-none absolute inset-0 z-40 animate-pulse rounded-[0.9vmin] ring-[0.3vmin] ring-white" />
-              )}
+                    : {}),
+                }}
+              >
+                {isSelectedOwner && (
+                  <div className="pointer-events-none absolute inset-0 z-40 animate-pulse rounded-[0.9vmin] ring-[0.3vmin] ring-white" />
+                )}
 
-              {!isCorner && tile.countryCode && (
-                <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[0.9vmin]">
-                  <div className="absolute inset-0 flex scale-150 items-center justify-center opacity-25">
-                    <Flag code={tile.countryCode} className="h-full w-full object-cover" />
+                {!isCorner && tile.countryCode && (
+                  <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[0.9vmin]">
+                    <div className="absolute inset-0 flex scale-150 items-center justify-center opacity-25">
+                      <Flag code={tile.countryCode} className="h-full w-full object-cover" />
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {owner && (
-                <div
-                  className={ownerStripClass}
-                  style={{ backgroundColor: owner.color, boxShadow: `0 0 0.8vmin ${owner.color}` }}
-                />
-              )}
+                {owner && (
+                  <div
+                    className={ownerStripClass}
+                    style={{ backgroundColor: owner.color, boxShadow: `0 0 0.8vmin ${owner.color}` }}
+                  />
+                )}
 
-              {isOccupied && (
-                <div
-                  className="pointer-events-none absolute z-50 flex items-center justify-center"
-                  style={{
-                    top: tokenAnchor.top,
-                    left: tokenAnchor.left,
-                    transform: "translate(-50%, -50%)",
-                    width: isCorner ? "8.8vmin" : "6.6vmin",
-                    maxHeight: isCorner ? "6.8vmin" : "5vmin",
-                  }}
-                >
-                  {(() => {
-                    const count = playersHere.length;
-                    // Token sizing: perfectly scaled so 1, 2, 3, 4, 5, or 6 tokens fit cleanly inside the tile box!
-                    const tokenSizeVmin =
-                      count === 1
-                        ? 2.9
-                        : count === 2
-                        ? 2.35
-                        : count <= 4
-                        ? 2.05
-                        : 1.8;
-                    const sizeStr = `${tokenSizeVmin}vmin`;
+                {isOccupied && (
+                  <div
+                    className="pointer-events-none absolute z-50 flex items-center justify-center"
+                    style={{
+                      top: tokenAnchor.top,
+                      left: tokenAnchor.left,
+                      transform: "translate(-50%, -50%)",
+                      width: isCorner ? "8.8vmin" : "6.6vmin",
+                      maxHeight: isCorner ? "6.8vmin" : "5vmin",
+                    }}
+                  >
+                    {(() => {
+                      const count = playersHere.length;
+                      // Token sizing: perfectly scaled so 1, 2, 3, 4, 5, or 6 tokens fit cleanly inside the tile box!
+                      const tokenSizeVmin =
+                        count === 1
+                          ? 2.9
+                          : count === 2
+                            ? 2.35
+                            : count <= 4
+                              ? 2.05
+                              : 1.8;
+                      const sizeStr = `${tokenSizeVmin}vmin`;
 
-                    // Grid arrangement for maximum symmetry and balance inside tile boundaries
-                    const gridColsClass =
-                      count === 1
-                        ? "grid-cols-1"
-                        : count === 2
-                        ? "grid-cols-2 gap-[0.3vmin]"
-                        : count <= 4
-                        ? "grid-cols-2 gap-[0.25vmin]"
-                        : "grid-cols-3 gap-[0.2vmin]";
+                      // Grid arrangement for maximum symmetry and balance inside tile boundaries
+                      const gridColsClass =
+                        count === 1
+                          ? "grid-cols-1"
+                          : count === 2
+                            ? "grid-cols-2 gap-[0.3vmin]"
+                            : count <= 4
+                              ? "grid-cols-2 gap-[0.25vmin]"
+                              : "grid-cols-3 gap-[0.2vmin]";
 
-                    return (
-                      <div className={`grid items-center justify-items-center ${gridColsClass}`}>
-                        {playersHere.map((player, idx) => {
-                          const isEscaping = escapingIds.includes(player.id);
-                          const colSpanClass =
-                            count === 3 && idx === 2
-                              ? "col-span-2 justify-self-center"
-                              : count === 5 && idx === 4
-                              ? "col-span-3 justify-self-center"
-                              : "";
+                      return (
+                        <div className={`grid items-center justify-items-center ${gridColsClass}`}>
+                          {playersHere.map((player, idx) => {
+                            const isEscaping = escapingIds.includes(player.id);
+                            const colSpanClass =
+                              count === 3 && idx === 2
+                                ? "col-span-2 justify-self-center"
+                                : count === 5 && idx === 4
+                                  ? "col-span-3 justify-self-center"
+                                  : "";
 
-                          return (
-                            <div
-                              key={player.id}
-                              className={`pointer-events-auto relative ${colSpanClass}`}
-                              style={{
-                                height: sizeStr,
-                                width: sizeStr,
-                                zIndex: player.isCurrentPlayer ? 10 : idx,
-                                animation: player.inJail
-                                  ? isEscaping
-                                    ? "jailBreak 0.7s ease-out"
-                                    : "jailRattle 1.8s ease-in-out infinite"
-                                  : undefined,
-                              }}
-                            >
+                            return (
                               <div
-                                title={player.name || `Player ${player.id}`}
-                                className="relative flex h-full w-full items-center justify-center rounded-full transition-transform duration-300 hover:z-20 hover:scale-115"
+                                key={player.id}
+                                className={`pointer-events-auto relative ${colSpanClass}`}
                                 style={{
-                                  background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
-                                  border: `0.09vmin solid ${player.color}`,
-                                  boxShadow: player.isCurrentPlayer
-                                    ? `0 0 1.6vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.5vmin 1vmin rgba(0,0,0,0.75), inset 0 0.2vmin 0.3vmin rgba(255,255,255,0.45), inset 0 -0.2vmin 0.3vmin rgba(0,0,0,0.35)`
-                                    : `0 0 0.5vmin ${player.color}aa, 0 0.4vmin 0.8vmin rgba(0,0,0,0.65), inset 0 0.18vmin 0.25vmin rgba(255,255,255,0.35), inset 0 -0.2vmin 0.25vmin rgba(0,0,0,0.3)`,
-                                  animation: player.isCurrentPlayer
-                                    ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s`
+                                  height: sizeStr,
+                                  width: sizeStr,
+                                  zIndex: player.isCurrentPlayer ? 10 : idx,
+                                  animation: player.inJail
+                                    ? isEscaping
+                                      ? "jailBreak 0.7s ease-out"
+                                      : "jailRattle 1.8s ease-in-out infinite"
                                     : undefined,
                                 }}
                               >
-                                {/* Specular highlight */}
                                 <div
-                                  className="pointer-events-none absolute left-[16%] top-[12%] h-[36%] w-[36%] rounded-full opacity-80"
+                                  title={player.name || `Player ${player.id}`}
+                                  className="relative flex h-full w-full items-center justify-center rounded-full transition-transform duration-300 hover:z-20 hover:scale-115"
                                   style={{
-                                    background:
-                                      "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)",
+                                    background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
+                                    border: `0.09vmin solid ${player.color}`,
+                                    boxShadow: player.isCurrentPlayer
+                                      ? `0 0 1.6vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.5vmin 1vmin rgba(0,0,0,0.75), inset 0 0.2vmin 0.3vmin rgba(255,255,255,0.45), inset 0 -0.2vmin 0.3vmin rgba(0,0,0,0.35)`
+                                      : `0 0 0.5vmin ${player.color}aa, 0 0.4vmin 0.8vmin rgba(0,0,0,0.65), inset 0 0.18vmin 0.25vmin rgba(255,255,255,0.35), inset 0 -0.2vmin 0.25vmin rgba(0,0,0,0.3)`,
+                                    animation: player.isCurrentPlayer
+                                      ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s`
+                                      : undefined,
                                   }}
-                                />
+                                >
+                                  {/* Specular highlight */}
+                                  <div
+                                    className="pointer-events-none absolute left-[16%] top-[12%] h-[36%] w-[36%] rounded-full opacity-80"
+                                    style={{
+                                      background:
+                                        "radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)",
+                                    }}
+                                  />
 
-                                {/* Face with Eyes & Mouth scaled proportionally to token size */}
-                                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                  {player.mood === "flat" ? (
-                                    <>
-                                      <div className="flex" style={{ gap: `${tokenSizeVmin * 0.12}vmin` }}>
+                                  {/* Face with Eyes & Mouth scaled proportionally to token size */}
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                    {player.mood === "flat" ? (
+                                      <>
+                                        <div className="flex" style={{ gap: `${tokenSizeVmin * 0.12}vmin` }}>
+                                          <div
+                                            className="rounded-full bg-white/95"
+                                            style={{
+                                              height: `${tokenSizeVmin * 0.08}vmin`,
+                                              width: `${tokenSizeVmin * 0.18}vmin`,
+                                            }}
+                                          />
+                                          <div
+                                            className="rounded-full bg-white/95"
+                                            style={{
+                                              height: `${tokenSizeVmin * 0.08}vmin`,
+                                              width: `${tokenSizeVmin * 0.18}vmin`,
+                                            }}
+                                          />
+                                        </div>
                                         <div
-                                          className="rounded-full bg-white/95"
+                                          className="rounded-full bg-white/85"
                                           style={{
+                                            marginTop: `${tokenSizeVmin * 0.08}vmin`,
                                             height: `${tokenSizeVmin * 0.08}vmin`,
-                                            width: `${tokenSizeVmin * 0.18}vmin`,
+                                            width: `${tokenSizeVmin * 0.28}vmin`,
                                           }}
                                         />
+                                      </>
+                                    ) : (
+                                      <>
+                                        <div className="flex" style={{ gap: `${tokenSizeVmin * 0.14}vmin` }}>
+                                          <div
+                                            className="rounded-full bg-white/95"
+                                            style={{
+                                              height: `${tokenSizeVmin * 0.15}vmin`,
+                                              width: `${tokenSizeVmin * 0.15}vmin`,
+                                            }}
+                                          />
+                                          <div
+                                            className="rounded-full bg-white/95"
+                                            style={{
+                                              height: `${tokenSizeVmin * 0.15}vmin`,
+                                              width: `${tokenSizeVmin * 0.15}vmin`,
+                                            }}
+                                          />
+                                        </div>
                                         <div
-                                          className="rounded-full bg-white/95"
+                                          className="rounded-b-full border-white/85 bg-transparent"
                                           style={{
-                                            height: `${tokenSizeVmin * 0.08}vmin`,
-                                            width: `${tokenSizeVmin * 0.18}vmin`,
+                                            marginTop: `${tokenSizeVmin * 0.04}vmin`,
+                                            height: `${tokenSizeVmin * 0.12}vmin`,
+                                            width: `${tokenSizeVmin * 0.24}vmin`,
+                                            borderBottomWidth: `${tokenSizeVmin * 0.04}vmin`,
+                                            borderLeftWidth: `${tokenSizeVmin * 0.04}vmin`,
+                                            borderRightWidth: `${tokenSizeVmin * 0.04}vmin`,
                                           }}
                                         />
-                                      </div>
-                                      <div
-                                        className="rounded-full bg-white/85"
-                                        style={{
-                                          marginTop: `${tokenSizeVmin * 0.08}vmin`,
-                                          height: `${tokenSizeVmin * 0.08}vmin`,
-                                          width: `${tokenSizeVmin * 0.28}vmin`,
-                                        }}
-                                      />
-                                    </>
-                                  ) : (
-                                    <>
-                                      <div className="flex" style={{ gap: `${tokenSizeVmin * 0.14}vmin` }}>
-                                        <div
-                                          className="rounded-full bg-white/95"
-                                          style={{
-                                            height: `${tokenSizeVmin * 0.15}vmin`,
-                                            width: `${tokenSizeVmin * 0.15}vmin`,
-                                          }}
-                                        />
-                                        <div
-                                          className="rounded-full bg-white/95"
-                                          style={{
-                                            height: `${tokenSizeVmin * 0.15}vmin`,
-                                            width: `${tokenSizeVmin * 0.15}vmin`,
-                                          }}
-                                        />
-                                      </div>
-                                      <div
-                                        className="rounded-b-full border-white/85 bg-transparent"
-                                        style={{
-                                          marginTop: `${tokenSizeVmin * 0.04}vmin`,
-                                          height: `${tokenSizeVmin * 0.12}vmin`,
-                                          width: `${tokenSizeVmin * 0.24}vmin`,
-                                          borderBottomWidth: `${tokenSizeVmin * 0.04}vmin`,
-                                          borderLeftWidth: `${tokenSizeVmin * 0.04}vmin`,
-                                          borderRightWidth: `${tokenSizeVmin * 0.04}vmin`,
-                                        }}
-                                      />
-                                    </>
-                                  )}
+                                      </>
+                                    )}
+                                  </div>
                                 </div>
+
+                                {/* Jail bars overlay */}
+                                {player.inJail && !isEscaping && (
+                                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-[0.1vmin] overflow-hidden rounded-full bg-black/15">
+                                    <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
+                                    <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
+                                    <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
+                                  </div>
+                                )}
                               </div>
-
-                              {/* Jail bars overlay */}
-                              {player.inJail && !isEscaping && (
-                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-[0.1vmin] overflow-hidden rounded-full bg-black/15">
-                                  <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
-                                  <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
-                                  <div className="h-[85%] w-[0.14vmin] rounded-full bg-white/85 shadow-[0_0_0.2vmin_rgba(0,0,0,0.6)]" />
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-
-              {isCorner ? (
-                <div className="z-10 flex flex-col items-center justify-center gap-[0.3vmin]">
-                  <span
-                    className={`${
-                      tile.id === 20 ? "text-[3.2vmin]" : "text-[3.8vmin]"
-                    } ${isOccupied ? "opacity-20 scale-80" : ""} drop-shadow-[0_0_1vmin_rgba(255,255,255,0.4)] transition-all`}
-                  >
-                    {tile.icon}
-                  </span>
-                  <div className="text-center text-[1.3vmin] font-black uppercase leading-tight tracking-wider text-white drop-shadow-md">
-                    {tile.name}
-                  </div>
-                  {tile.id === 20 && (
-                    <div
-                      className={`mt-[0.3vmin] flex items-center gap-[0.35vmin] rounded-full border px-[0.9vmin] py-[0.2vmin] shadow-md transition-all ${
-                        restHousePot > 0
-                          ? "border-emerald-400 bg-[#072518] shadow-[0_0_1.4vmin_rgba(16,185,129,0.65)] animate-pulse"
-                          : "border-white/20 bg-white/10"
-                      }`}
-                    >
-                      <span className="text-[1.1vmin] leading-none">💰</span>
-                      <span
-                        className={`text-[1.35vmin] font-black leading-none ${
-                          restHousePot > 0 ? "text-emerald-300" : "text-gray-300"
-                        }`}
-                      >
-                        ${restHousePot.toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="relative z-40 flex h-full w-full items-center justify-center p-[0.6vmin]">
-                  <div
-                    className={`absolute left-1/2 top-1/2 flex items-center justify-start ${
-                      orientation === "top" ? "flex-col-reverse" : "flex-col"
-                    }`}
-                    style={{
-                      width: `${CONTENT_BLOCK_WIDTH_VMIN}vmin`,
-                      height: `${CONTENT_BLOCK_HEIGHT_VMIN}vmin`,
-                      transform:
-                        orientation === "left"
-                          ? "translate(-50%, -50%) rotate(90deg)"
-                          : orientation === "right"
-                          ? "translate(-50%, -50%) rotate(-90deg)"
-                          : "translate(-50%, -50%)",
-                    }}
-                  >
-                    <div
-                      className={`absolute left-1/2 z-40 flex -translate-x-1/2 items-center justify-center ${
-                        orientation === "top" ? "bottom-0 translate-y-1/2" : "top-0 -translate-y-1/2"
-                      }`}
-                    >
-                      {tile.countryCode ? (
-                        <div
-                          className={`h-[3vmin] w-[4.6vmin] overflow-hidden rounded-[0.5vmin] border-[0.22vmin] shadow-lg transition-all duration-300 ${
-                            isOccupied ? "scale-110 border-white shadow-[0_0_1.4vmin_rgba(255,255,255,0.5)]" : "border-white/80"
-                          }`}
-                        >
-                          <Flag code={tile.countryCode} className="h-full w-full object-cover" />
+                            );
+                          })}
                         </div>
-                      ) : (
-                        <span className={`text-[3.4vmin] drop-shadow-xl transition-transform duration-300 ${isOccupied ? "scale-110" : ""}`}>
-                          {tile.icon}
-                        </span>
-                      )}
-                    </div>
+                      );
+                    })()}
+                  </div>
+                )}
 
-                    <div className="h-[18%] w-full" />
-
-                    <div className="flex-1" />
-
-                    <div
-                      key={`name-${tile.id}-${occupantsKey}`}
-                      className="relative flex min-w-0 flex-col items-center justify-center overflow-visible text-center"
-                      style={{ animation: isOccupied ? "nameDodge 0.7s ease-in-out" : "none" }}
+                {isCorner ? (
+                  <div className="z-10 flex flex-col items-center justify-center gap-[0.3vmin]">
+                    <span
+                      className={`${tile.id === 20 ? "text-[3.2vmin]" : "text-[3.8vmin]"
+                        } ${isOccupied ? "opacity-20 scale-80" : ""} drop-shadow-[0_0_1vmin_rgba(255,255,255,0.4)] transition-all`}
                     >
-                      <span
-                        className={`relative z-[60] whitespace-nowrap font-bold uppercase leading-tight tracking-wide text-gray-100 ${
-                          isOccupied ? "rounded-[0.4vmin] bg-[#0f0c16]/90 px-[0.5vmin] py-[0.1vmin] shadow-md" : ""
-                        }`}
-                        style={{ fontSize: `${getNameFontSize(tile.name)}vmin` }}
-                      >
-                        {tile.name}
-                      </span>
+                      {tile.icon}
+                    </span>
+                    <div className="text-center text-[1.3vmin] font-black uppercase leading-tight tracking-wider text-white drop-shadow-md">
+                      {tile.name}
                     </div>
-
-                    {!owner && tile.price ? (
+                    {tile.id === 20 && restHouseMode === "pot" && (
                       <div
-                        className={`m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.35vmin] text-center font-black ${
-                          tile.price.includes("-")
-                            ? "bg-red-500/80 text-white"
-                            : "border border-[#526171] bg-[#293541] text-[#e7eef5]"
-                        }`}
+                        className={`mt-[0.3vmin] flex items-center gap-[0.35vmin] rounded-full border px-[0.9vmin] py-[0.2vmin] shadow-md transition-all ${restHousePot > 0
+                            ? "border-emerald-400 bg-[#072518] shadow-[0_0_1.4vmin_rgba(16,185,129,0.65)] animate-pulse"
+                            : "border-white/20 bg-white/10"
+                          }`}
                       >
-                        <span className="whitespace-nowrap text-[1.15vmin]">{tile.price}</span>
+                        <span className="text-[1.1vmin] leading-none">💰</span>
+                        <span
+                          className={`text-[1.35vmin] font-black leading-none ${restHousePot > 0 ? "text-emerald-300" : "text-gray-300"
+                            }`}
+                        >
+                          ${restHousePot.toLocaleString()}
+                        </span>
                       </div>
-                    ) : owner ? (
+                    )}
+                  </div>
+                ) : (
+                  <div className="relative z-40 flex h-full w-full items-center justify-center p-[0.6vmin]">
+                    <div
+                      className={`absolute left-1/2 top-1/2 flex items-center justify-start ${orientation === "top" ? "flex-col-reverse" : "flex-col"
+                        }`}
+                      style={{
+                        width: `${CONTENT_BLOCK_WIDTH_VMIN}vmin`,
+                        height: `${CONTENT_BLOCK_HEIGHT_VMIN}vmin`,
+                        transform:
+                          orientation === "left"
+                            ? "translate(-50%, -50%) rotate(90deg)"
+                            : orientation === "right"
+                              ? "translate(-50%, -50%) rotate(-90deg)"
+                              : "translate(-50%, -50%)",
+                      }}
+                    >
                       <div
-                        className={`m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.3vmin] text-center font-black uppercase tracking-wide ${
-                          isProperty && houses > 0 ? "invisible" : ""
-                        }`}
-                        style={{ color: owner.color, backgroundColor: `${owner.color}18` }}
+                        className={`absolute left-1/2 z-40 flex -translate-x-1/2 items-center justify-center ${orientation === "top" ? "bottom-0 translate-y-1/2" : "top-0 -translate-y-1/2"
+                          }`}
                       >
-                        <span className="whitespace-nowrap text-[0.9vmin]">Owned</span>
+                        {tile.countryCode ? (
+                          <div
+                            className={`h-[3vmin] w-[4.6vmin] overflow-hidden rounded-[0.5vmin] border-[0.22vmin] shadow-lg transition-all duration-300 ${isOccupied ? "scale-110 border-white shadow-[0_0_1.4vmin_rgba(255,255,255,0.5)]" : "border-white/80"
+                              }`}
+                          >
+                            <Flag code={tile.countryCode} className="h-full w-full object-cover" />
+                          </div>
+                        ) : (
+                          <span className={`text-[3.4vmin] drop-shadow-xl transition-transform duration-300 ${isOccupied ? "scale-110" : ""}`}>
+                            {tile.icon}
+                          </span>
+                        )}
                       </div>
-                    ) : null}
 
-                    {/* House/hotel indicator - mirrors how the flag pokes
+                      <div className="h-[18%] w-full" />
+
+                      <div className="flex-1" />
+
+                      <div
+                        key={`name-${tile.id}-${occupantsKey}`}
+                        className="relative flex min-w-0 flex-col items-center justify-center overflow-visible text-center"
+                        style={{ animation: isOccupied ? "nameDodge 0.7s ease-in-out" : "none" }}
+                      >
+                        <span
+                          className={`relative z-[60] whitespace-nowrap font-bold uppercase leading-tight tracking-wide text-gray-100 ${isOccupied ? "rounded-[0.4vmin] bg-[#0f0c16]/90 px-[0.5vmin] py-[0.1vmin] shadow-md" : ""
+                            }`}
+                          style={{ fontSize: `${getNameFontSize(tile.name)}vmin` }}
+                        >
+                          {tile.name}
+                        </span>
+                      </div>
+
+                      {!owner && tile.price ? (
+                        <div
+                          className={`m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.35vmin] text-center font-black ${tile.price.includes("-")
+                              ? "bg-red-500/80 text-white"
+                              : "border border-[#526171] bg-[#293541] text-[#e7eef5]"
+                            }`}
+                        >
+                          <span className="whitespace-nowrap text-[1.15vmin]">{tile.price}</span>
+                        </div>
+                      ) : owner ? (
+                        <div
+                          className={`m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.3vmin] text-center font-black uppercase tracking-wide ${isProperty && houses > 0 ? "invisible" : ""
+                            }`}
+                          style={{ color: owner.color, backgroundColor: `${owner.color}18` }}
+                        >
+                          <span className="whitespace-nowrap text-[0.9vmin]">Owned</span>
+                        </div>
+                      ) : null}
+
+                      {/* House/hotel indicator - mirrors how the flag pokes
                         half outside the tile's top edge, but sits on the
                         OPPOSITE edge (same side as price/Owned), half
                         outside the border and half inside. Only shown for
                         property-type tiles (utilities don't have houses)
                         once at least one house has been built. */}
-                    {owner && isProperty && houses > 0 && (
-                      <div
-                        className={`absolute left-1/2 z-[70] flex -translate-x-1/2 items-center justify-center gap-[0.35vmin] rounded-[0.5vmin] border-[0.2vmin] px-[0.6vmin] shadow-lg ${
-                          orientation === "top" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2"
-                        }`}
-                        style={{
-                          height: "2.7vmin",
-                          borderColor: "rgba(255,255,255,0.85)",
-                          backgroundColor: owner.color,
-                          boxShadow: `0 0 1vmin ${owner.color}aa, 0 0.3vmin 0.7vmin rgba(0,0,0,0.55)`,
-                        }}
-                      >
-                        {isHotel ? (
-                          <span className="text-[1.6vmin] leading-none drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">🏨</span>
-                        ) : (
-                          <>
-                            <span className="text-[1.3vmin] leading-none drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">🏠</span>
-                            <span className="text-[1.05vmin] font-black text-white drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">
-                              x{houses}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    )}
+                      {owner && isProperty && houses > 0 && (
+                        <div
+                          className={`absolute left-1/2 z-[70] flex -translate-x-1/2 items-center justify-center gap-[0.35vmin] rounded-[0.5vmin] border-[0.2vmin] px-[0.6vmin] shadow-lg ${orientation === "top" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2"
+                            }`}
+                          style={{
+                            height: "2.7vmin",
+                            borderColor: "rgba(255,255,255,0.85)",
+                            backgroundColor: owner.color,
+                            boxShadow: `0 0 1vmin ${owner.color}aa, 0 0.3vmin 0.7vmin rgba(0,0,0,0.55)`,
+                          }}
+                        >
+                          {isHotel ? (
+                            <span className="text-[1.6vmin] leading-none drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">🏨</span>
+                          ) : (
+                            <>
+                              <span className="text-[1.3vmin] leading-none drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">🏠</span>
+                              <span className="text-[1.05vmin] font-black text-white drop-shadow-[0_0_0.3vmin_rgba(0,0,0,0.7)]">
+                                x{houses}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* ================= CENTER CONSOLE ================= */}
+          <div
+            className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
+            style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
+          >
+            <div className="relative flex w-full items-center justify-between px-[0.4vmin]">
+              {/* Leftmost: Fullscreen button */}
+              <button
+                onClick={toggleFullscreen}
+                className="flex shrink-0 items-center gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer"
+                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+              >
+                <span className="text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
+                <span className="whitespace-nowrap tracking-wide">{isFullscreen ? "Exit" : "Fullscreen"}</span>
+              </button>
+
+              {/* Center: Turn Timer (aligned exactly with YOUR TURN badge below) */}
+              <div
+                className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center select-none pointer-events-none"
+                title={
+                  !isGameStarted
+                    ? "Turn Timer: 120s per turn"
+                    : `${turnTimeLeft}s remaining for ${currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`}'s turn`
+                }
+              >
+                <span
+                  className={`pointer-events-auto font-mono text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft <= 10
+                      ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
+                      : isGameStarted && turnTimeLeft <= 30
+                        ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
+                        : "text-yellow-400 drop-shadow-[0_0_1.4vmin_rgba(250,204,21,0.6)]"
+                    }`}
+                >
+                  {formatTurnTime(turnTimeLeft)}
+                </span>
+              </div>
+
+              {/* Rightmost: Room and LIVE connection indicator */}
+              <div className="flex shrink-0 items-center gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] shadow-md">
+                <div
+                  className={`h-[1vmin] w-[1vmin] shrink-0 rounded-full ${isConnected
+                      ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
+                      : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
+                    }`}
+                />
+                <span className="whitespace-nowrap text-[1.35vmin] font-extrabold tracking-wide text-white">
+                  {connectionLabel}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <div
+                className={`mx-auto w-fit rounded-full border px-[1.8vmin] py-[0.4vmin] text-[1.1vmin] font-black uppercase tracking-widest ${gamePhase === "YOUR TURN"
+                    ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
+                    : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
+                      ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+                      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                  }`}
+              >
+                {gamePhase}
+              </div>
+            </div>
+
+            {/* 3D Dice - back to its original size */}
+            <div className="-mt-2 mb-2 flex justify-center">
+              <DiceScene dice={dice} rollTrigger={rollTrigger} onSettled={handleDiceSettled} />
+            </div>
+
+            {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
+            <div className="flex h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center -translate-y-[3.5vmin]">
+              <div>
+                {actionLog.slice(0, 3).map((msg, i) => (
+                  <p key={i} className={`text-[1.55vmin] leading-snug ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
+                    {renderLogMessage(msg)}
+                  </p>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex w-full max-w-[44vmin] gap-[1.2vmin] -translate-y-[3.5vmin]">
+              {gamePhase === "YOUR TURN" ? (
+                <>
+                  {currentPlayer?.inJail && (
+                    <button
+                      onClick={payBail}
+                      disabled={(currentPlayer.money ?? 0) < 100}
+                      className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      🔓 Pay Bail $100
+                    </button>
+                  )}
+
+                  <button
+                    onClick={rollDice}
+                    disabled={isRolling || isMoving}
+                    className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll for Doubles" : "🎲 Roll Dice"}
+                  </button>
+
+                  {!currentPlayer?.inJail && enableMovementCards && (
+                    <button
+                      onClick={openSkillCard}
+                      disabled={!hasSkillCard || isRolling || isMoving}
+                      className="relative flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {hasSkillCard ? "🃏 Card" : "Exhausted"}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button
+                  onClick={endTurn}
+                  disabled={gamePhase !== "ACTION" && gamePhase !== "END TURN"}
+                  className="flex-1 rounded-[1.1vmin] border border-white/15 bg-white/10 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  End Turn
+                </button>
               )}
             </div>
-          );
-        })}
+          </div>
 
-        {/* ================= CENTER CONSOLE ================= */}
-        <div
-          className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
-          style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
-        >
-          <div className="relative flex w-full items-center justify-between px-[0.4vmin]">
-            {/* Leftmost: Fullscreen button */}
-            <button
-              onClick={toggleFullscreen}
-              className="flex shrink-0 items-center gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer"
-              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-            >
-              <span className="text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
-              <span className="whitespace-nowrap tracking-wide">{isFullscreen ? "Exit" : "Fullscreen"}</span>
-            </button>
-
-            {/* Center: Turn Timer (aligned exactly with YOUR TURN badge below) */}
+          {/* ================= PROPERTY MODAL ================= */}
+          {activeModal && (
             <div
-              className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center select-none pointer-events-none"
-              title={
-                !isGameStarted
-                  ? "Turn Timer: 120s per turn"
-                  : `${turnTimeLeft}s remaining for ${currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`}'s turn`
-              }
+              className="absolute inset-0 z-[100] flex items-center justify-center rounded-[2vmin] bg-black/70 p-[4vmin] backdrop-blur-md"
+              onClick={() => setActiveModal(null)}
             >
-              <span
-                className={`pointer-events-auto font-mono text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${
-                  isGameStarted && turnTimeLeft <= 10
-                    ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
-                    : isGameStarted && turnTimeLeft <= 30
-                    ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
-                    : "text-yellow-400 drop-shadow-[0_0_1.4vmin_rgba(250,204,21,0.6)]"
-                }`}
-              >
-                {formatTurnTime(turnTimeLeft)}
-              </span>
-            </div>
-
-            {/* Rightmost: Room and LIVE connection indicator */}
-            <div className="flex shrink-0 items-center gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] shadow-md">
-              <div
-                className={`h-[1vmin] w-[1vmin] shrink-0 rounded-full ${
-                  isConnected
-                    ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
-                    : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
-                }`}
-              />
-              <span className="whitespace-nowrap text-[1.35vmin] font-extrabold tracking-wide text-white">
-                {connectionLabel}
-              </span>
-            </div>
-          </div>
-
-          <div>
-            <div
-              className={`mx-auto w-fit rounded-full border px-[1.8vmin] py-[0.4vmin] text-[1.1vmin] font-black uppercase tracking-widest ${
-                gamePhase === "YOUR TURN"
-                  ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
-                  : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
-                  ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
-                  : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-              }`}
-            >
-              {gamePhase}
-            </div>
-          </div>
-
-          {/* 3D Dice - back to its original size */}
-          <div className="-mt-2 mb-2 flex justify-center">
-            <DiceScene dice={dice} rollTrigger={rollTrigger} onSettled={handleDiceSettled} />
-          </div>
-
-          {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
-                    <div className="flex h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center -translate-y-[3.5vmin]">
-            <div>
-              {actionLog.slice(0, 3).map((msg, i) => (
-                <p key={i} className={`text-[1.55vmin] leading-snug ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
-                  {renderLogMessage(msg)}
-                </p>
-              ))}
-            </div>
-          </div>
-
-                    <div className="flex w-full max-w-[44vmin] gap-[1.2vmin] -translate-y-[3.5vmin]">
-            {gamePhase === "YOUR TURN" ? (
-              <>
-                {currentPlayer?.inJail && (
-                  <button
-                    onClick={payBail}
-                    disabled={(currentPlayer.money ?? 0) < 100}
-                    className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    🔓 Pay Bail $100
-                  </button>
-                )}
-
-                <button
-                  onClick={rollDice}
-                  disabled={isRolling || isMoving}
-                  className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll for Doubles" : "🎲 Roll Dice"}
-                </button>
-
-                {!currentPlayer?.inJail && (
-                  <button
-                    onClick={openSkillCard}
-                    disabled={!hasSkillCard || isRolling || isMoving}
-                    className="relative flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {hasSkillCard ? "🃏 Card" : "Exhausted"}
-                  </button>
-                )}
-              </>
-            ) : (
-              <button
-                onClick={endTurn}
-                disabled={gamePhase !== "ACTION" && gamePhase !== "END TURN"}
-                className="flex-1 rounded-[1.1vmin] border border-white/15 bg-white/10 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                End Turn
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* ================= PROPERTY MODAL ================= */}
-        {activeModal && (
-          <div
-            className="absolute inset-0 z-[100] flex items-center justify-center rounded-[2vmin] bg-black/70 p-[4vmin] backdrop-blur-md"
-            onClick={() => setActiveModal(null)}
-          >
-            <div className="relative w-[42vmin]" onClick={(e) => e.stopPropagation()}>
-              {/* Flag / icon badge - centered on the card's top edge, half
+              <div className="relative w-[42vmin]" onClick={(e) => e.stopPropagation()}>
+                {/* Flag / icon badge - centered on the card's top edge, half
                   poking out above the header, half sitting inside it. */}
-              <div className="absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1/2">
-                {activeModal.countryCode ? (
-                  <div className="h-[5vmin] w-[7.6vmin] overflow-hidden rounded-[0.8vmin] border-[0.28vmin] border-white shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
-                    <Flag code={activeModal.countryCode} className="h-full w-full object-cover" />
-                  </div>
-                ) : (
-                  <div className="flex h-[5.4vmin] w-[5.4vmin] items-center justify-center rounded-full border-[0.28vmin] border-white bg-[#1c1730] text-[2.6vmin] shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
-                    {activeModal.icon}
-                  </div>
-                )}
-              </div>
-
-              <div
-                className="overflow-hidden rounded-[1.8vmin] border bg-[#161224] shadow-2xl"
-                style={{
-                  borderColor: getTileOwner(activeModal.id)
-                    ? `${getTileOwner(activeModal.id)!.color}66`
-                    : "rgba(255,255,255,0.08)",
-                }}
-              >
-              <div className="bg-gradient-to-r from-indigo-900/80 to-purple-900/60 px-[2.5vmin] pb-[1.8vmin] pt-[3.2vmin] text-center">
-                <h2 className="text-[2.6vmin] font-black uppercase tracking-wider text-white">
-                  {activeModal.name}
-                </h2>
-                {getTileOwner(activeModal.id) && (
-                  <div
-                    className="mt-[0.6vmin] text-[1.1vmin] font-bold uppercase tracking-widest"
-                    style={{ color: getTileOwner(activeModal.id)!.color }}
-                  >
-                    {getTileOwner(activeModal.id)!.id === currentPlayer?.id
-                      ? "Your Property"
-                      : `${getTileOwner(activeModal.id)!.name}'s Property`}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-[2.5vmin]">
-                {PROPERTY_TYPES.has(activeModal.type) &&
-                  activeModal.rents &&
-                  (() => {
-                    const owner = getTileOwner(activeModal.id);
-                    // No owner → nothing is "current" yet, so every row stays
-                    // plain white. Owned → whichever tier (0 = base rent,
-                    // 1-4 = houses, 5 = hotel) matches the actual house count
-                    // lights up green; everything else stays white/gray.
-                    const activeTier = owner ? Math.min(propertyHouses[activeModal.id] || 0, 5) : -1;
-                    const rows = [
-                      { label: "with rent", value: activeModal.rents[0] },
-                      { label: "with one house", value: activeModal.rents[1] },
-                      { label: "with two houses", value: activeModal.rents[2] },
-                      { label: "with three houses", value: activeModal.rents[3] },
-                      { label: "with four houses", value: activeModal.rents[4] },
-                      { label: "with a hotel", value: activeModal.rents[5] },
-                    ];
-
-                    return (
-                      <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
-                        {rows.map((row, idx) => {
-                          const isActive = idx === activeTier;
-                          return (
-                            <div
-                              key={row.label}
-                              className={`flex justify-between ${isActive ? "text-emerald-400" : "text-gray-400"}`}
-                            >
-                              <span>{row.label}</span>
-                              <span className={`font-black ${isActive ? "text-emerald-400" : "font-bold text-white"}`}>
-                                ${row.value}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-
-                {/* Utility-style tiles (airports / electricity / internet): rent
-                    scales with how many of that same type the owner holds,
-                    not with houses - shown here as a simple tier list. */}
-                {UTILITY_TYPES.has(activeModal.type) && UTILITY_RENT_TABLE[activeModal.type] && (
-                  <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
-                    {UTILITY_RENT_TABLE[activeModal.type].map((amount, idx) => (
-                      <div key={idx} className="flex justify-between text-gray-400">
-                        <span>if owner holds {idx + 1}</span>
-                        <span className="font-bold text-white">${amount}</span>
-                      </div>
-                    ))}
-                    {getTileOwner(activeModal.id) && (
-                      <div className="flex justify-between border-t border-white/10 pt-[0.7vmin] text-emerald-400">
-                        <span>currently owns</span>
-                        <span className="font-black">
-                          {getUtilityOwnerCount(activeModal.type, getTileOwner(activeModal.id)!.id)} of this type
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between border-t border-white/10 pt-[1.5vmin] text-[1.4vmin]">
-                  <div className="text-center">
-                    <div className="text-gray-500">Price</div>
-                    <div className="font-black text-white">{activeModal.price}</div>
-                  </div>
-                  {PROPERTY_TYPES.has(activeModal.type) && (
-                    <>
-                      <div className="text-center">
-                        <div className="text-gray-500">🏠</div>
-                        <div className="font-black text-white">${activeModal.houseCost ?? 100}</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-gray-500">🏨</div>
-                        <div className="font-black text-white">${activeModal.hotelCost ?? 100}</div>
-                      </div>
-                    </>
+                <div className="absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1/2">
+                  {activeModal.countryCode ? (
+                    <div className="h-[5vmin] w-[7.6vmin] overflow-hidden rounded-[0.8vmin] border-[0.28vmin] border-white shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
+                      <Flag code={activeModal.countryCode} className="h-full w-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="flex h-[5.4vmin] w-[5.4vmin] items-center justify-center rounded-full border-[0.28vmin] border-white bg-[#1c1730] text-[2.6vmin] shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
+                      {activeModal.icon}
+                    </div>
                   )}
                 </div>
 
-                {getTileOwner(activeModal.id)?.id === currentPlayer?.id &&
-                  (() => {
-                    const isUpgradable = PROPERTY_TYPES.has(activeModal.type);
-                    const sellRefund = Math.floor(Math.abs(parsePrice(activeModal.price) || 0) / 2);
-                    const currentHouses = propertyHouses[activeModal.id] || 0;
-                    const maxedOut = currentHouses >= 5;
-                    const upgradeCost = currentHouses === 4 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
-                    // Degrading always refunds 50% of the SAME cost that was
-                    // paid to build the level currently being removed - e.g.
-                    // upgrade to a hotel for $100, degrade it and get $50
-                    // back (downgradeHouse already implements this refund).
-                    const degradeCost = currentHouses === 5 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
-                    const degradeRefund = Math.floor(degradeCost / 2);
-                    const canDegrade = currentHouses > 0;
-
-                    return (
+                <div
+                  className="overflow-hidden rounded-[1.8vmin] border bg-[#161224] shadow-2xl"
+                  style={{
+                    borderColor: getTileOwner(activeModal.id)
+                      ? `${getTileOwner(activeModal.id)!.color}66`
+                      : "rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <div className="bg-gradient-to-r from-indigo-900/80 to-purple-900/60 px-[2.5vmin] pb-[1.8vmin] pt-[3.2vmin] text-center">
+                    <h2 className="text-[2.6vmin] font-black uppercase tracking-wider text-white">
+                      {activeModal.name}
+                    </h2>
+                    {getTileOwner(activeModal.id) && (
                       <div
-                        className={`mt-[2vmin] grid gap-[1.2vmin] ${
-                          isUpgradable ? "grid-cols-3" : "grid-cols-1"
-                        }`}
+                        className="mt-[0.6vmin] text-[1.1vmin] font-bold uppercase tracking-widest"
+                        style={{ color: getTileOwner(activeModal.id)!.color }}
                       >
-                        <button
-                          onClick={() => sellPropertyEntirely(activeModal.id)}
-                          className="rounded-[0.9vmin] border-[0.18vmin] border-red-500 bg-red-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(239,68,68,0.85),0_0_1.6vmin_rgba(239,68,68,0.65)]"
-                        >
-                          Sell (+${sellRefund})
-                        </button>
-                        {isUpgradable && (
-                          <>
-                            <button
-                              onClick={() => upgradeHouse(activeModal.id)}
-                              disabled={maxedOut}
-                              className="rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
-                            >
-                              {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
-                            </button>
-                            <button
-                              onClick={() => downgradeHouse(activeModal.id)}
-                              disabled={!canDegrade}
-                              className="rounded-[0.9vmin] border-[0.18vmin] border-orange-500 bg-orange-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(249,115,22,0.85),0_0_1.6vmin_rgba(249,115,22,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
-                            >
-                              {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
-                            </button>
-                          </>
+                        {getTileOwner(activeModal.id)!.id === currentPlayer?.id
+                          ? "Your Property"
+                          : `${getTileOwner(activeModal.id)!.name}'s Property`}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-[2.5vmin]">
+                    {PROPERTY_TYPES.has(activeModal.type) &&
+                      activeModal.rents &&
+                      (() => {
+                        const owner = getTileOwner(activeModal.id);
+                        // No owner → nothing is "current" yet, so every row stays
+                        // plain white. Owned → whichever tier (0 = base rent,
+                        // 1-4 = houses, 5 = hotel) matches the actual house count
+                        // lights up green; everything else stays white/gray.
+                        const activeTier = owner ? Math.min(propertyHouses[activeModal.id] || 0, 5) : -1;
+                        const rows = [
+                          { label: "with rent", value: activeModal.rents[0] },
+                          { label: "with one house", value: activeModal.rents[1] },
+                          { label: "with two houses", value: activeModal.rents[2] },
+                          { label: "with three houses", value: activeModal.rents[3] },
+                          { label: "with four houses", value: activeModal.rents[4] },
+                          { label: "with a hotel", value: activeModal.rents[5] },
+                        ];
+
+                        return (
+                          <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
+                            {rows.map((row, idx) => {
+                              const isActive = idx === activeTier;
+                              return (
+                                <div
+                                  key={row.label}
+                                  className={`flex justify-between ${isActive ? "text-emerald-400" : "text-gray-400"}`}
+                                >
+                                  <span>{row.label}</span>
+                                  <span className={`font-black ${isActive ? "text-emerald-400" : "font-bold text-white"}`}>
+                                    ${row.value}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+
+                    {/* Utility-style tiles (airports / electricity / internet): rent
+                    scales with how many of that same type the owner holds,
+                    not with houses - shown here as a simple tier list. */}
+                    {UTILITY_TYPES.has(activeModal.type) && UTILITY_RENT_TABLE[activeModal.type] && (
+                      <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
+                        {UTILITY_RENT_TABLE[activeModal.type].map((amount, idx) => (
+                          <div key={idx} className="flex justify-between text-gray-400">
+                            <span>if owner holds {idx + 1}</span>
+                            <span className="font-bold text-white">${amount}</span>
+                          </div>
+                        ))}
+                        {getTileOwner(activeModal.id) && (
+                          <div className="flex justify-between border-t border-white/10 pt-[0.7vmin] text-emerald-400">
+                            <span>currently owns</span>
+                            <span className="font-black">
+                              {getUtilityOwnerCount(activeModal.type, getTileOwner(activeModal.id)!.id)} of this type
+                            </span>
+                          </div>
                         )}
                       </div>
-                    );
-                  })()}
+                    )}
 
-                {!getTileOwner(activeModal.id) && OWNABLE_TYPES.has(activeModal.type) && (
-                  <button
-                    onClick={() => buyProperty(activeModal)}
-                    disabled={(currentPlayer?.money ?? 0) < (parsePrice(activeModal.price) || 0)}
-                    className="mt-[2vmin] w-full rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
-                  >
-                    Buy for {activeModal.price}
-                  </button>
-                )}
-              </div>
-              </div>
-
-              <button
-                onClick={() => setActiveModal(null)}
-                className="absolute right-[1.4vmin] top-[1.4vmin] z-30 text-[2vmin] text-white/50 hover:text-white"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================= SPECIAL RULE MODALS ================= */}
-        {specialModal && (
-          <div
-            className="absolute inset-0 z-[110] flex items-center justify-center rounded-[2vmin] bg-black/75 p-[4vmin] backdrop-blur-md"
-            onClick={() => setSpecialModal(null)}
-          >
-            <div
-              className="w-[48vmin] rounded-[1.8vmin] border border-white/10 bg-[#111018] p-[3vmin] shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {specialModal === "treasure" && (
-                <>
-                  <div className="mb-[1.5vmin] text-center text-[3.5vmin]">🎁</div>
-                  <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-yellow-300">
-                    Treasure Chest
-                  </h3>
-                  <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
-                    <p className="font-bold text-white">Roll outcome:</p>
-                    <p>• <span className="text-emerald-400">1–2</span> → Collect $100 from bank</p>
-                    <p>• <span className="text-emerald-400">3–4</span> → Collect $200 + free Movement Card</p>
-                    <p>• <span className="text-yellow-400">5</span> → Advance to nearest Airport</p>
-                    <p>• <span className="text-red-400">6</span> → Pay $150 luxury tax</p>
-                  </div>
-                </>
-              )}
-
-              {specialModal === "surprise" && (
-                <>
-                  <div className="mb-[1.5vmin] text-center text-[3.5vmin]">❓</div>
-                  <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-purple-300">
-                    Surprise Card
-                  </h3>
-                  <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
-                    <p className="font-bold text-white">Roll outcome:</p>
-                    <p>• <span className="text-red-400">1–2</span> → Go directly to JAIL</p>
-                    <p>• <span className="text-yellow-400">3–4</span> → Jump forward 8 spaces</p>
-                    <p>• <span className="text-emerald-400">5</span> → Receive $250 dividend</p>
-                    <p>• <span className="text-blue-400">6</span> → Swap position with any player</p>
-                  </div>
-                </>
-              )}
-
-              {specialModal === "tax" && (
-                <>
-                  <div className="mb-[1.5vmin] text-center text-[3.5vmin]">📉</div>
-                  <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-red-300">
-                    Tax Office
-                  </h3>
-                  <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
-                    <p className="font-bold text-white">Fixed amounts:</p>
-                    <p>• Income Tax → Pay <span className="text-red-400">$100</span></p>
-                    <p>• Fixed Tax → Pay <span className="text-red-400">$200</span></p>
-                    <p>• Luxury Tax → Pay <span className="text-red-400">$250</span></p>
-                    <p className="mt-[1vmin] text-gray-500">Tax is mandatory when you land here.</p>
-                  </div>
-                </>
-              )}
-
-              {specialModal === "resthouse" && (
-                <>
-                  <div className="mb-[1.5vmin] text-center text-[3.8vmin]">🏨</div>
-                  <h3 className="mb-[1vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-emerald-400">
-                    Rest House Pot
-                  </h3>
-                  <div className="mb-[1.8vmin] flex flex-col items-center justify-center rounded-[1.2vmin] border-2 border-emerald-400/40 bg-emerald-950/40 p-[1.6vmin] text-center">
-                    <span className="text-[1.2vmin] font-bold uppercase tracking-wider text-gray-300">Current JackPot:</span>
-                    <span className="text-[3.2vmin] font-black text-emerald-300 drop-shadow-lg">
-                      ${restHousePot.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="space-y-[0.8vmin] text-[1.3vmin] text-gray-300">
-                    <p>• All luxury taxes, fines, bail, and club fees accumulate in this pot.</p>
-                    <p>• Whoever lands directly on <span className="font-bold text-white">REST HOUSE</span> collects all stored money!</p>
-                    <p>• You also take a relaxing rest for one turn.</p>
-                  </div>
-                </>
-              )}
-
-              <button
-                onClick={() => setSpecialModal(null)}
-                className="mt-[2.5vmin] w-full rounded-[1vmin] bg-white/10 py-[1.3vmin] text-[1.3vmin] font-bold text-white hover:bg-white/20"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================= MOVEMENT CARD SELECTOR ================= */}
-        {showCardSelector && (
-          <div
-            className="absolute inset-0 z-[110] flex items-center justify-center rounded-[2vmin] bg-black/75 p-[4vmin] backdrop-blur-md"
-            onClick={() => {
-              setShowCardSelector(false);
-              setSelectedCardValue(null);
-            }}
-          >
-            <div
-              className="w-[48vmin] rounded-[1.8vmin] border border-emerald-500/30 bg-[#111018] p-[2.8vmin] shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-[0.6vmin] text-center text-[2.6vmin] font-black uppercase tracking-widest text-white">
-                Movement Card
-              </div>
-              <p className="mb-[2vmin] text-center text-[1.2vmin] text-gray-400">
-                Choose how many spaces to move. Card recharges when you pass START.
-              </p>
-
-              <div className="grid grid-cols-3 gap-[1vmin]">
-                {[1, 2, 3, 4, 5, 6].map((value) => (
-                  <button
-                    key={value}
-                    onClick={() => setSelectedCardValue(value)}
-                    className={`rounded-[1vmin] border py-[1.8vmin] text-[2.6vmin] font-black transition-all ${
-                      selectedCardValue === value
-                        ? "scale-105 border-emerald-400 bg-emerald-500/20 text-emerald-300"
-                        : "border-white/10 bg-white/[0.03] text-white hover:border-white/30"
-                    }`}
-                  >
-                    {value}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-[2vmin] flex gap-[1vmin]">
-                <button
-                  onClick={() => {
-                    setShowCardSelector(false);
-                    setSelectedCardValue(null);
-                  }}
-                  className="flex-1 rounded-[0.9vmin] bg-white/5 py-[1.2vmin] text-[1.2vmin] font-bold text-gray-400 hover:bg-white/10"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmSkillCard}
-                  disabled={!selectedCardValue}
-                  className="flex-1 rounded-[0.9vmin] bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-white disabled:opacity-30"
-                >
-                  Confirm {selectedCardValue ? `→ ${selectedCardValue}` : ""}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ================= GAME OVER ================= */}
-        {winner && (
-          <div className="absolute inset-0 z-[130] flex items-center justify-center rounded-[2vmin] bg-black/85 p-[4vmin] backdrop-blur-md">
-            <div
-              className="w-[46vmin] rounded-[1.8vmin] border-2 p-[3vmin] text-center shadow-2xl"
-              style={{ borderColor: winner.color, backgroundColor: "#111018" }}
-            >
-              <div className="mb-[1vmin] text-[4vmin]">🏆</div>
-              <h2 className="mb-[0.5vmin] text-[2.6vmin] font-black uppercase tracking-widest text-white">
-                Game Over
-              </h2>
-              <p className="mb-[2vmin] text-[1.6vmin] font-bold" style={{ color: winner.color }}>
-                {winner.name} wins!
-              </p>
-              <p className="mb-[2vmin] text-[1.2vmin] text-gray-400">Every other player has gone bankrupt.</p>
-              <button
-                onClick={() => window.location.reload()}
-                className="w-full rounded-[1vmin] bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-white hover:scale-[1.02]"
-              >
-                New Game
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================= BANKRUPT CONFIRMATION MODAL ================= */}
-        {showBankruptModal && bankruptCandidateId !== null && (
-          <div
-            className="absolute inset-0 z-[120] flex items-center justify-center rounded-[2vmin] bg-black/80 p-[4vmin] backdrop-blur-md"
-            onClick={() => setShowBankruptModal(false)}
-          >
-            <div
-              className="w-[44vmin] rounded-[1.8vmin] border border-red-500/40 bg-[#120f1d] p-[2.6vmin] text-center shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-[0.8vmin] text-[3.8vmin]">🏳️</div>
-              <h3 className="mb-[0.5vmin] text-[2.2vmin] font-black uppercase tracking-wider text-red-400">
-                Declare Bankruptcy
-              </h3>
-              {(() => {
-                const targetPlayer = players.find((p) => p.id === bankruptCandidateId);
-                if (!targetPlayer) return null;
-                const ownedProps = BOARD_TILES.filter((t) => propertyOwnership[t.id] === targetPlayer.id);
-
-                return (
-                  <>
-                    <p className="text-[1.25vmin] text-gray-200">
-                      Are you sure{" "}
-                      <span className="font-bold" style={{ color: targetPlayer.color }}>
-                        {targetPlayer.name}
-                      </span>{" "}
-                      wants to surrender and declare bankruptcy?
-                    </p>
-                    <p className="mt-[0.8vmin] text-[1.05vmin] text-gray-400">
-                      Whoever clicks this gets out immediately. All {ownedProps.length} propert{ownedProps.length === 1 ? "y" : "ies"} will be returned to the bank.
-                    </p>
-                    <div className="mt-[2.2vmin] flex gap-[1vmin]">
-                      <button
-                        onClick={() => setShowBankruptModal(false)}
-                        className="flex-1 rounded-[0.9vmin] bg-white/10 py-[1.1vmin] text-[1.2vmin] font-bold text-gray-300 hover:bg-white/20"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => handleVoluntaryBankruptcy(targetPlayer.id)}
-                        className="flex-1 rounded-[0.9vmin] bg-gradient-to-r from-red-600 to-rose-600 py-[1.1vmin] text-[1.2vmin] font-black uppercase text-white shadow-lg shadow-red-600/30 hover:brightness-110 active:scale-95"
-                      >
-                        Yes, Bankrupt
-                      </button>
+                    <div className="flex items-center justify-between border-t border-white/10 pt-[1.5vmin] text-[1.4vmin]">
+                      <div className="text-center">
+                        <div className="text-gray-500">Price</div>
+                        <div className="font-black text-white">{activeModal.price}</div>
+                      </div>
+                      {PROPERTY_TYPES.has(activeModal.type) && (
+                        <>
+                          <div className="text-center">
+                            <div className="text-gray-500">🏠</div>
+                            <div className="font-black text-white">${activeModal.houseCost ?? 100}</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-gray-500">🏨</div>
+                            <div className="font-black text-white">${activeModal.hotelCost ?? 100}</div>
+                          </div>
+                        </>
+                      )}
                     </div>
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        )}
 
-        {/* ================= CREATE / NEGOTIATE TRADE MODAL ================= */}
-        {activeTradeModal === "create" && currentPlayer && (
-          <div
-            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
-            onClick={() => setActiveTradeModal(null)}
-          >
-            <div
-              className="relative flex max-h-[92vh] w-[88vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#120c24] text-white shadow-[0_0_5vmin_rgba(139,92,246,0.45)]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="relative border-b border-purple-500/30 bg-[#181133] py-[1.8vmin] text-center">
-                <h3 className="text-[2.3vmin] font-black uppercase tracking-wider text-white flex items-center justify-center gap-[0.8vmin]">
-                  <span>🤝</span>
-                  <span>{negotiatingTradeId ? "Negotiate Trade Offer" : "Create Trade Offer"}</span>
-                </h3>
-                <p className="mt-[0.2vmin] text-[1.1vmin] font-medium text-gray-300">
-                  Exchange cash and property ownership with any active player
-                </p>
+                    {getTileOwner(activeModal.id)?.id === currentPlayer?.id &&
+                      (() => {
+                        const isUpgradable = PROPERTY_TYPES.has(activeModal.type);
+                        const sellRefund = Math.floor(Math.abs(parsePrice(activeModal.price) || 0) / 2);
+                        const currentHouses = propertyHouses[activeModal.id] || 0;
+                        const maxedOut = currentHouses >= 5;
+                        const upgradeCost = currentHouses === 4 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
+                        // Degrading always refunds 50% of the SAME cost that was
+                        // paid to build the level currently being removed - e.g.
+                        // upgrade to a hotel for $100, degrade it and get $50
+                        // back (downgradeHouse already implements this refund).
+                        const degradeCost = currentHouses === 5 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
+                        const degradeRefund = Math.floor(degradeCost / 2);
+                        const canDegrade = currentHouses > 0;
+
+                        return (
+                          <div
+                            className={`mt-[2vmin] grid gap-[1.2vmin] ${isUpgradable ? "grid-cols-3" : "grid-cols-1"
+                              }`}
+                          >
+                            {enableMortgage && (
+                            <button
+                              onClick={() => sellPropertyEntirely(activeModal.id)}
+                              className="rounded-[0.9vmin] border-[0.18vmin] border-red-500 bg-red-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(239,68,68,0.85),0_0_1.6vmin_rgba(239,68,68,0.65)]"
+                            >
+                              Sell (+${sellRefund})
+                            </button>
+                            )}
+                            {isUpgradable && (
+                              <>
+                                <button
+                                  onClick={() => upgradeHouse(activeModal.id)}
+                                  disabled={maxedOut}
+                                  className="rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                                >
+                                  {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
+                                </button>
+                                <button
+                                  onClick={() => downgradeHouse(activeModal.id)}
+                                  disabled={!canDegrade}
+                                  className="rounded-[0.9vmin] border-[0.18vmin] border-orange-500 bg-orange-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(249,115,22,0.85),0_0_1.6vmin_rgba(249,115,22,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                                >
+                                  {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                    {!getTileOwner(activeModal.id) && OWNABLE_TYPES.has(activeModal.type) && (
+                      <button
+                        onClick={() => buyProperty(activeModal)}
+                        disabled={(currentPlayer?.money ?? 0) < (parsePrice(activeModal.price) || 0)}
+                        className="mt-[2vmin] w-full rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                      >
+                        Buy for {activeModal.price}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <button
-                  onClick={() => setActiveTradeModal(null)}
-                  className="absolute right-[1.8vmin] top-[1.6vmin] flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full bg-white/10 text-[1.5vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
-                  title="Close Modal"
+                  onClick={() => setActiveModal(null)}
+                  className="absolute right-[1.4vmin] top-[1.4vmin] z-30 text-[2vmin] text-white/50 hover:text-white"
                 >
                   ✕
                 </button>
               </div>
+            </div>
+          )}
 
-              {/* Target Player Selector (Tabs) */}
-              {alivePlayers.filter((p) => p.id !== currentPlayer.id).length > 0 && (
-                <div className="flex items-center gap-[1vmin] border-b border-white/10 bg-[#160e2e] px-[2.4vmin] py-[1.2vmin]">
-                  <span className="text-[1.2vmin] font-black uppercase tracking-wider text-purple-300 shrink-0">
-                    Trade Partner:
-                  </span>
-                  <div className="flex flex-wrap gap-[0.8vmin]">
-                    {alivePlayers
-                      .filter((p) => p.id !== currentPlayer.id)
-                      .map((partner) => {
-                        const isSelected = tradeDraftTargetId === partner.id;
-                        return (
-                          <button
-                            key={partner.id}
-                            onClick={() => {
-                              setTradeDraftTargetId(partner.id);
-                              setTradeDraftRequestedMoney(0);
-                              setTradeDraftRequestedPropIds([]);
-                            }}
-                            className={`flex items-center gap-[0.7vmin] rounded-[0.9vmin] px-[1.5vmin] py-[0.65vmin] text-[1.25vmin] font-black transition-all cursor-pointer ${
-                              isSelected
-                                ? "border-2 border-cyan-300 bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 text-white shadow-[0_0_1.5vmin_rgba(6,182,212,0.5)] scale-[1.03]"
-                                : "border border-white/15 bg-white/5 text-gray-200 hover:border-purple-400/60 hover:bg-white/10"
-                            }`}
-                          >
-                            <span className="h-[1.2vmin] w-[1.2vmin] rounded-full shadow" style={{ backgroundColor: partner.color }} />
-                            <span>{partner.name || `Player ${partner.id}`}</span>
-                          </button>
-                        );
-                      })}
-                  </div>
+          {/* ================= SPECIAL RULE MODALS ================= */}
+          {specialModal && (
+            <div
+              className="absolute inset-0 z-[110] flex items-center justify-center rounded-[2vmin] bg-black/75 p-[4vmin] backdrop-blur-md"
+              onClick={() => setSpecialModal(null)}
+            >
+              <div
+                className="w-[48vmin] rounded-[1.8vmin] border border-white/10 bg-[#111018] p-[3vmin] shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {specialModal === "treasure" && (
+                  <>
+                    <div className="mb-[1.5vmin] text-center text-[3.5vmin]">🎁</div>
+                    <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-yellow-300">
+                      Treasure Chest
+                    </h3>
+                    <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
+                      <p className="font-bold text-white">Roll outcome:</p>
+                      <p>• <span className="text-emerald-400">1–2</span> → Collect $100 from bank</p>
+                      <p>• <span className="text-emerald-400">3–4</span> → Collect $200 + free Movement Card</p>
+                      <p>• <span className="text-yellow-400">5</span> → Advance to nearest Airport</p>
+                      <p>• <span className="text-red-400">6</span> → Pay $150 luxury tax</p>
+                    </div>
+                  </>
+                )}
+
+                {specialModal === "surprise" && (
+                  <>
+                    <div className="mb-[1.5vmin] text-center text-[3.5vmin]">❓</div>
+                    <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-purple-300">
+                      Surprise Card
+                    </h3>
+                    <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
+                      <p className="font-bold text-white">Roll outcome:</p>
+                      <p>• <span className="text-red-400">1–2</span> → Go directly to JAIL</p>
+                      <p>• <span className="text-yellow-400">3–4</span> → Jump forward 8 spaces</p>
+                      <p>• <span className="text-emerald-400">5</span> → Receive $250 dividend</p>
+                      <p>• <span className="text-blue-400">6</span> → Swap position with any player</p>
+                    </div>
+                  </>
+                )}
+
+                {specialModal === "tax" && (
+                  <>
+                    <div className="mb-[1.5vmin] text-center text-[3.5vmin]">📉</div>
+                    <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-red-300">
+                      Tax Office
+                    </h3>
+                    <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
+                      <p className="font-bold text-white">Fixed amounts:</p>
+                      <p>• Income Tax → Pay <span className="text-red-400">$100</span></p>
+                      <p>• Fixed Tax → Pay <span className="text-red-400">$200</span></p>
+                      <p>• Luxury Tax → Pay <span className="text-red-400">$250</span></p>
+                      <p className="mt-[1vmin] text-gray-500">Tax is mandatory when you land here.</p>
+                    </div>
+                  </>
+                )}
+
+                {specialModal === "resthouse" && (
+                  <>
+                    <div className="mb-[1.5vmin] text-center text-[3.8vmin]">🏨</div>
+                    <h3 className="mb-[1vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-emerald-400">
+                      Rest House Pot
+                    </h3>
+                    <div className="mb-[1.8vmin] flex flex-col items-center justify-center rounded-[1.2vmin] border-2 border-emerald-400/40 bg-emerald-950/40 p-[1.6vmin] text-center">
+                      <span className="text-[1.2vmin] font-bold uppercase tracking-wider text-gray-300">Current JackPot:</span>
+                      <span className="text-[3.2vmin] font-black text-emerald-300 drop-shadow-lg">
+                        ${restHousePot.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="space-y-[0.8vmin] text-[1.3vmin] text-gray-300">
+                      <p>• All luxury taxes, fines, bail, and club fees accumulate in this pot.</p>
+                      <p>• Whoever lands directly on <span className="font-bold text-white">REST HOUSE</span> collects all stored money!</p>
+                      <p>• You also take a relaxing rest for one turn.</p>
+                    </div>
+                  </>
+                )}
+
+                <button
+                  onClick={() => setSpecialModal(null)}
+                  className="mt-[2.5vmin] w-full rounded-[1vmin] bg-white/10 py-[1.3vmin] text-[1.3vmin] font-bold text-white hover:bg-white/20"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ================= MOVEMENT CARD SELECTOR ================= */}
+          {showCardSelector && (
+            <div
+              className="absolute inset-0 z-[110] flex items-center justify-center rounded-[2vmin] bg-black/75 p-[4vmin] backdrop-blur-md"
+              onClick={() => {
+                setShowCardSelector(false);
+                setSelectedCardValue(null);
+              }}
+            >
+              <div
+                className="w-[48vmin] rounded-[1.8vmin] border border-emerald-500/30 bg-[#111018] p-[2.8vmin] shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="mb-[0.6vmin] text-center text-[2.6vmin] font-black uppercase tracking-widest text-white">
+                  Movement Card
                 </div>
-              )}
+                <p className="mb-[2vmin] text-center text-[1.2vmin] text-gray-400">
+                  Choose how many spaces to move. Card recharges when you pass START.
+                </p>
 
-              {/* Dual-Column Trade Content */}
-              {(() => {
-                const targetPlayer = players.find((p) => p.id === tradeDraftTargetId);
-                const initiatorProps = BOARD_TILES.filter((t) => propertyOwnership[t.id] === currentPlayer.id);
-                const targetProps = targetPlayer
-                  ? BOARD_TILES.filter((t) => propertyOwnership[t.id] === targetPlayer.id)
-                  : [];
+                <div className="grid grid-cols-3 gap-[1vmin]">
+                  {[1, 2, 3, 4, 5, 6].map((value) => (
+                    <button
+                      key={value}
+                      onClick={() => setSelectedCardValue(value)}
+                      className={`rounded-[1vmin] border py-[1.8vmin] text-[2.6vmin] font-black transition-all ${selectedCardValue === value
+                          ? "scale-105 border-emerald-400 bg-emerald-500/20 text-emerald-300"
+                          : "border-white/10 bg-white/[0.03] text-white hover:border-white/30"
+                        }`}
+                    >
+                      {value}
+                    </button>
+                  ))}
+                </div>
 
-                return (
-                  <div className="flex flex-1 overflow-y-auto p-[2.4vmin] gap-[1vmin]">
-                    {/* Left Column: Initiator (Your Offer) */}
-                    <div className="flex flex-1 flex-col gap-[1.5vmin] pr-[1.4vmin]">
-                      <div className="flex items-center justify-between border-b border-purple-500/20 pb-[0.8vmin]">
-                        <div className="flex items-center gap-[0.8vmin]">
-                          <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: currentPlayer.color }} />
-                          <span className="text-[1.75vmin] font-black text-white">
-                            {currentPlayer.name || `Player ${currentPlayer.id}`}
-                          </span>
-                          <span className="rounded-full bg-purple-500/25 border border-purple-400/50 px-[0.8vmin] py-[0.15vmin] text-[0.9vmin] font-black uppercase text-purple-200">
-                            You
-                          </span>
-                        </div>
-                        <span className="text-[1.25vmin] font-bold text-gray-300">
-                          Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${currentPlayer.money.toLocaleString()}</span>
-                        </span>
+                <div className="mt-[2vmin] flex gap-[1vmin]">
+                  <button
+                    onClick={() => {
+                      setShowCardSelector(false);
+                      setSelectedCardValue(null);
+                    }}
+                    className="flex-1 rounded-[0.9vmin] bg-white/5 py-[1.2vmin] text-[1.2vmin] font-bold text-gray-400 hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmSkillCard}
+                    disabled={!selectedCardValue}
+                    className="flex-1 rounded-[0.9vmin] bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-white disabled:opacity-30"
+                  >
+                    Confirm {selectedCardValue ? `→ ${selectedCardValue}` : ""}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ================= GAME OVER ================= */}
+          {winner && (
+            <div className="absolute inset-0 z-[130] flex items-center justify-center rounded-[2vmin] bg-black/85 p-[4vmin] backdrop-blur-md">
+              <div
+                className="w-[46vmin] rounded-[1.8vmin] border-2 p-[3vmin] text-center shadow-2xl"
+                style={{ borderColor: winner.color, backgroundColor: "#111018" }}
+              >
+                <div className="mb-[1vmin] text-[4vmin]">🏆</div>
+                <h2 className="mb-[0.5vmin] text-[2.6vmin] font-black uppercase tracking-widest text-white">
+                  Game Over
+                </h2>
+                <p className="mb-[2vmin] text-[1.6vmin] font-bold" style={{ color: winner.color }}>
+                  {winner.name} wins!
+                </p>
+                <p className="mb-[2vmin] text-[1.2vmin] text-gray-400">Every other player has gone bankrupt.</p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="w-full rounded-[1vmin] bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-white hover:scale-[1.02]"
+                >
+                  New Game
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ================= BANKRUPT CONFIRMATION MODAL ================= */}
+          {showBankruptModal && bankruptCandidateId !== null && (
+            <div
+              className="absolute inset-0 z-[120] flex items-center justify-center rounded-[2vmin] bg-black/80 p-[4vmin] backdrop-blur-md"
+              onClick={() => setShowBankruptModal(false)}
+            >
+              <div
+                className="w-[44vmin] rounded-[1.8vmin] border border-red-500/40 bg-[#120f1d] p-[2.6vmin] text-center shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="mb-[0.8vmin] text-[3.8vmin]">🏳️</div>
+                <h3 className="mb-[0.5vmin] text-[2.2vmin] font-black uppercase tracking-wider text-red-400">
+                  Declare Bankruptcy
+                </h3>
+                {(() => {
+                  const targetPlayer = players.find((p) => p.id === bankruptCandidateId);
+                  if (!targetPlayer) return null;
+                  const ownedProps = BOARD_TILES.filter((t) => propertyOwnership[t.id] === targetPlayer.id);
+
+                  return (
+                    <>
+                      <p className="text-[1.25vmin] text-gray-200">
+                        Are you sure{" "}
+                        <span className="font-bold" style={{ color: targetPlayer.color }}>
+                          {targetPlayer.name}
+                        </span>{" "}
+                        wants to surrender and declare bankruptcy?
+                      </p>
+                      <p className="mt-[0.8vmin] text-[1.05vmin] text-gray-400">
+                        Whoever clicks this gets out immediately. All {ownedProps.length} propert{ownedProps.length === 1 ? "y" : "ies"} will be returned to the bank.
+                      </p>
+                      <div className="mt-[2.2vmin] flex gap-[1vmin]">
+                        <button
+                          onClick={() => setShowBankruptModal(false)}
+                          className="flex-1 rounded-[0.9vmin] bg-white/10 py-[1.1vmin] text-[1.2vmin] font-bold text-gray-300 hover:bg-white/20"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleVoluntaryBankruptcy(targetPlayer.id)}
+                          className="flex-1 rounded-[0.9vmin] bg-gradient-to-r from-red-600 to-rose-600 py-[1.1vmin] text-[1.2vmin] font-black uppercase text-white shadow-lg shadow-red-600/30 hover:brightness-110 active:scale-95"
+                        >
+                          Yes, Bankrupt
+                        </button>
                       </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
 
-                      {/* Cash Slider */}
-                      <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-purple-500/30 bg-[#181133] p-[1.4vmin]">
-                        <div className="flex items-center justify-between text-[1.2vmin] font-black text-purple-200 uppercase tracking-wide">
-                          <span>💵 Offer Cash:</span>
-                          <span className="rounded-full border border-purple-400/80 bg-purple-900/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-purple-100 shadow-[0_0_1vmin_rgba(168,85,247,0.4)]">
-                            ${tradeDraftOfferedMoney.toLocaleString()}
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max={Math.max(0, currentPlayer.money)}
-                          value={tradeDraftOfferedMoney}
-                          onChange={(e) => setTradeDraftOfferedMoney(Math.min(currentPlayer.money, Math.max(0, Number(e.target.value))))}
-                          className="h-[0.9vmin] w-full cursor-pointer accent-purple-500"
-                        />
-                        <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
-                          <span>$0</span>
-                          <span>${currentPlayer.money.toLocaleString()}</span>
-                        </div>
-                      </div>
+          {/* ================= CREATE / NEGOTIATE TRADE MODAL ================= */}
+          {activeTradeModal === "create" && currentPlayer && (
+            <div
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
+              onClick={() => setActiveTradeModal(null)}
+            >
+              <div
+                className="relative flex max-h-[92vh] w-[88vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#120c24] text-white shadow-[0_0_5vmin_rgba(139,92,246,0.45)]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="relative border-b border-purple-500/30 bg-[#181133] py-[1.8vmin] text-center">
+                  <h3 className="text-[2.3vmin] font-black uppercase tracking-wider text-white flex items-center justify-center gap-[0.8vmin]">
+                    <span>🤝</span>
+                    <span>{negotiatingTradeId ? "Negotiate Trade Offer" : "Create Trade Offer"}</span>
+                  </h3>
+                  <p className="mt-[0.2vmin] text-[1.1vmin] font-medium text-gray-300">
+                    Exchange cash and property ownership with any active player
+                  </p>
+                  <button
+                    onClick={() => setActiveTradeModal(null)}
+                    className="absolute right-[1.8vmin] top-[1.6vmin] flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full bg-white/10 text-[1.5vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                    title="Close Modal"
+                  >
+                    ✕
+                  </button>
+                </div>
 
-                      {/* Properties Offered */}
-                      <div className="flex flex-1 flex-col gap-[0.8vmin]">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[1.25vmin] font-black uppercase tracking-wider text-purple-300">
-                            Properties to Give:
-                          </span>
-                          <span className="text-[1.1vmin] font-bold text-gray-400">
-                            {tradeDraftOfferedPropIds.length} selected
-                          </span>
-                        </div>
-                        <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
-                          {initiatorProps.length === 0 ? (
-                            <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
-                              <span className="text-[2.4vmin] opacity-70">🏚️</span>
-                              <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
-                              <span className="text-[1.1vmin] text-gray-400">You don't own any properties to give in this trade</span>
-                            </div>
-                          ) : (
-                            initiatorProps.map((tile) => {
-                              const isSelected = tradeDraftOfferedPropIds.includes(tile.id);
-                              return (
-                                <button
-                                  key={tile.id}
-                                  type="button"
-                                  onClick={() =>
-                                    setTradeDraftOfferedPropIds((prev) =>
-                                      prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
-                                    )
-                                  }
-                                  className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${
-                                    isSelected
-                                      ? "border-2 border-purple-300 bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 text-white shadow-[0_0_1.6vmin_rgba(168,85,247,0.6)] scale-[1.01]"
-                                      : "border border-white/15 bg-[#1b1438] text-gray-200 hover:border-purple-400/60 hover:bg-[#231b47] hover:text-white"
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-[0.9vmin]">
-                                    {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
-                                    <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
-                                    {isSelected && <span className="text-[1.2vmin] font-black text-purple-200">✓</span>}
-                                  </div>
-                                  <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
-                                    {tile.price}
-                                  </span>
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
+                {/* Target Player Selector (Tabs) */}
+                {alivePlayers.filter((p) => p.id !== currentPlayer.id).length > 0 && (
+                  <div className="flex items-center gap-[1vmin] border-b border-white/10 bg-[#160e2e] px-[2.4vmin] py-[1.2vmin]">
+                    <span className="text-[1.2vmin] font-black uppercase tracking-wider text-purple-300 shrink-0">
+                      Trade Partner:
+                    </span>
+                    <div className="flex flex-wrap gap-[0.8vmin]">
+                      {alivePlayers
+                        .filter((p) => p.id !== currentPlayer.id)
+                        .map((partner) => {
+                          const isSelected = tradeDraftTargetId === partner.id;
+                          return (
+                            <button
+                              key={partner.id}
+                              onClick={() => {
+                                setTradeDraftTargetId(partner.id);
+                                setTradeDraftRequestedMoney(0);
+                                setTradeDraftRequestedPropIds([]);
+                              }}
+                              className={`flex items-center gap-[0.7vmin] rounded-[0.9vmin] px-[1.5vmin] py-[0.65vmin] text-[1.25vmin] font-black transition-all cursor-pointer ${isSelected
+                                  ? "border-2 border-cyan-300 bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 text-white shadow-[0_0_1.5vmin_rgba(6,182,212,0.5)] scale-[1.03]"
+                                  : "border border-white/15 bg-white/5 text-gray-200 hover:border-purple-400/60 hover:bg-white/10"
+                                }`}
+                            >
+                              <span className="h-[1.2vmin] w-[1.2vmin] rounded-full shadow" style={{ backgroundColor: partner.color }} />
+                              <span>{partner.name || `Player ${partner.id}`}</span>
+                            </button>
+                          );
+                        })}
                     </div>
+                  </div>
+                )}
 
-                    {/* Center Divider with ↔ */}
-                    <div className="relative flex flex-col items-center justify-center px-[0.8vmin]">
-                      <div className="h-full w-[0.25vmin] bg-purple-500/30" />
-                      <div className="absolute flex h-[3.8vmin] w-[3.8vmin] items-center justify-center rounded-full border-2 border-purple-300 bg-[#211642] text-[1.6vmin] text-purple-200 shadow-[0_0_1.6vmin_rgba(168,85,247,0.5)]">
-                        ↔
-                      </div>
-                    </div>
+                {/* Dual-Column Trade Content */}
+                {(() => {
+                  const targetPlayer = players.find((p) => p.id === tradeDraftTargetId);
+                  const initiatorProps = BOARD_TILES.filter((t) => propertyOwnership[t.id] === currentPlayer.id);
+                  const targetProps = targetPlayer
+                    ? BOARD_TILES.filter((t) => propertyOwnership[t.id] === targetPlayer.id)
+                    : [];
 
-                    {/* Right Column: Target Player (Requested from them) */}
-                    <div className="flex flex-1 flex-col gap-[1.5vmin] pl-[1.4vmin]">
-                      {targetPlayer ? (
-                        <>
-                          <div className="flex items-center justify-between border-b border-cyan-500/20 pb-[0.8vmin]">
-                            <div className="flex items-center gap-[0.8vmin]">
-                              <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: targetPlayer.color }} />
-                              <span className="text-[1.75vmin] font-black text-white">
-                                {targetPlayer.name || `Player ${targetPlayer.id}`}
-                              </span>
-                            </div>
-                            <span className="text-[1.25vmin] font-bold text-gray-300">
-                              Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${targetPlayer.money.toLocaleString()}</span>
+                  return (
+                    <div className="flex flex-1 overflow-y-auto p-[2.4vmin] gap-[1vmin]">
+                      {/* Left Column: Initiator (Your Offer) */}
+                      <div className="flex flex-1 flex-col gap-[1.5vmin] pr-[1.4vmin]">
+                        <div className="flex items-center justify-between border-b border-purple-500/20 pb-[0.8vmin]">
+                          <div className="flex items-center gap-[0.8vmin]">
+                            <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: currentPlayer.color }} />
+                            <span className="text-[1.75vmin] font-black text-white">
+                              {currentPlayer.name || `Player ${currentPlayer.id}`}
+                            </span>
+                            <span className="rounded-full bg-purple-500/25 border border-purple-400/50 px-[0.8vmin] py-[0.15vmin] text-[0.9vmin] font-black uppercase text-purple-200">
+                              You
                             </span>
                           </div>
+                          <span className="text-[1.25vmin] font-bold text-gray-300">
+                            Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${currentPlayer.money.toLocaleString()}</span>
+                          </span>
+                        </div>
 
-                          {/* Cash Slider for Target */}
-                          <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-cyan-500/30 bg-[#111933] p-[1.4vmin]">
-                            <div className="flex items-center justify-between text-[1.2vmin] font-black text-cyan-200 uppercase tracking-wide">
-                              <span>💵 Ask Cash:</span>
-                              <span className="rounded-full border border-cyan-400/80 bg-cyan-950/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-cyan-100 shadow-[0_0_1vmin_rgba(6,182,212,0.4)]">
-                                ${tradeDraftRequestedMoney.toLocaleString()}
-                              </span>
-                            </div>
-                            <input
-                              type="range"
-                              min="0"
-                              max={Math.max(0, targetPlayer.money)}
-                              value={tradeDraftRequestedMoney}
-                              onChange={(e) => setTradeDraftRequestedMoney(Math.min(targetPlayer.money, Math.max(0, Number(e.target.value))))}
-                              className="h-[0.9vmin] w-full cursor-pointer accent-cyan-500"
-                            />
-                            <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
-                              <span>$0</span>
-                              <span>${targetPlayer.money.toLocaleString()}</span>
-                            </div>
+                        {/* Cash Slider */}
+                        <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-purple-500/30 bg-[#181133] p-[1.4vmin]">
+                          <div className="flex items-center justify-between text-[1.2vmin] font-black text-purple-200 uppercase tracking-wide">
+                            <span>💵 Offer Cash:</span>
+                            <span className="rounded-full border border-purple-400/80 bg-purple-900/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-purple-100 shadow-[0_0_1vmin_rgba(168,85,247,0.4)]">
+                              ${tradeDraftOfferedMoney.toLocaleString()}
+                            </span>
                           </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max={Math.max(0, currentPlayer.money)}
+                            value={tradeDraftOfferedMoney}
+                            onChange={(e) => setTradeDraftOfferedMoney(Math.min(currentPlayer.money, Math.max(0, Number(e.target.value))))}
+                            className="h-[0.9vmin] w-full cursor-pointer accent-purple-500"
+                          />
+                          <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
+                            <span>$0</span>
+                            <span>${currentPlayer.money.toLocaleString()}</span>
+                          </div>
+                        </div>
 
-                          {/* Properties Requested from Target */}
-                          <div className="flex flex-1 flex-col gap-[0.8vmin]">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[1.25vmin] font-black uppercase tracking-wider text-cyan-300">
-                                Properties to Receive:
-                              </span>
-                              <span className="text-[1.1vmin] font-bold text-gray-400">
-                                {tradeDraftRequestedPropIds.length} selected
-                              </span>
-                            </div>
-                            <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
-                              {targetProps.length === 0 ? (
-                                <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
-                                  <span className="text-[2.4vmin] opacity-70">🏚️</span>
-                                  <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
-                                  <span className="text-[1.1vmin] text-gray-400">{targetPlayer.name} doesn't own any properties to give</span>
-                                </div>
-                              ) : (
-                                targetProps.map((tile) => {
-                                  const isSelected = tradeDraftRequestedPropIds.includes(tile.id);
-                                  return (
-                                    <button
-                                      key={tile.id}
-                                      type="button"
-                                      onClick={() =>
-                                        setTradeDraftRequestedPropIds((prev) =>
-                                          prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
-                                        )
-                                      }
-                                      className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${
-                                        isSelected
-                                          ? "border-2 border-cyan-300 bg-gradient-to-r from-indigo-700 via-cyan-700 to-indigo-800 text-white shadow-[0_0_1.6vmin_rgba(6,182,212,0.6)] scale-[1.01]"
-                                          : "border border-white/15 bg-[#141b38] text-gray-200 hover:border-cyan-400/60 hover:bg-[#1a2347] hover:text-white"
+                        {/* Properties Offered */}
+                        <div className="flex flex-1 flex-col gap-[0.8vmin]">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[1.25vmin] font-black uppercase tracking-wider text-purple-300">
+                              Properties to Give:
+                            </span>
+                            <span className="text-[1.1vmin] font-bold text-gray-400">
+                              {tradeDraftOfferedPropIds.length} selected
+                            </span>
+                          </div>
+                          <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
+                            {initiatorProps.length === 0 ? (
+                              <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
+                                <span className="text-[2.4vmin] opacity-70">🏚️</span>
+                                <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
+                                <span className="text-[1.1vmin] text-gray-400">You don't own any properties to give in this trade</span>
+                              </div>
+                            ) : (
+                              initiatorProps.map((tile) => {
+                                const isSelected = tradeDraftOfferedPropIds.includes(tile.id);
+                                return (
+                                  <button
+                                    key={tile.id}
+                                    type="button"
+                                    onClick={() =>
+                                      setTradeDraftOfferedPropIds((prev) =>
+                                        prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
+                                      )
+                                    }
+                                    className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${isSelected
+                                        ? "border-2 border-purple-300 bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 text-white shadow-[0_0_1.6vmin_rgba(168,85,247,0.6)] scale-[1.01]"
+                                        : "border border-white/15 bg-[#1b1438] text-gray-200 hover:border-purple-400/60 hover:bg-[#231b47] hover:text-white"
                                       }`}
-                                    >
-                                      <div className="flex items-center gap-[0.9vmin]">
-                                        {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
-                                        <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
-                                        {isSelected && <span className="text-[1.2vmin] font-black text-cyan-200">✓</span>}
-                                      </div>
-                                      <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
-                                        {tile.price}
-                                      </span>
-                                    </button>
-                                  );
-                                })
-                              )}
-                            </div>
+                                  >
+                                    <div className="flex items-center gap-[0.9vmin]">
+                                      {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
+                                      <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                      {isSelected && <span className="text-[1.2vmin] font-black text-purple-200">✓</span>}
+                                    </div>
+                                    <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
+                                      {tile.price}
+                                    </span>
+                                  </button>
+                                );
+                              })
+                            )}
                           </div>
-                        </>
+                        </div>
+                      </div>
+
+                      {/* Center Divider with ↔ */}
+                      <div className="relative flex flex-col items-center justify-center px-[0.8vmin]">
+                        <div className="h-full w-[0.25vmin] bg-purple-500/30" />
+                        <div className="absolute flex h-[3.8vmin] w-[3.8vmin] items-center justify-center rounded-full border-2 border-purple-300 bg-[#211642] text-[1.6vmin] text-purple-200 shadow-[0_0_1.6vmin_rgba(168,85,247,0.5)]">
+                          ↔
+                        </div>
+                      </div>
+
+                      {/* Right Column: Target Player (Requested from them) */}
+                      <div className="flex flex-1 flex-col gap-[1.5vmin] pl-[1.4vmin]">
+                        {targetPlayer ? (
+                          <>
+                            <div className="flex items-center justify-between border-b border-cyan-500/20 pb-[0.8vmin]">
+                              <div className="flex items-center gap-[0.8vmin]">
+                                <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: targetPlayer.color }} />
+                                <span className="text-[1.75vmin] font-black text-white">
+                                  {targetPlayer.name || `Player ${targetPlayer.id}`}
+                                </span>
+                              </div>
+                              <span className="text-[1.25vmin] font-bold text-gray-300">
+                                Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${targetPlayer.money.toLocaleString()}</span>
+                              </span>
+                            </div>
+
+                            {/* Cash Slider for Target */}
+                            <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-cyan-500/30 bg-[#111933] p-[1.4vmin]">
+                              <div className="flex items-center justify-between text-[1.2vmin] font-black text-cyan-200 uppercase tracking-wide">
+                                <span>💵 Ask Cash:</span>
+                                <span className="rounded-full border border-cyan-400/80 bg-cyan-950/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-cyan-100 shadow-[0_0_1vmin_rgba(6,182,212,0.4)]">
+                                  ${tradeDraftRequestedMoney.toLocaleString()}
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min="0"
+                                max={Math.max(0, targetPlayer.money)}
+                                value={tradeDraftRequestedMoney}
+                                onChange={(e) => setTradeDraftRequestedMoney(Math.min(targetPlayer.money, Math.max(0, Number(e.target.value))))}
+                                className="h-[0.9vmin] w-full cursor-pointer accent-cyan-500"
+                              />
+                              <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
+                                <span>$0</span>
+                                <span>${targetPlayer.money.toLocaleString()}</span>
+                              </div>
+                            </div>
+
+                            {/* Properties Requested from Target */}
+                            <div className="flex flex-1 flex-col gap-[0.8vmin]">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[1.25vmin] font-black uppercase tracking-wider text-cyan-300">
+                                  Properties to Receive:
+                                </span>
+                                <span className="text-[1.1vmin] font-bold text-gray-400">
+                                  {tradeDraftRequestedPropIds.length} selected
+                                </span>
+                              </div>
+                              <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
+                                {targetProps.length === 0 ? (
+                                  <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
+                                    <span className="text-[2.4vmin] opacity-70">🏚️</span>
+                                    <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
+                                    <span className="text-[1.1vmin] text-gray-400">{targetPlayer.name} doesn't own any properties to give</span>
+                                  </div>
+                                ) : (
+                                  targetProps.map((tile) => {
+                                    const isSelected = tradeDraftRequestedPropIds.includes(tile.id);
+                                    return (
+                                      <button
+                                        key={tile.id}
+                                        type="button"
+                                        onClick={() =>
+                                          setTradeDraftRequestedPropIds((prev) =>
+                                            prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
+                                          )
+                                        }
+                                        className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${isSelected
+                                            ? "border-2 border-cyan-300 bg-gradient-to-r from-indigo-700 via-cyan-700 to-indigo-800 text-white shadow-[0_0_1.6vmin_rgba(6,182,212,0.6)] scale-[1.01]"
+                                            : "border border-white/15 bg-[#141b38] text-gray-200 hover:border-cyan-400/60 hover:bg-[#1a2347] hover:text-white"
+                                          }`}
+                                      >
+                                        <div className="flex items-center gap-[0.9vmin]">
+                                          {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
+                                          <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                          {isSelected && <span className="text-[1.2vmin] font-black text-cyan-200">✓</span>}
+                                        </div>
+                                        <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
+                                          {tile.price}
+                                        </span>
+                                      </button>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-gray-300 font-bold text-[1.3vmin]">
+                            Select a player to start trading
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Modal Footer */}
+                <div className="flex items-center justify-between border-t border-purple-500/30 bg-[#181133] px-[2.4vmin] py-[1.5vmin]">
+                  <button
+                    onClick={() => setActiveTradeModal(null)}
+                    className="rounded-[1vmin] border border-white/20 bg-white/5 px-[2.2vmin] py-[1vmin] text-[1.25vmin] font-bold text-gray-300 transition hover:bg-white/15 hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSendTrade}
+                    disabled={!tradeDraftTargetId}
+                    className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[3.5vmin] py-[1.2vmin] text-[1.45vmin] font-black uppercase tracking-wider text-white shadow-[0_0_2.5vmin_rgba(139,92,246,0.55)] transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  >
+                    <span className="text-[1.6vmin]">✈️</span>
+                    <span>{negotiatingTradeId ? "Send Counter-Offer" : "Send Trade Offer"}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ================= VIEW TRADE MODAL ================= */}
+          {activeTradeModal === "view" && selectedTradeId && (
+            <div
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
+              onClick={() => setActiveTradeModal(null)}
+            >
+              {(() => {
+                const trade = trades.find((t) => t.id === selectedTradeId);
+                if (!trade) {
+                  return (
+                    <div className="rounded-[1.4vmin] bg-[#120d24] p-[3vmin] text-center text-white" onClick={(e) => e.stopPropagation()}>
+                      <p className="text-[1.3vmin]">Trade not found or already completed.</p>
+                      <button onClick={() => setActiveTradeModal(null)} className="mt-[1vmin] rounded-[0.8vmin] bg-white/10 px-[2vmin] py-[0.8vmin] text-[1.1vmin]">
+                        Close
+                      </button>
+                    </div>
+                  );
+                }
+
+                const initiator = players.find((p) => p.id === trade.initiatorId);
+                const target = players.find((p) => p.id === trade.targetId);
+                const isViewerSender = currentPlayer?.id === trade.initiatorId;
+                const isViewerRecipient = currentPlayer?.id === trade.targetId;
+                const initiatorOfferedTiles = BOARD_TILES.filter((t) => trade.initiatorPropertyIds.includes(t.id));
+                const targetRequestedTiles = BOARD_TILES.filter((t) => trade.targetPropertyIds.includes(t.id));
+
+                return (
+                  <div
+                    className="relative flex max-h-[90vh] w-[86vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/40 bg-[#120d24] text-white shadow-[0_0_4.5vmin_rgba(139,92,246,0.35)]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Header */}
+                    <div className="relative border-b border-purple-500/25 bg-[#17112e] py-[1.5vmin] text-center">
+                      <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-white">
+                        View Trade
+                      </h3>
+                      <button
+                        onClick={() => setActiveTradeModal(null)}
+                        className="absolute right-[1.6vmin] top-[1.4vmin] flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                        title="Close"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Body: Two Columns */}
+                    <div className="flex flex-1 overflow-y-auto p-[2.4vmin]">
+                      {/* Left: Initiator terms */}
+                      <div className="flex flex-1 flex-col gap-[1.4vmin] pr-[1.8vmin]">
+                        <div className="flex items-center gap-[0.8vmin]">
+                          <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: initiator?.color }} />
+                          <span className="text-[1.6vmin] font-black text-white">
+                            {initiator?.name || `Player ${trade.initiatorId}`}
+                          </span>
+                          {isViewerSender && (
+                            <span className="rounded-full bg-purple-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-purple-300">
+                              You
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Cash Offered Badge */}
+                        <div className="flex items-center justify-between rounded-[1.2vmin] border border-purple-500/30 bg-[#191336] p-[1.2vmin]">
+                          <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
+                            Offered Cash:
+                          </span>
+                          <span className="rounded-full border border-purple-400/80 bg-purple-900/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-purple-200 shadow">
+                            ${trade.initiatorMoney.toLocaleString()}
+                          </span>
+                        </div>
+
+                        {/* Offered Properties */}
+                        <div className="flex flex-col gap-[0.8vmin]">
+                          <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                            Properties Offered ({initiatorOfferedTiles.length}):
+                          </span>
+                          <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                            {initiatorOfferedTiles.length === 0 ? (
+                              <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
+                                No properties offered ($ cash only)
+                              </div>
+                            ) : (
+                              initiatorOfferedTiles.map((tile) => (
+                                <div
+                                  key={tile.id}
+                                  className="flex items-center justify-between rounded-[0.9vmin] border border-purple-400/40 bg-[#1f173d] px-[1.2vmin] py-[0.9vmin]"
+                                >
+                                  <div className="flex items-center gap-[0.8vmin]">
+                                    {renderTileIconOrFlag(tile)}
+                                    <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                  </div>
+                                  <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                    {tile.price}
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Center ↔ */}
+                      <div className="relative flex flex-col items-center justify-center px-[1vmin]">
+                        <div className="h-full w-[0.2vmin] bg-purple-500/25" />
+                        <div className="absolute flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full border-2 border-purple-400 bg-[#1f163d] text-[1.5vmin] text-purple-200 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]">
+                          ↔
+                        </div>
+                      </div>
+
+                      {/* Right: Target terms */}
+                      <div className="flex flex-1 flex-col gap-[1.4vmin] pl-[1.8vmin]">
+                        <div className="flex items-center gap-[0.8vmin]">
+                          <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: target?.color }} />
+                          <span className="text-[1.6vmin] font-black text-white">
+                            {target?.name || `Player ${trade.targetId}`}
+                          </span>
+                          {isViewerRecipient && (
+                            <span className="rounded-full bg-emerald-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-emerald-300">
+                              You
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Cash Requested Badge */}
+                        <div className="flex items-center justify-between rounded-[1.2vmin] border border-cyan-500/30 bg-[#141b33] p-[1.2vmin]">
+                          <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
+                            Requested Cash:
+                          </span>
+                          <span className="rounded-full border border-cyan-400/80 bg-cyan-950/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-cyan-200 shadow">
+                            ${trade.targetMoney.toLocaleString()}
+                          </span>
+                        </div>
+
+                        {/* Requested Properties */}
+                        <div className="flex flex-col gap-[0.8vmin]">
+                          <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                            Properties Requested ({targetRequestedTiles.length}):
+                          </span>
+                          <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                            {targetRequestedTiles.length === 0 ? (
+                              <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
+                                No properties requested ($ cash only)
+                              </div>
+                            ) : (
+                              targetRequestedTiles.map((tile) => (
+                                <div
+                                  key={tile.id}
+                                  className="flex items-center justify-between rounded-[0.9vmin] border border-cyan-400/40 bg-[#16213d] px-[1.2vmin] py-[0.9vmin]"
+                                >
+                                  <div className="flex items-center gap-[0.8vmin]">
+                                    {renderTileIconOrFlag(tile)}
+                                    <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                  </div>
+                                  <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                    {tile.price}
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="flex items-center justify-between border-t border-purple-500/25 bg-[#17112e] px-[2.4vmin] py-[1.4vmin]">
+                      {isViewerSender ? (
+                        <div className="flex w-full items-center justify-center">
+                          <button
+                            onClick={() => handleCancelTrade(trade.id)}
+                            className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-red-600 via-rose-600 to-red-700 px-[3.5vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 transition hover:brightness-110 active:scale-95 cursor-pointer"
+                          >
+                            <span>✕</span>
+                            <span>Delete Trade</span>
+                          </button>
+                        </div>
+                      ) : isViewerRecipient ? (
+                        <div className="flex w-full items-center justify-between gap-[1.2vmin]">
+                          <button
+                            onClick={() => handleDeclineTrade(trade.id)}
+                            className="rounded-[1vmin] border border-red-500/40 bg-red-950/40 px-[2.2vmin] py-[1.1vmin] text-[1.25vmin] font-black uppercase text-red-300 transition hover:bg-red-900/60 active:scale-95 cursor-pointer"
+                          >
+                            ✕ Decline
+                          </button>
+                          <div className="flex items-center gap-[1.2vmin]">
+                            <button
+                              onClick={() => handleStartNegotiation(trade)}
+                              className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-amber-500 to-orange-600 px-[2.5vmin] py-[1.1vmin] text-[1.35vmin] font-black uppercase tracking-wide text-white shadow-lg shadow-amber-500/30 transition hover:brightness-110 active:scale-95 cursor-pointer"
+                            >
+                              <span>🔄</span>
+                              <span>Negotiate</span>
+                            </button>
+                            <button
+                              onClick={() => handleAcceptTrade(trade.id)}
+                              className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-[3vmin] py-[1.1vmin] text-[1.4vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2vmin_rgba(16,185,129,0.5)] transition hover:brightness-110 active:scale-95 cursor-pointer"
+                            >
+                              <span>✓</span>
+                              <span>Accept Trade</span>
+                            </button>
+                          </div>
+                        </div>
                       ) : (
-                        <div className="flex h-full items-center justify-center text-gray-300 font-bold text-[1.3vmin]">
-                          Select a player to start trading
+                        <div className="flex w-full items-center justify-between">
+                          <span className="text-[1.15vmin] text-gray-400 font-medium">
+                            Spectating active trade between {initiator?.name || `Player ${trade.initiatorId}`} and {target?.name || `Player ${trade.targetId}`}
+                          </span>
+                          <button
+                            onClick={() => setActiveTradeModal(null)}
+                            className="rounded-[0.9vmin] bg-white/10 px-[2.4vmin] py-[0.9vmin] text-[1.2vmin] font-bold text-white hover:bg-white/20 cursor-pointer"
+                          >
+                            Close
+                          </button>
                         </div>
                       )}
                     </div>
                   </div>
                 );
               })()}
-
-              {/* Modal Footer */}
-              <div className="flex items-center justify-between border-t border-purple-500/30 bg-[#181133] px-[2.4vmin] py-[1.5vmin]">
-                <button
-                  onClick={() => setActiveTradeModal(null)}
-                  className="rounded-[1vmin] border border-white/20 bg-white/5 px-[2.2vmin] py-[1vmin] text-[1.25vmin] font-bold text-gray-300 transition hover:bg-white/15 hover:text-white cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSendTrade}
-                  disabled={!tradeDraftTargetId}
-                  className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[3.5vmin] py-[1.2vmin] text-[1.45vmin] font-black uppercase tracking-wider text-white shadow-[0_0_2.5vmin_rgba(139,92,246,0.55)] transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-                >
-                  <span className="text-[1.6vmin]">✈️</span>
-                  <span>{negotiatingTradeId ? "Send Counter-Offer" : "Send Trade Offer"}</span>
-                </button>
-              </div>
             </div>
-          </div>
-        )}
-
-        {/* ================= VIEW TRADE MODAL ================= */}
-        {activeTradeModal === "view" && selectedTradeId && (
-          <div
-            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
-            onClick={() => setActiveTradeModal(null)}
-          >
-            {(() => {
-              const trade = trades.find((t) => t.id === selectedTradeId);
-              if (!trade) {
-                return (
-                  <div className="rounded-[1.4vmin] bg-[#120d24] p-[3vmin] text-center text-white" onClick={(e) => e.stopPropagation()}>
-                    <p className="text-[1.3vmin]">Trade not found or already completed.</p>
-                    <button onClick={() => setActiveTradeModal(null)} className="mt-[1vmin] rounded-[0.8vmin] bg-white/10 px-[2vmin] py-[0.8vmin] text-[1.1vmin]">
-                      Close
-                    </button>
-                  </div>
-                );
-              }
-
-              const initiator = players.find((p) => p.id === trade.initiatorId);
-              const target = players.find((p) => p.id === trade.targetId);
-              const isViewerSender = currentPlayer?.id === trade.initiatorId;
-              const isViewerRecipient = currentPlayer?.id === trade.targetId;
-              const initiatorOfferedTiles = BOARD_TILES.filter((t) => trade.initiatorPropertyIds.includes(t.id));
-              const targetRequestedTiles = BOARD_TILES.filter((t) => trade.targetPropertyIds.includes(t.id));
-
-              return (
-                <div
-                  className="relative flex max-h-[90vh] w-[86vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/40 bg-[#120d24] text-white shadow-[0_0_4.5vmin_rgba(139,92,246,0.35)]"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {/* Header */}
-                  <div className="relative border-b border-purple-500/25 bg-[#17112e] py-[1.5vmin] text-center">
-                    <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-white">
-                      View Trade
-                    </h3>
-                    <button
-                      onClick={() => setActiveTradeModal(null)}
-                      className="absolute right-[1.6vmin] top-[1.4vmin] flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
-                      title="Close"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  {/* Body: Two Columns */}
-                  <div className="flex flex-1 overflow-y-auto p-[2.4vmin]">
-                    {/* Left: Initiator terms */}
-                    <div className="flex flex-1 flex-col gap-[1.4vmin] pr-[1.8vmin]">
-                      <div className="flex items-center gap-[0.8vmin]">
-                        <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: initiator?.color }} />
-                        <span className="text-[1.6vmin] font-black text-white">
-                          {initiator?.name || `Player ${trade.initiatorId}`}
-                        </span>
-                        {isViewerSender && (
-                          <span className="rounded-full bg-purple-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-purple-300">
-                            You
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Cash Offered Badge */}
-                      <div className="flex items-center justify-between rounded-[1.2vmin] border border-purple-500/30 bg-[#191336] p-[1.2vmin]">
-                        <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
-                          Offered Cash:
-                        </span>
-                        <span className="rounded-full border border-purple-400/80 bg-purple-900/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-purple-200 shadow">
-                          ${trade.initiatorMoney.toLocaleString()}
-                        </span>
-                      </div>
-
-                      {/* Offered Properties */}
-                      <div className="flex flex-col gap-[0.8vmin]">
-                        <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
-                          Properties Offered ({initiatorOfferedTiles.length}):
-                        </span>
-                        <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
-                          {initiatorOfferedTiles.length === 0 ? (
-                            <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
-                              No properties offered ($ cash only)
-                            </div>
-                          ) : (
-                            initiatorOfferedTiles.map((tile) => (
-                              <div
-                                key={tile.id}
-                                className="flex items-center justify-between rounded-[0.9vmin] border border-purple-400/40 bg-[#1f173d] px-[1.2vmin] py-[0.9vmin]"
-                              >
-                                <div className="flex items-center gap-[0.8vmin]">
-                                  {renderTileIconOrFlag(tile)}
-                                  <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
-                                </div>
-                                <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
-                                  {tile.price}
-                                </span>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Center ↔ */}
-                    <div className="relative flex flex-col items-center justify-center px-[1vmin]">
-                      <div className="h-full w-[0.2vmin] bg-purple-500/25" />
-                      <div className="absolute flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full border-2 border-purple-400 bg-[#1f163d] text-[1.5vmin] text-purple-200 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]">
-                        ↔
-                      </div>
-                    </div>
-
-                    {/* Right: Target terms */}
-                    <div className="flex flex-1 flex-col gap-[1.4vmin] pl-[1.8vmin]">
-                      <div className="flex items-center gap-[0.8vmin]">
-                        <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: target?.color }} />
-                        <span className="text-[1.6vmin] font-black text-white">
-                          {target?.name || `Player ${trade.targetId}`}
-                        </span>
-                        {isViewerRecipient && (
-                          <span className="rounded-full bg-emerald-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-emerald-300">
-                            You
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Cash Requested Badge */}
-                      <div className="flex items-center justify-between rounded-[1.2vmin] border border-cyan-500/30 bg-[#141b33] p-[1.2vmin]">
-                        <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
-                          Requested Cash:
-                        </span>
-                        <span className="rounded-full border border-cyan-400/80 bg-cyan-950/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-cyan-200 shadow">
-                          ${trade.targetMoney.toLocaleString()}
-                        </span>
-                      </div>
-
-                      {/* Requested Properties */}
-                      <div className="flex flex-col gap-[0.8vmin]">
-                        <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
-                          Properties Requested ({targetRequestedTiles.length}):
-                        </span>
-                        <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
-                          {targetRequestedTiles.length === 0 ? (
-                            <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
-                              No properties requested ($ cash only)
-                            </div>
-                          ) : (
-                            targetRequestedTiles.map((tile) => (
-                              <div
-                                key={tile.id}
-                                className="flex items-center justify-between rounded-[0.9vmin] border border-cyan-400/40 bg-[#16213d] px-[1.2vmin] py-[0.9vmin]"
-                              >
-                                <div className="flex items-center gap-[0.8vmin]">
-                                  {renderTileIconOrFlag(tile)}
-                                  <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
-                                </div>
-                                <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
-                                  {tile.price}
-                                </span>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Footer Actions */}
-                  <div className="flex items-center justify-between border-t border-purple-500/25 bg-[#17112e] px-[2.4vmin] py-[1.4vmin]">
-                    {isViewerSender ? (
-                      <div className="flex w-full items-center justify-center">
-                        <button
-                          onClick={() => handleCancelTrade(trade.id)}
-                          className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-red-600 via-rose-600 to-red-700 px-[3.5vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 transition hover:brightness-110 active:scale-95 cursor-pointer"
-                        >
-                          <span>✕</span>
-                          <span>Delete Trade</span>
-                        </button>
-                      </div>
-                    ) : isViewerRecipient ? (
-                      <div className="flex w-full items-center justify-between gap-[1.2vmin]">
-                        <button
-                          onClick={() => handleDeclineTrade(trade.id)}
-                          className="rounded-[1vmin] border border-red-500/40 bg-red-950/40 px-[2.2vmin] py-[1.1vmin] text-[1.25vmin] font-black uppercase text-red-300 transition hover:bg-red-900/60 active:scale-95 cursor-pointer"
-                        >
-                          ✕ Decline
-                        </button>
-                        <div className="flex items-center gap-[1.2vmin]">
-                          <button
-                            onClick={() => handleStartNegotiation(trade)}
-                            className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-amber-500 to-orange-600 px-[2.5vmin] py-[1.1vmin] text-[1.35vmin] font-black uppercase tracking-wide text-white shadow-lg shadow-amber-500/30 transition hover:brightness-110 active:scale-95 cursor-pointer"
-                          >
-                            <span>🔄</span>
-                            <span>Negotiate</span>
-                          </button>
-                          <button
-                            onClick={() => handleAcceptTrade(trade.id)}
-                            className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-[3vmin] py-[1.1vmin] text-[1.4vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2vmin_rgba(16,185,129,0.5)] transition hover:brightness-110 active:scale-95 cursor-pointer"
-                          >
-                            <span>✓</span>
-                            <span>Accept Trade</span>
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex w-full items-center justify-between">
-                        <span className="text-[1.15vmin] text-gray-400 font-medium">
-                          Spectating active trade between {initiator?.name || `Player ${trade.initiatorId}`} and {target?.name || `Player ${trade.targetId}`}
-                        </span>
-                        <button
-                          onClick={() => setActiveTradeModal(null)}
-                          className="rounded-[0.9vmin] bg-white/10 px-[2.4vmin] py-[0.9vmin] text-[1.2vmin] font-bold text-white hover:bg-white/20 cursor-pointer"
-                        >
-                          Close
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-      </div>
-
-      {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
-      <div className="flex h-[96vmin] w-full min-w-[36vmin] flex-1 flex-col self-start overflow-y-auto rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
-        <div className="mb-[0.8vmin] flex items-center justify-between px-[0.3vmin]">
-          <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">
-            Players
-          </h2>
-          {isVoteKickOpen && (
-            <span className="rounded-full border border-purple-500/40 bg-purple-500/20 px-[0.6vmin] py-[0.15vmin] text-[0.85vmin] font-bold text-purple-300 animate-pulse">
-              Vote Kick Mode
-            </span>
           )}
         </div>
 
-        <div className="flex flex-col gap-[0.7vmin]">
-          {players.map((player) => {
-            const isSelected = selectedPlayerId === player.id;
-            const isSelf = player.id === currentPlayer?.id;
-            const isTarget = isVoteKickOpen && !player.isBankrupt && !isSelf;
-
-            const voters = kickVotes[player.id] || [];
-            const otherEligibleVoters = alivePlayers.filter((p) => p.id !== player.id);
-            const totalOthers = otherEligibleVoters.length;
-            const votes = voters.length;
-            const hasCurrentVoted = currentPlayer ? voters.includes(currentPlayer.id) : false;
-
-            return (
-              <div
-                key={player.id}
-                onClick={() => {
-                  if (isVoteKickOpen) {
-                    if (isTarget && currentPlayer) {
-                      togglePlayerKickVote(player.id, currentPlayer.id);
-                    }
-                  } else {
-                    setSelectedPlayerId((prev) => (prev === player.id ? null : player.id));
-                  }
-                }}
-                className={`flex items-center justify-between rounded-[1vmin] border-[0.18vmin] px-[1.1vmin] py-[0.9vmin] text-left transition-all duration-200 ${
-                  player.isBankrupt
-                    ? "opacity-30 grayscale cursor-not-allowed"
-                    : isVoteKickOpen && isSelf
-                    ? "opacity-30 grayscale-[30%] cursor-not-allowed border-white/5 bg-white/[0.02]"
-                    : isVoteKickOpen && isTarget
-                    ? hasCurrentVoted
-                      ? "border-emerald-500/60 bg-emerald-500/10 cursor-pointer hover:bg-emerald-500/15"
-                      : "border-purple-500/40 bg-purple-500/5 cursor-pointer hover:border-purple-400/60 hover:bg-purple-500/15"
-                    : isSelected && !player.isCurrentPlayer
-                    ? "ring-[0.14vmin] ring-white/40 cursor-pointer"
-                    : "cursor-pointer"
-                }`}
-                style={{
-                  borderColor:
-                    isVoteKickOpen && isSelf
-                      ? "rgba(255,255,255,0.05)"
-                      : isVoteKickOpen && isTarget
-                      ? hasCurrentVoted
-                        ? "#10b981aa"
-                        : "rgba(168,85,247,0.4)"
-                      : player.isCurrentPlayer
-                      ? `${player.color}cc`
-                      : "rgba(255,255,255,0.1)",
-                  backgroundColor:
-                    isVoteKickOpen && isSelf
-                      ? "rgba(255,255,255,0.02)"
-                      : isVoteKickOpen && isTarget
-                      ? hasCurrentVoted
-                        ? "rgba(16,185,129,0.08)"
-                        : "rgba(168,85,247,0.08)"
-                      : player.isCurrentPlayer
-                      ? `${player.color}2e`
-                      : "rgba(255,255,255,0.04)",
-                  boxShadow:
-                    !isVoteKickOpen && player.isCurrentPlayer
-                      ? `0 0 1.6vmin ${player.color}88, inset 0 0 0.7vmin ${player.color}33`
-                      : undefined,
-                }}
-              >
-                <div className="flex items-center gap-[1vmin]">
-                  <div className="shrink-0">{renderPlayerFace(player, "4vmin")}</div>
-                  <div className="flex flex-col leading-tight">
-                    {!isGameStarted ? (
-                      <div
-                        className="flex items-center gap-[0.6vmin]"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <input
-                          type="text"
-                          value={player.name}
-                          onChange={(e) => handlePlayerNameChange(player.id, e.target.value)}
-                          placeholder={`Player ${player.id}`}
-                          maxLength={12}
-                          className="w-[16.5vmin] rounded-[0.9vmin] border-[0.25vmin] border-purple-400/50 bg-[#160f26] px-[1.1vmin] py-[0.5vmin] text-[1.75vmin] font-black text-white placeholder:text-gray-400/90 placeholder:font-black placeholder:text-[1.65vmin] shadow-inner shadow-black/60 transition-all focus:border-purple-300 focus:bg-[#231540] focus:shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] focus:outline-none"
-                          title="Click to edit player name"
-                        />
-                        <span className="text-[1.4vmin] text-purple-300 drop-shadow" title="Editable before game start">
-                          ✏️
-                        </span>
-                      </div>
-                    ) : (
-                      <span
-                        className={`text-[1.8vmin] font-black tracking-wide drop-shadow-[0_0.2vmin_0.4vmin_rgba(0,0,0,0.9)] ${
-                          isVoteKickOpen && isSelf
-                            ? "text-gray-400"
-                            : player.isCurrentPlayer
-                            ? "text-white"
-                            : "text-gray-100"
-                        }`}
-                      >
-                        {player.name || `Player ${player.id}`}
-                      </span>
-                    )}
-
-                    {player.isBankrupt ? (
-                      <span className="text-[0.9vmin] text-red-400">BANKRUPT</span>
-                    ) : isVoteKickOpen && isSelf ? (
-                      <span className="text-[0.8vmin] font-medium text-gray-500">(Yourself)</span>
-                    ) : isVoteKickOpen && isTarget ? (
-                      <div className="mt-[0.15vmin] flex items-center gap-[0.3vmin]">
-                        {otherEligibleVoters.map((voter) => {
-                          const thisVoted = voters.includes(voter.id);
-                          return (
-                            <span
-                              key={voter.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                togglePlayerKickVote(player.id, voter.id);
-                              }}
-                              className={`flex cursor-pointer items-center gap-[0.2vmin] rounded-full border px-[0.45vmin] py-[0.05vmin] text-[0.7vmin] font-bold transition-all ${
-                                thisVoted
-                                  ? "border-emerald-500/50 bg-emerald-500/25 text-emerald-300"
-                                  : "border-white/10 bg-white/[0.03] text-gray-400 hover:border-white/30 hover:text-white"
-                              }`}
-                              title={`${voter.name}: ${thisVoted ? "Voted (click to remove)" : "Click to vote"} (1 vote per player)`}
-                            >
-                              <span
-                                className="h-[0.45vmin] w-[0.45vmin] rounded-full"
-                                style={{ backgroundColor: voter.color }}
-                              />
-                              <span>{voter.name}</span>
-                              <span>{thisVoted ? "✓" : "+"}</span>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    ) : player.inJail ? (
-                      <span className="text-[0.9vmin] text-amber-400">🔒 JAIL</span>
-                    ) : null}
-                  </div>
-                </div>
-
-                {/* Right side: In Vote Kick mode, show vote count & button; otherwise show money */}
-                {isVoteKickOpen && isTarget ? (
-                  <div className="flex items-center gap-[0.7vmin]">
-                    <span
-                      className={`text-[1.35vmin] font-black ${
-                        votes > 0 ? "text-purple-300" : "text-gray-400"
-                      }`}
-                    >
-                      {votes}/{totalOthers}
-                    </span>
-
-                    {currentPlayer && currentPlayer.id !== player.id && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          togglePlayerKickVote(player.id, currentPlayer.id);
-                        }}
-                        className={`rounded-[0.65vmin] px-[0.85vmin] py-[0.35vmin] text-[0.9vmin] font-black uppercase transition-all hover:scale-105 active:scale-95 ${
-                          hasCurrentVoted
-                            ? "border border-emerald-500/60 bg-emerald-500/25 text-emerald-300 hover:border-red-500/50 hover:bg-red-500/20 hover:text-red-300"
-                            : "border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md"
-                        }`}
-                        title={hasCurrentVoted ? "Click to remove your vote" : `Vote to kick ${player.name}`}
-                      >
-                        {hasCurrentVoted ? "✓ Voted" : "+ Vote"}
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <div
-                    className={`flex items-center gap-[0.4vmin] rounded-[0.9vmin] border-[0.2vmin] px-[1.1vmin] py-[0.45vmin] shadow-md transition-all ${
-                      isVoteKickOpen && isSelf
-                        ? "border-white/10 bg-white/[0.02] text-gray-500"
-                        : player.isCurrentPlayer
-                        ? "border-emerald-400/70 bg-[#062418] text-emerald-300 shadow-[0_0_1.4vmin_rgba(16,185,129,0.45)]"
-                        : "border-emerald-500/40 bg-[#091b14] text-emerald-300"
-                    }`}
-                  >
-                    <span className="text-[1.35vmin] leading-none">💵</span>
-                    <span className="text-[1.85vmin] font-black tracking-tight drop-shadow">
-                      ${player.money.toLocaleString()}
-                    </span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {selectedPlayerId &&
-          (() => {
-            const selectedPlayer = players.find((p) => p.id === selectedPlayerId);
-            if (!selectedPlayer) return null;
-            const ownedCount = BOARD_TILES.filter((t) => propertyOwnership[t.id] === selectedPlayer.id).length;
-
-            return (
-              <div className="mt-[1.3vmin] flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/[0.05] px-[1vmin] py-[0.9vmin]">
-                <div className="flex min-w-0 items-center gap-[0.6vmin]">
-                  <span className="h-[1vmin] w-[1vmin] shrink-0 rounded-full" style={{ backgroundColor: selectedPlayer.color }} />
-                  <span className="truncate text-[1.1vmin] font-semibold text-gray-200">
-                    {ownedCount > 0
-                      ? `Highlighting ${selectedPlayer.name || `Player ${selectedPlayer.id}`}'s ${ownedCount} propert${ownedCount === 1 ? "y" : "ies"} on the board`
-                      : `${selectedPlayer.name || `Player ${selectedPlayer.id}`} doesn't own any properties yet`}
-                  </span>
-                </div>
-                <button
-                  onClick={() => setSelectedPlayerId(null)}
-                  title="Clear selection"
-                  className="ml-[0.6vmin] flex h-[1.8vmin] w-[1.8vmin] shrink-0 items-center justify-center rounded-full text-[1.3vmin] leading-none text-gray-400 hover:bg-white/10 hover:text-white"
-                >
-                  ✕
-                </button>
-              </div>
-            );
-          })()}
-
-        {/* ================= SMALL BOX: PLAYER ACTIONS (VOTE KICK & BANKRUPT) ================= */}
-        <div className="mt-[1.2vmin] rounded-[1vmin] border border-white/10 bg-white/[0.03] p-[0.9vmin] shadow-sm">
-          <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
-            <span className="text-[1.05vmin] font-bold uppercase tracking-wider text-gray-400">
-              Player Actions
-            </span>
-            <span className="text-[0.9vmin] font-medium text-gray-400">
-              Turn:{" "}
-              <span className="font-bold" style={{ color: currentPlayer?.color }}>
-                {currentPlayer?.name || `Player ${currentPlayer?.id}`}
+        {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
+        <div className="flex h-[96vmin] w-full min-w-[36vmin] flex-1 flex-col self-start overflow-y-auto rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+          <div className="mb-[0.8vmin] flex items-center justify-between px-[0.3vmin]">
+            <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">
+              Players
+            </h2>
+            {isVoteKickOpen && (
+              <span className="rounded-full border border-purple-500/40 bg-purple-500/20 px-[0.6vmin] py-[0.15vmin] text-[0.85vmin] font-bold text-purple-300 animate-pulse">
+                Vote Kick Mode
               </span>
-            </span>
+            )}
           </div>
 
-          <div className="flex items-center justify-between px-[0.3vmin]">
-            {/* Left Button: Vote Kick (same design and color as Roll Dice) */}
-            <button
-              onClick={() => setIsVoteKickOpen((prev) => !prev)}
-              disabled={alivePlayers.length <= 1}
-              className={`flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
-                isVoteKickOpen ? "ring-2 ring-purple-300 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]" : ""
-              }`}
-              title={isVoteKickOpen ? "Click to close Vote Kick mode" : "Click to vote kick players in the panel above"}
-            >
-              <span className="text-[1.2vmin]">🗳️</span>
-              <span>Vote Kick</span>
-            </button>
+          <div className="flex flex-col gap-[0.7vmin]">
+            {players.map((player) => {
+              const isSelected = selectedPlayerId === player.id;
+              const isSelf = player.id === currentPlayer?.id;
+              const isTarget = isVoteKickOpen && !player.isBankrupt && !isSelf;
 
-            {/* Right Button: Bankrupt (red, but same design as Roll Dice) */}
-            <button
-              onClick={() => {
-                if (currentPlayer && !currentPlayer.isBankrupt) {
-                  setBankruptCandidateId(currentPlayer.id);
-                  setShowBankruptModal(true);
-                }
-              }}
-              disabled={!currentPlayer || currentPlayer.isBankrupt || alivePlayers.length <= 1}
-              className="flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-red-600 to-rose-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-              title="Whoever clicks this gets out (surrender/bankrupt)"
-            >
-              <span className="text-[1.2vmin]">🏳️</span>
-              <span>Bankrupt</span>
-            </button>
-          </div>
-        </div>
+              const voters = kickVotes[player.id] || [];
+              const otherEligibleVoters = alivePlayers.filter((p) => p.id !== player.id);
+              const totalOthers = otherEligibleVoters.length;
+              const votes = voters.length;
+              const hasCurrentVoted = currentPlayer ? voters.includes(currentPlayer.id) : false;
 
-        {/* ================= TRADE PANEL (BETWEEN PLAYER ACTIONS & SETTINGS) ================= */}
-        <div className="mt-[1.2vmin] rounded-[1.2vmin] border-2 border-indigo-500/35 bg-[#141024] p-[1.1vmin] shadow-[0_0_2vmin_rgba(99,102,241,0.15)] transition-all">
-          <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
-            <div className="flex items-center gap-[0.6vmin]">
-              <span className="text-[1.15vmin] font-black uppercase tracking-wider text-white flex items-center gap-[0.4vmin]">
-                <span>🤝</span>
-                <span>Active Trades</span>
-              </span>
-              {trades.filter((t) => t.status === "pending").length > 0 && (
-                <span className="rounded-full border border-emerald-400/60 bg-emerald-500/20 px-[0.6vmin] py-[0.1vmin] text-[0.8vmin] font-black uppercase text-emerald-300 animate-pulse">
-                  {trades.filter((t) => t.status === "pending").length} active
-                </span>
-              )}
-            </div>
-            <button
-              onClick={() => openCreateTradeModal()}
-              disabled={alivePlayers.length <= 1}
-              className="flex items-center gap-[0.4vmin] rounded-[0.8vmin] border border-purple-400/40 bg-gradient-to-r from-purple-600 to-indigo-600 px-[1vmin] py-[0.5vmin] text-[1.05vmin] font-black uppercase tracking-wide text-white shadow transition hover:scale-[1.03] hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-              title="Propose a new trade offer"
-            >
-              <span>+ Propose</span>
-            </button>
-          </div>
-
-          {/* Active Trades List */}
-          {(() => {
-            const pendingTrades = trades.filter((t) => t.status === "pending");
-            if (pendingTrades.length === 0) {
               return (
-                <div className="rounded-[0.9vmin] border border-white/5 bg-black/25 py-[1vmin] px-[0.8vmin] text-center">
-                  <p className="text-[1.05vmin] text-gray-400 font-medium">No active trade offers.</p>
+                <div
+                  key={player.id}
+                  onClick={() => {
+                    if (isVoteKickOpen) {
+                      if (isTarget && currentPlayer) {
+                        togglePlayerKickVote(player.id, currentPlayer.id);
+                      }
+                    } else {
+                      setSelectedPlayerId((prev) => (prev === player.id ? null : player.id));
+                    }
+                  }}
+                  className={`flex items-center justify-between rounded-[1vmin] border-[0.18vmin] px-[1.1vmin] py-[0.9vmin] text-left transition-all duration-200 ${player.isBankrupt
+                      ? "opacity-30 grayscale cursor-not-allowed"
+                      : isVoteKickOpen && isSelf
+                        ? "opacity-30 grayscale-[30%] cursor-not-allowed border-white/5 bg-white/[0.02]"
+                        : isVoteKickOpen && isTarget
+                          ? hasCurrentVoted
+                            ? "border-emerald-500/60 bg-emerald-500/10 cursor-pointer hover:bg-emerald-500/15"
+                            : "border-purple-500/40 bg-purple-500/5 cursor-pointer hover:border-purple-400/60 hover:bg-purple-500/15"
+                          : isSelected && !player.isCurrentPlayer
+                            ? "ring-[0.14vmin] ring-white/40 cursor-pointer"
+                            : "cursor-pointer"
+                    }`}
+                  style={{
+                    borderColor:
+                      isVoteKickOpen && isSelf
+                        ? "rgba(255,255,255,0.05)"
+                        : isVoteKickOpen && isTarget
+                          ? hasCurrentVoted
+                            ? "#10b981aa"
+                            : "rgba(168,85,247,0.4)"
+                          : player.isCurrentPlayer
+                            ? `${player.color}cc`
+                            : "rgba(255,255,255,0.1)",
+                    backgroundColor:
+                      isVoteKickOpen && isSelf
+                        ? "rgba(255,255,255,0.02)"
+                        : isVoteKickOpen && isTarget
+                          ? hasCurrentVoted
+                            ? "rgba(16,185,129,0.08)"
+                            : "rgba(168,85,247,0.08)"
+                          : player.isCurrentPlayer
+                            ? `${player.color}2e`
+                            : "rgba(255,255,255,0.04)",
+                    boxShadow:
+                      !isVoteKickOpen && player.isCurrentPlayer
+                        ? `0 0 1.6vmin ${player.color}88, inset 0 0 0.7vmin ${player.color}33`
+                        : undefined,
+                  }}
+                >
+                  <div className="flex items-center gap-[1vmin]">
+                    <div className="shrink-0">{renderPlayerFace(player, "4vmin")}</div>
+                    <div className="flex flex-col leading-tight">
+                      {!isGameStarted ? (
+                        <div
+                          className="flex items-center gap-[0.6vmin]"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="text"
+                            value={player.name}
+                            onChange={(e) => handlePlayerNameChange(player.id, e.target.value)}
+                            placeholder={`Player ${player.id}`}
+                            maxLength={12}
+                            className="w-[16.5vmin] rounded-[0.9vmin] border-[0.25vmin] border-purple-400/50 bg-[#160f26] px-[1.1vmin] py-[0.5vmin] text-[1.75vmin] font-black text-white placeholder:text-gray-400/90 placeholder:font-black placeholder:text-[1.65vmin] shadow-inner shadow-black/60 transition-all focus:border-purple-300 focus:bg-[#231540] focus:shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] focus:outline-none"
+                            title="Click to edit player name"
+                          />
+                          <span className="text-[1.4vmin] text-purple-300 drop-shadow" title="Editable before game start">
+                            ✏️
+                          </span>
+                        </div>
+                      ) : (
+                        <span
+                          className={`text-[1.8vmin] font-black tracking-wide drop-shadow-[0_0.2vmin_0.4vmin_rgba(0,0,0,0.9)] ${isVoteKickOpen && isSelf
+                              ? "text-gray-400"
+                              : player.isCurrentPlayer
+                                ? "text-white"
+                                : "text-gray-100"
+                            }`}
+                        >
+                          {player.name || `Player ${player.id}`}
+                        </span>
+                      )}
+
+                      {player.isBankrupt ? (
+                        <span className="text-[0.9vmin] text-red-400">BANKRUPT</span>
+                      ) : isVoteKickOpen && isSelf ? (
+                        <span className="text-[0.8vmin] font-medium text-gray-500">(Yourself)</span>
+                      ) : isVoteKickOpen && isTarget ? (
+                        <div className="mt-[0.15vmin] flex items-center gap-[0.3vmin]">
+                          {otherEligibleVoters.map((voter) => {
+                            const thisVoted = voters.includes(voter.id);
+                            return (
+                              <span
+                                key={voter.id}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  togglePlayerKickVote(player.id, voter.id);
+                                }}
+                                className={`flex cursor-pointer items-center gap-[0.2vmin] rounded-full border px-[0.45vmin] py-[0.05vmin] text-[0.7vmin] font-bold transition-all ${thisVoted
+                                    ? "border-emerald-500/50 bg-emerald-500/25 text-emerald-300"
+                                    : "border-white/10 bg-white/[0.03] text-gray-400 hover:border-white/30 hover:text-white"
+                                  }`}
+                                title={`${voter.name}: ${thisVoted ? "Voted (click to remove)" : "Click to vote"} (1 vote per player)`}
+                              >
+                                <span
+                                  className="h-[0.45vmin] w-[0.45vmin] rounded-full"
+                                  style={{ backgroundColor: voter.color }}
+                                />
+                                <span>{voter.name}</span>
+                                <span>{thisVoted ? "✓" : "+"}</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : player.inJail ? (
+                        <span className="text-[0.9vmin] text-amber-400">🔒 JAIL</span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Right side: In Vote Kick mode, show vote count & button; otherwise show money */}
+                  {isVoteKickOpen && isTarget ? (
+                    <div className="flex items-center gap-[0.7vmin]">
+                      <span
+                        className={`text-[1.35vmin] font-black ${votes > 0 ? "text-purple-300" : "text-gray-400"
+                          }`}
+                      >
+                        {votes}/{totalOthers}
+                      </span>
+
+                      {currentPlayer && currentPlayer.id !== player.id && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePlayerKickVote(player.id, currentPlayer.id);
+                          }}
+                          className={`rounded-[0.65vmin] px-[0.85vmin] py-[0.35vmin] text-[0.9vmin] font-black uppercase transition-all hover:scale-105 active:scale-95 ${hasCurrentVoted
+                              ? "border border-emerald-500/60 bg-emerald-500/25 text-emerald-300 hover:border-red-500/50 hover:bg-red-500/20 hover:text-red-300"
+                              : "border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md"
+                            }`}
+                          title={hasCurrentVoted ? "Click to remove your vote" : `Vote to kick ${player.name}`}
+                        >
+                          {hasCurrentVoted ? "✓ Voted" : "+ Vote"}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div
+                      className={`flex items-center gap-[0.4vmin] rounded-[0.9vmin] border-[0.2vmin] px-[1.1vmin] py-[0.45vmin] shadow-md transition-all ${isVoteKickOpen && isSelf
+                          ? "border-white/10 bg-white/[0.02] text-gray-500"
+                          : player.isCurrentPlayer
+                            ? "border-emerald-400/70 bg-[#062418] text-emerald-300 shadow-[0_0_1.4vmin_rgba(16,185,129,0.45)]"
+                            : "border-emerald-500/40 bg-[#091b14] text-emerald-300"
+                        }`}
+                    >
+                      <span className="text-[1.35vmin] leading-none">💵</span>
+                      <span className="text-[1.85vmin] font-black tracking-tight drop-shadow">
+                        ${player.money.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {selectedPlayerId &&
+            (() => {
+              const selectedPlayer = players.find((p) => p.id === selectedPlayerId);
+              if (!selectedPlayer) return null;
+              const ownedCount = BOARD_TILES.filter((t) => propertyOwnership[t.id] === selectedPlayer.id).length;
+
+              return (
+                <div className="mt-[1.3vmin] flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/[0.05] px-[1vmin] py-[0.9vmin]">
+                  <div className="flex min-w-0 items-center gap-[0.6vmin]">
+                    <span className="h-[1vmin] w-[1vmin] shrink-0 rounded-full" style={{ backgroundColor: selectedPlayer.color }} />
+                    <span className="truncate text-[1.1vmin] font-semibold text-gray-200">
+                      {ownedCount > 0
+                        ? `Highlighting ${selectedPlayer.name || `Player ${selectedPlayer.id}`}'s ${ownedCount} propert${ownedCount === 1 ? "y" : "ies"} on the board`
+                        : `${selectedPlayer.name || `Player ${selectedPlayer.id}`} doesn't own any properties yet`}
+                    </span>
+                  </div>
                   <button
-                    onClick={() => openCreateTradeModal()}
-                    disabled={alivePlayers.length <= 1}
-                    className="mt-[0.4vmin] text-[1vmin] font-black text-purple-300 hover:text-purple-200 underline decoration-purple-400/50 cursor-pointer disabled:opacity-40"
+                    onClick={() => setSelectedPlayerId(null)}
+                    title="Clear selection"
+                    className="ml-[0.6vmin] flex h-[1.8vmin] w-[1.8vmin] shrink-0 items-center justify-center rounded-full text-[1.3vmin] leading-none text-gray-400 hover:bg-white/10 hover:text-white"
                   >
-                    Start a trade offer
+                    ✕
                   </button>
                 </div>
               );
-            }
+            })()}
 
-            return (
-              <div className="flex flex-col gap-[0.7vmin] max-h-[18vmin] overflow-y-auto pr-[0.3vmin]">
-                {pendingTrades.map((trade) => {
-                  const initiator = players.find((p) => p.id === trade.initiatorId);
-                  const target = players.find((p) => p.id === trade.targetId);
-                  const isRecipient = currentPlayer?.id === trade.targetId;
-                  const isSender = currentPlayer?.id === trade.initiatorId;
-
-                  return (
-                    <div
-                      key={trade.id}
-                      className={`rounded-[0.9vmin] border p-[0.8vmin] transition-all flex flex-col gap-[0.5vmin] ${
-                        isRecipient
-                          ? "border-emerald-500/50 bg-[#0c1f17] shadow-[0_0_1.2vmin_rgba(16,185,129,0.2)]"
-                          : isSender
-                          ? "border-amber-500/40 bg-[#1c1810]"
-                          : "border-purple-500/30 bg-[#141026]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between text-[1vmin]">
-                        <div className="flex items-center gap-[0.5vmin] truncate">
-                          <span className="font-black truncate max-w-[8vmin]" style={{ color: initiator?.color }}>
-                            {initiator?.name || `P${trade.initiatorId}`}
-                          </span>
-                          <span className="text-gray-400 text-[0.9vmin]">⇄</span>
-                          <span className="font-black truncate max-w-[8vmin]" style={{ color: target?.color }}>
-                            {target?.name || `P${trade.targetId}`}
-                          </span>
-                        </div>
-                        <span
-                          className={`rounded-full px-[0.7vmin] py-[0.15vmin] text-[0.8vmin] font-black uppercase tracking-wider ${
-                            isRecipient
-                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/60 animate-pulse"
-                              : isSender
-                              ? "bg-amber-500/20 text-amber-300 border border-amber-400/50"
-                              : "bg-purple-500/20 text-purple-300 border border-purple-400/40"
-                          }`}
-                        >
-                          {isRecipient ? "📩 Action Needed" : isSender ? "⏳ Sent" : "👀 Public"}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-between text-[0.95vmin] text-gray-300 bg-black/30 rounded-[0.6vmin] px-[0.7vmin] py-[0.35vmin]">
-                        <span>
-                          Gives: <span className="font-black text-white">${trade.initiatorMoney}</span>
-                          {trade.initiatorPropertyIds.length > 0 && ` +${trade.initiatorPropertyIds.length} prop`}
-                        </span>
-                        <span>
-                          Asks: <span className="font-black text-white">${trade.targetMoney}</span>
-                          {trade.targetPropertyIds.length > 0 && ` +${trade.targetPropertyIds.length} prop`}
-                        </span>
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          setSelectedTradeId(trade.id);
-                          setActiveTradeModal("view");
-                        }}
-                        className={`w-full rounded-[0.6vmin] py-[0.5vmin] text-[1vmin] font-black uppercase tracking-wider transition hover:brightness-110 active:scale-95 cursor-pointer ${
-                          isRecipient
-                            ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-[0_0_1vmin_rgba(16,185,129,0.3)]"
-                            : isSender
-                            ? "bg-gradient-to-r from-amber-600 to-orange-600 text-white"
-                            : "bg-white/10 hover:bg-white/20 text-gray-200"
-                        }`}
-                      >
-                        {isRecipient ? "Review & Negotiate ➔" : isSender ? "View / Cancel ➔" : "View Details ➔"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
-        </div>
-
-        {/* ================= SETTINGS PANEL (ONLY IN SIDEBAR BEFORE GAME START) ================= */}
-        {!isGameStarted && (
-          <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] p-[1.6vmin] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)]">
-            <div className="flex flex-col gap-[1.6vmin]">
-              {/* Header */}
-              <div className="flex items-center justify-between border-b border-purple-500/25 pb-[1.1vmin]">
-                <div className="flex items-center gap-[0.8vmin]">
-                  <span className="text-[2.2vmin]">⚙️</span>
-                  <span className="text-[1.8vmin] font-black uppercase tracking-wider text-white">
-                    GAME SETTINGS
+          {/* ================= SMALL BOX: PLAYER ACTIONS (VOTE KICK & BANKRUPT) ================= */}
+          {isGameStarted && (
+            <div className="mt-[1.2vmin] rounded-[1vmin] border border-white/10 bg-white/[0.03] p-[0.9vmin] shadow-sm">
+              <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
+                <span className="text-[1.05vmin] font-bold uppercase tracking-wider text-gray-400">
+                  Player Actions
+                </span>
+                <span className="text-[0.9vmin] font-medium text-gray-400">
+                  Turn:{" "}
+                  <span className="font-bold" style={{ color: currentPlayer?.color }}>
+                    {currentPlayer?.name || `Player ${currentPlayer?.id}`}
                   </span>
-                </div>
-                <span className="rounded-full border-2 border-emerald-400/80 bg-emerald-500/25 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse">
-                  🟢 SETUP (EDITABLE)
                 </span>
               </div>
 
-              {/* Setting: Number of Players (2 to 6) */}
-              <div className="flex flex-col gap-[0.8vmin]">
-                <div className="flex items-center justify-between">
-                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                    👥 Number of Players:
+              <div className="flex items-center justify-between px-[0.3vmin]">
+                {/* Left Button: Vote Kick (same design and color as Roll Dice) */}
+                <button
+                  onClick={() => setIsVoteKickOpen((prev) => !prev)}
+                  disabled={alivePlayers.length < 3}
+                  className={`flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${isVoteKickOpen ? "ring-2 ring-purple-300 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]" : ""
+                    }`}
+                  title={alivePlayers.length < 3 ? "Vote kick needs at least 3 active players" : isVoteKickOpen ? "Click to close Vote Kick mode" : "Click to vote kick players in the panel above"}
+                >
+                  <span className="text-[1.2vmin]">🗳️</span>
+                  <span>Vote Kick</span>
+                </button>
+
+                {/* Right Button: Bankrupt (red, but same design as Roll Dice) */}
+                <button
+                  onClick={() => {
+                    if (currentPlayer && !currentPlayer.isBankrupt) {
+                      setBankruptCandidateId(currentPlayer.id);
+                      setShowBankruptModal(true);
+                    }
+                  }}
+                  disabled={!currentPlayer || currentPlayer.isBankrupt || alivePlayers.length <= 1}
+                  className="flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-red-600 to-rose-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                  title="Whoever clicks this gets out (surrender/bankrupt)"
+                >
+                  <span className="text-[1.2vmin]">🏳️</span>
+                  <span>Bankrupt</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ================= TRADE PANEL (BETWEEN PLAYER ACTIONS & SETTINGS) ================= */}
+          {isGameStarted && enableTrading && (
+            <div className="mt-[1.2vmin] rounded-[1.2vmin] border-2 border-indigo-500/35 bg-[#141024] p-[1.1vmin] shadow-[0_0_2vmin_rgba(99,102,241,0.15)] transition-all">
+              <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
+                <div className="flex items-center gap-[0.6vmin]">
+                  <span className="text-[1.15vmin] font-black uppercase tracking-wider text-white flex items-center gap-[0.4vmin]">
+                    <span>🤝</span>
+                    <span>Active Trades</span>
                   </span>
-                  <span className="text-[1.6vmin] font-black text-purple-400">
-                    {players.length} Players
-                  </span>
+                  {trades.filter((t) => t.status === "pending").length > 0 && (
+                    <span className="rounded-full border border-emerald-400/60 bg-emerald-500/20 px-[0.6vmin] py-[0.1vmin] text-[0.8vmin] font-black uppercase text-emerald-300 animate-pulse">
+                      {trades.filter((t) => t.status === "pending").length} active
+                    </span>
+                  )}
                 </div>
-                <div className="grid grid-cols-5 gap-[0.6vmin]">
-                  {[2, 3, 4, 5, 6].map((count) => {
-                    const isActive = players.length === count;
-                    return (
+                <button
+                  onClick={() => openCreateTradeModal()}
+                  disabled={alivePlayers.length <= 1 || !enableTrading}
+                  className="flex items-center gap-[0.4vmin] rounded-[0.8vmin] border border-purple-400/40 bg-gradient-to-r from-purple-600 to-indigo-600 px-[1vmin] py-[0.5vmin] text-[1.05vmin] font-black uppercase tracking-wide text-white shadow transition hover:scale-[1.03] hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  title={enableTrading ? "Propose a new trade offer" : "Trading is disabled in this game"}
+                >
+                  <span>+ Propose</span>
+                </button>
+              </div>
+
+              {/* Active Trades List */}
+              {(() => {
+                const pendingTrades = trades.filter((t) => t.status === "pending");
+                if (pendingTrades.length === 0) {
+                  return (
+                    <div className="rounded-[0.9vmin] border border-white/5 bg-black/25 py-[1vmin] px-[0.8vmin] text-center">
+                      <p className="text-[1.05vmin] text-gray-400 font-medium">No active trade offers.</p>
                       <button
-                        key={count}
-                        onClick={() => handlePlayerCountChange(count)}
-                        className={`rounded-[0.9vmin] py-[0.85vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${
-                          isActive
-                            ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] scale-[1.03]"
-                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                        }`}
-                        title={`Set player count to ${count}`}
+                        onClick={() => openCreateTradeModal()}
+                        disabled={alivePlayers.length <= 1 || !enableTrading}
+                        className="mt-[0.4vmin] text-[1vmin] font-black text-purple-300 hover:text-purple-200 underline decoration-purple-400/50 cursor-pointer disabled:opacity-40"
                       >
-                        {count}P
+                        {enableTrading ? "Start a trade offer" : "Trading is disabled"}
                       </button>
-                    );
-                  })}
-                </div>
-              </div>
+                    </div>
+                  );
+                }
 
-              {/* Setting 1: Starting Cash */}
-              <div className="flex flex-col gap-[0.8vmin]">
-                <div className="flex items-center justify-between">
-                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                    💵 Starting Cash:
-                  </span>
-                  <span className="text-[1.7vmin] font-black text-emerald-400">
-                    ${startingCash.toLocaleString()}
-                  </span>
-                </div>
-                <div className="grid grid-cols-4 gap-[0.6vmin]">
-                  {[1500, 2000, 2500, 3000].map((cash) => (
-                    <button
-                      key={cash}
-                      onClick={() => handleStartingCashChange(cash)}
-                      className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${
-                        startingCash === cash
-                          ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                      }`}
-                      title={`Set starting cash to $${cash.toLocaleString()}`}
-                    >
-                      ${cash >= 1000 ? `${cash / 1000}k` : cash}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                return (
+                  <div className="flex flex-col gap-[0.7vmin] max-h-[18vmin] overflow-y-auto pr-[0.3vmin]">
+                    {pendingTrades.map((trade) => {
+                      const initiator = players.find((p) => p.id === trade.initiatorId);
+                      const target = players.find((p) => p.id === trade.targetId);
+                      const isRecipient = currentPlayer?.id === trade.targetId;
+                      const isSender = currentPlayer?.id === trade.initiatorId;
 
-              {/* Setting 2: START Bonus (Pass / Land) */}
-              <div className="flex flex-col gap-[0.8vmin]">
-                <div className="flex items-center justify-between">
-                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                    🚩 START Bonus:
-                  </span>
-                  <span className="text-[1.35vmin] font-bold text-gray-200">
-                    Pass <span className="font-black text-emerald-400">+${passStartBonus}</span> / Land{" "}
-                    <span className="font-black text-emerald-400">+${landStartBonus}</span>
+                      return (
+                        <div
+                          key={trade.id}
+                          className={`rounded-[0.9vmin] border p-[0.8vmin] transition-all flex flex-col gap-[0.5vmin] ${isRecipient
+                              ? "border-emerald-500/50 bg-[#0c1f17] shadow-[0_0_1.2vmin_rgba(16,185,129,0.2)]"
+                              : isSender
+                                ? "border-amber-500/40 bg-[#1c1810]"
+                                : "border-purple-500/30 bg-[#141026]"
+                            }`}
+                        >
+                          <div className="flex items-center justify-between text-[1vmin]">
+                            <div className="flex items-center gap-[0.5vmin] truncate">
+                              <span className="font-black truncate max-w-[8vmin]" style={{ color: initiator?.color }}>
+                                {initiator?.name || `P${trade.initiatorId}`}
+                              </span>
+                              <span className="text-gray-400 text-[0.9vmin]">⇄</span>
+                              <span className="font-black truncate max-w-[8vmin]" style={{ color: target?.color }}>
+                                {target?.name || `P${trade.targetId}`}
+                              </span>
+                            </div>
+                            <span
+                              className={`rounded-full px-[0.7vmin] py-[0.15vmin] text-[0.8vmin] font-black uppercase tracking-wider ${isRecipient
+                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/60 animate-pulse"
+                                  : isSender
+                                    ? "bg-amber-500/20 text-amber-300 border border-amber-400/50"
+                                    : "bg-purple-500/20 text-purple-300 border border-purple-400/40"
+                                }`}
+                            >
+                              {isRecipient ? "📩 Action Needed" : isSender ? "⏳ Sent" : "👀 Public"}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[0.95vmin] text-gray-300 bg-black/30 rounded-[0.6vmin] px-[0.7vmin] py-[0.35vmin]">
+                            <span>
+                              Gives: <span className="font-black text-white">${trade.initiatorMoney}</span>
+                              {trade.initiatorPropertyIds.length > 0 && ` +${trade.initiatorPropertyIds.length} prop`}
+                            </span>
+                            <span>
+                              Asks: <span className="font-black text-white">${trade.targetMoney}</span>
+                              {trade.targetPropertyIds.length > 0 && ` +${trade.targetPropertyIds.length} prop`}
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              setSelectedTradeId(trade.id);
+                              setActiveTradeModal("view");
+                            }}
+                            className={`w-full rounded-[0.6vmin] py-[0.5vmin] text-[1vmin] font-black uppercase tracking-wider transition hover:brightness-110 active:scale-95 cursor-pointer ${isRecipient
+                                ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-[0_0_1vmin_rgba(16,185,129,0.3)]"
+                                : isSender
+                                  ? "bg-gradient-to-r from-amber-600 to-orange-600 text-white"
+                                  : "bg-white/10 hover:bg-white/20 text-gray-200"
+                              }`}
+                          >
+                            {isRecipient ? "Review & Negotiate ➔" : isSender ? "View / Cancel ➔" : "View Details ➔"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ================= SETTINGS PANEL (ONLY IN SIDEBAR BEFORE GAME START) ================= */}
+          {!isGameStarted && (
+            <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] p-[1.6vmin] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)]">
+              <div className="flex flex-col gap-[1.6vmin]">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-purple-500/25 pb-[1.1vmin]">
+                  <div className="flex items-center gap-[0.8vmin]">
+                    <span className="text-[2.2vmin]">⚙️</span>
+                    <span className="text-[1.8vmin] font-black uppercase tracking-wider text-white">
+                      GAME SETTINGS
+                    </span>
+                  </div>
+                  <span className="rounded-full border-2 border-emerald-400/80 bg-emerald-500/25 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse">
+                    🟢 SETUP (EDITABLE)
                   </span>
                 </div>
-                <div className="grid grid-cols-3 gap-[0.6vmin]">
-                  {[
-                    { label: "Standard", pass: 200, land: 300 },
-                    { label: "Boosted", pass: 300, land: 450 },
-                    { label: "High", pass: 400, land: 600 },
-                  ].map((preset) => {
-                    const isActive = passStartBonus === preset.pass && landStartBonus === preset.land;
-                    return (
+
+                {/* Setting: Number of Players (2 to 6) */}
+                <div className="flex flex-col gap-[0.8vmin]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                      👥 Number of Players:
+                    </span>
+                    <span className="text-[1.6vmin] font-black text-purple-400">
+                      {players.length} Players
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-[0.6vmin]">
+                    {[2, 3, 4, 5, 6].map((count) => {
+                      const isActive = players.length === count;
+                      return (
+                        <button
+                          key={count}
+                          onClick={() => handlePlayerCountChange(count)}
+                          className={`rounded-[0.9vmin] py-[0.85vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${isActive
+                              ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] scale-[1.03]"
+                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                            }`}
+                          title={`Set player count to ${count}`}
+                        >
+                          {count}P
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Setting 1: Starting Cash */}
+                <div className="flex flex-col gap-[0.8vmin]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                      💵 Starting Cash:
+                    </span>
+                    <span className="text-[1.7vmin] font-black text-emerald-400">
+                      ${startingCash.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-[0.6vmin]">
+                    {[1500, 2000, 2500, 3000].map((cash) => (
                       <button
-                        key={preset.label}
-                        onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
-                        className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.3vmin] font-black transition-all cursor-pointer ${
-                          isActive
-                            ? "border-[0.25vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.4vmin_rgba(99,102,241,0.55)] scale-[1.03]"
+                        key={cash}
+                        onClick={() => handleStartingCashChange(cash)}
+                        className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${startingCash === cash
+                            ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
                             : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                        }`}
-                        title={`${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
+                          }`}
+                        title={`Set starting cash to $${cash.toLocaleString()}`}
                       >
-                        {preset.label}
+                        ${cash >= 1000 ? `${cash / 1000}k` : cash}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              {/* Setting 3: Movement Speed & Free Parking Pot */}
-              <div className="grid grid-cols-2 gap-[1vmin]">
-                {/* Speed Toggle */}
+                {/* Setting 2: START Bonus (Pass / Land) */}
+                <div className="flex flex-col gap-[0.8vmin]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                      🚩 START Bonus:
+                    </span>
+                    <span className="text-[1.5vmin] font-bold text-gray-100">
+                      Pass <span className="text-[1.8vmin] font-black text-emerald-300 drop-shadow-[0_0_0.6vmin_rgba(52,211,153,0.9)]">+${passStartBonus}</span> / Land{" "}
+                      <span className="text-[1.8vmin] font-black text-emerald-300 drop-shadow-[0_0_0.6vmin_rgba(52,211,153,0.9)]">+${landStartBonus}</span>
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-[0.8vmin]">
+                    {/* Pass Bonus */}
+                    <div className="flex flex-col gap-[0.4vmin]">
+                      <label className="text-[1.1vmin] font-bold text-gray-300">Pass Bonus:</label>
+                      <div className="flex items-center justify-center gap-[0.8vmin]">
+                        <button
+                          onClick={() => handlePassBonusChange(Math.max(0, passStartBonus - 50))}
+                          disabled={isGameStarted || passStartBonus === 0}
+                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          title="Decrease by $50"
+                        >
+                          ◀
+                        </button>
+                        <div className="flex-1 text-center rounded-[0.6vmin] border-2 border-emerald-500/40 bg-[#221c38] py-[0.6vmin] px-[1vmin]">
+                          <span className="text-[1.9vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(52,211,153,0.9)]">+${passStartBonus}</span>
+                        </div>
+                        <button
+                          onClick={() => handlePassBonusChange(passStartBonus + 50)}
+                          disabled={isGameStarted}
+                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          title="Increase by $50"
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Land Bonus */}
+                    <div className="flex flex-col gap-[0.4vmin]">
+                      <label className="text-[1.1vmin] font-bold text-gray-300">Land Bonus:</label>
+                      <div className="flex items-center justify-center gap-[0.8vmin]">
+                        <button
+                          onClick={() => handleLandBonusChange(Math.max(0, landStartBonus - 50))}
+                          disabled={isGameStarted || landStartBonus === 0}
+                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          title="Decrease by $50"
+                        >
+                          ◀
+                        </button>
+                        <div className="flex-1 text-center rounded-[0.6vmin] border-2 border-emerald-500/40 bg-[#221c38] py-[0.6vmin] px-[1vmin]">
+                          <span className="text-[1.9vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(52,211,153,0.9)]">+${landStartBonus}</span>
+                        </div>
+                        <button
+                          onClick={() => handleLandBonusChange(landStartBonus + 50)}
+                          disabled={isGameStarted}
+                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          title="Increase by $50"
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick Presets */}
+                  <div className="grid grid-cols-3 gap-[0.6vmin] mt-[0.4vmin]">
+                    {[
+                      { label: "Standard", pass: 200, land: 300 },
+                      { label: "Boosted", pass: 300, land: 450 },
+                      { label: "High", pass: 400, land: 600 },
+                    ].map((preset) => {
+                      const isActive = passStartBonus === preset.pass && landStartBonus === preset.land;
+                      return (
+                        <button
+                          key={preset.label}
+                          onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
+                          disabled={isGameStarted}
+                          className={`rounded-[0.7vmin] py-[0.6vmin] text-[1.1vmin] font-black transition-all cursor-pointer ${isActive
+                              ? "border-[0.2vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.2vmin_rgba(99,102,241,0.55)] scale-[1.02]"
+                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          title={`${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Setting 3: Movement Speed */}
                 <div className="flex flex-col gap-[0.6vmin]">
                   <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
                     ⚡ Game Speed:
@@ -3608,234 +3652,316 @@ export default function GameBoard() {
                   <div className="flex gap-[0.5vmin]">
                     <button
                       onClick={() => setFastMode(false)}
-                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${
-                        !fastMode
+                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${!fastMode
                           ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.2vmin_rgba(168,85,247,0.45)]"
                           : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                      }`}
+                        }`}
                     >
                       1x Normal
                     </button>
                     <button
                       onClick={() => setFastMode(true)}
-                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${
-                        fastMode
+                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${fastMode
                           ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(245,158,11,0.45)]"
                           : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                      }`}
+                        }`}
                     >
                       ⚡ Fast
                     </button>
                   </div>
                 </div>
 
-                {/* Rest House Pot Toggle */}
+                {/* Setting 4: Rest House Mode */}
                 <div className="flex flex-col gap-[0.6vmin]">
                   <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
-                    🎁 Rest House Pot:
+                    🏨 Rest House Money:
                   </span>
-                  <button
-                    onClick={() => setEnableRestHousePot((prev) => !prev)}
-                    className={`w-full rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${
-                      enableRestHousePot
-                        ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
-                        : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
-                    }`}
-                  >
-                    {enableRestHousePot ? "🎁 Pot Active" : "Off (To Bank)"}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Start Game Button */}
-            <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
-              <button
-                onClick={handleStartGame}
-                className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
-              >
-                <span className="text-[1.8vmin]">▶</span>
-                <span>Start Game & Lock Settings</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================= FLOATING SETTINGS ICON (WHEN GAME IS STARTED) ================= */}
-        {isGameStarted && (
-          <>
-            <button
-              onClick={() => setIsSettingsExpanded(true)}
-              className="fixed bottom-[2.5vmin] left-[2.5vmin] z-[150] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-purple-400/80 bg-gradient-to-br from-[#241a45] to-[#120b24] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(168,85,247,0.5)] transition-all hover:scale-110 hover:border-purple-300 hover:shadow-[0_0_3.5vmin_rgba(168,85,247,0.8)] active:scale-95 cursor-pointer"
-              title="Open Locked Game Settings"
-            >
-              ⚙️
-              <span className="absolute -top-[0.3vmin] -right-[0.3vmin] flex h-[2vmin] w-[2vmin] items-center justify-center rounded-full bg-amber-500 text-[1.1vmin] font-black text-black shadow">
-                🔒
-              </span>
-            </button>
-
-            {/* Settings Overlay Popover */}
-            {isSettingsExpanded && (
-              <div
-                className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-[2vmin] backdrop-blur-sm"
-                onClick={() => setIsSettingsExpanded(false)}
-              >
-                <div
-                  className="relative flex max-h-[85vh] w-[50vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#141024] p-[2.4vmin] text-white shadow-[0_0_4vmin_rgba(139,92,246,0.45)]"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="flex items-center justify-between border-b border-purple-500/30 pb-[1.4vmin] mb-[1.8vmin]">
-                    <div className="flex items-center gap-[0.8vmin]">
-                      <span className="text-[2.4vmin]">⚙️</span>
-                      <span className="text-[2vmin] font-black uppercase tracking-wider text-white">Game Settings</span>
-                      <span className="ml-[0.6vmin] rounded-full border border-amber-400/80 bg-amber-500/20 px-[1.2vmin] py-[0.3vmin] text-[1.1vmin] font-black text-amber-300">
-                        🔒 LOCKED
-                      </span>
-                    </div>
+                  <div className="grid grid-cols-2 gap-[0.6vmin]">
                     <button
-                      onClick={() => setIsSettingsExpanded(false)}
-                      className="flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
-                      title="Close"
+                      onClick={() => setRestHouseMode("pot")}
+                      className={`rounded-[0.9vmin] py-[0.9vmin] text-[1.2vmin] font-black transition-all cursor-pointer active:scale-95 ${restHouseMode === "pot"
+                          ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        }`}
                     >
-                      ✕
+                      🎁 Collect Pot
+                    </button>
+                    <button
+                      onClick={() => setRestHouseMode("rest")}
+                      className={`rounded-[0.9vmin] py-[0.9vmin] text-[1.2vmin] font-black transition-all cursor-pointer active:scale-95 ${restHouseMode === "rest"
+                          ? "border-[0.25vmin] border-orange-300 bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-[0_0_1.2vmin_rgba(249,115,22,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        }`}
+                    >
+                      😴 Skip Turn
                     </button>
                   </div>
-
-                  {/* Settings list (Read Only) */}
-                  <div className="flex flex-col gap-[1.4vmin]">
-                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                      <span className="text-[1.35vmin] font-bold text-gray-300">👥 Number of Players</span>
-                      <span className="text-[1.45vmin] font-black text-purple-300">{players.length} Players</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                      <span className="text-[1.35vmin] font-bold text-gray-300">💵 Starting Cash</span>
-                      <span className="text-[1.45vmin] font-black text-emerald-400">${startingCash.toLocaleString()}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                      <span className="text-[1.35vmin] font-bold text-gray-300">🚩 START Pass / Land Bonus</span>
-                      <span className="text-[1.4vmin] font-black text-cyan-300">+${passStartBonus} / +${landStartBonus}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                      <span className="text-[1.35vmin] font-bold text-gray-300">⚡ Game Speed</span>
-                      <span className="text-[1.4vmin] font-black text-amber-300">{fastMode ? "Fast Speed" : "Normal Speed"}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                      <span className="text-[1.35vmin] font-bold text-gray-300">🎁 Rest House Pot</span>
-                      <span className="text-[1.4vmin] font-black text-emerald-300">{enableRestHousePot ? "Active" : "Off"}</span>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => setIsSettingsExpanded(false)}
-                    className="mt-[2.2vmin] w-full rounded-[1vmin] bg-gradient-to-r from-purple-600 to-indigo-600 py-[1.1vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 cursor-pointer"
-                  >
-                    Close Settings
-                  </button>
+                  <span className="text-[1.15vmin] text-gray-400 italic">
+                    {restHouseMode === "pot" ? "Money accumulates & pays out on landing" : "Player skips one turn, no money gained"}
+                  </span>
                 </div>
-              </div>
-            )}
-          </>
-        )}
 
-        {/* ================= FLOATING CHAT SYSTEM (BOTTOM RIGHT) ================= */}
-        <button
-          onClick={() => {
-            setIsChatOpen((prev) => !prev);
-            if (!isChatOpen) setUnreadChatCount(0);
-          }}
-          className="fixed bottom-[2.5vmin] right-[2.5vmin] z-[160] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-indigo-400/80 bg-gradient-to-br from-[#1e153b] via-[#140e2b] to-[#0d091d] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(99,102,241,0.5)] transition-all hover:scale-110 hover:border-cyan-300 hover:shadow-[0_0_3.5vmin_rgba(6,182,212,0.7)] active:scale-95 cursor-pointer"
-          title="Open Player Chat"
-        >
-          💬
-          {!isChatOpen && unreadChatCount > 0 && (
-            <span className="absolute -top-[0.4vmin] -right-[0.4vmin] flex h-[2.2vmin] w-[2.2vmin] items-center justify-center rounded-full bg-gradient-to-r from-red-500 to-rose-500 text-[1.1vmin] font-black text-white shadow-lg animate-bounce">
-              {unreadChatCount > 9 ? "9+" : unreadChatCount}
-            </span>
-          )}
-        </button>
-
-        {/* Chat Window Popover */}
-        {isChatOpen && (
-          <div className="fixed bottom-[9vmin] right-[2.5vmin] z-[180] flex h-[54vmin] w-[42vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-indigo-500/50 bg-[#120c24] text-white shadow-[0_0_4.5vmin_rgba(99,102,241,0.45)] backdrop-blur-md">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-indigo-500/30 bg-[#191133] px-[1.8vmin] py-[1.2vmin]">
-              <div className="flex items-center gap-[0.8vmin]">
-                <span className="text-[2vmin]">💬</span>
-                <span className="text-[1.65vmin] font-black uppercase tracking-wider text-white">Player Chat</span>
-                <span className="rounded-full bg-emerald-500/20 border border-emerald-400/50 px-[0.8vmin] py-[0.1vmin] text-[0.85vmin] font-bold text-emerald-300">
-                  ● Live
-                </span>
-              </div>
-              <button
-                onClick={() => setIsChatOpen(false)}
-                className="flex h-[3vmin] w-[3vmin] items-center justify-center rounded-full bg-white/10 text-[1.2vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
-                title="Close chat"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Messages Body */}
-            <div className="flex flex-1 flex-col gap-[1vmin] overflow-y-auto p-[1.4vmin] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden bg-[#0d091a]">
-              {chatMessages.length === 0 ? (
-                <div className="flex flex-1 flex-col items-center justify-center gap-[0.8vmin] text-center text-gray-400">
-                  <span className="text-[3vmin] opacity-60">👋</span>
-                  <p className="text-[1.2vmin] font-medium">No messages yet.</p>
-                  <p className="text-[1vmin] text-gray-500">Say hello to other players!</p>
-                </div>
-              ) : (
-                chatMessages.map((msg) => {
-                  const isSelf = currentPlayer && msg.senderId === currentPlayer.id;
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex flex-col gap-[0.2vmin] ${isSelf ? "items-end" : "items-start"}`}
-                    >
-                      <div className="flex items-center gap-[0.6vmin] px-[0.2vmin]">
-                        <span className="text-[0.95vmin] font-black" style={{ color: msg.senderColor }}>
-                          {msg.senderName} {isSelf ? "(You)" : ""}
-                        </span>
-                        <span className="text-[0.8vmin] text-gray-400">{msg.timestamp}</span>
-                      </div>
-                      <div
-                        className={`max-w-[85%] rounded-[1.2vmin] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium leading-normal shadow ${
-                          isSelf
-                            ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-tr-none"
-                            : "bg-[#1c1538] border border-purple-500/30 text-gray-100 rounded-tl-none"
+                {/* Setting 5: Game Rules Toggle */}
+                <div className="flex flex-col gap-[0.8vmin]">
+                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
+                    📋 Game Rules:
+                  </span>
+                  <div className="grid grid-cols-2 gap-[0.6vmin]">
+                    {/* Movement Cards */}
+                    <button
+                      onClick={() => setEnableMovementCards((prev) => !prev)}
+                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableMovementCards
+                          ? "border-[0.25vmin] border-blue-300 bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-[0_0_1.2vmin_rgba(59,130,246,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
                         }`}
+                    >
+                      {enableMovementCards ? "🎴 Cards" : "❌ No Cards"}
+                    </button>
+
+                    {/* Trading */}
+                    <button
+                      onClick={() => setEnableTrading((prev) => !prev)}
+                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableTrading
+                          ? "border-[0.25vmin] border-pink-300 bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-[0_0_1.2vmin_rgba(219,39,119,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        }`}
+                    >
+                      {enableTrading ? "🤝 Trading" : "❌ No Trade"}
+                    </button>
+
+                    {/* Mortgage */}
+                    <button
+                      onClick={() => setEnableMortgage((prev) => !prev)}
+                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableMortgage
+                          ? "border-[0.25vmin] border-yellow-300 bg-gradient-to-r from-yellow-600 to-amber-600 text-white shadow-[0_0_1.2vmin_rgba(217,119,6,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        }`}
+                    >
+                      {enableMortgage ? "💳 Mortgage" : "❌ No Mort"}
+                    </button>
+
+                    {/* Jail Rent */}
+                    <button
+                      onClick={() => setJailCollectsRent((prev) => !prev)}
+                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${jailCollectsRent
+                          ? "border-[0.25vmin] border-red-300 bg-gradient-to-r from-red-600 to-pink-600 text-white shadow-[0_0_1.2vmin_rgba(220,38,38,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        }`}
+                    >
+                      {jailCollectsRent ? "🔒 Rent Ok" : "❌ No Rent"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Start Game Button */}
+              <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
+                <button
+                  onClick={handleStartGame}
+                  className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
+                >
+                  <span className="text-[1.8vmin]">▶</span>
+                  <span>Start Game & Lock Settings</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ================= FLOATING SETTINGS ICON (WHEN GAME IS STARTED) ================= */}
+          {isGameStarted && (
+            <>
+              <button
+                onClick={() => setIsSettingsExpanded(true)}
+                className="fixed bottom-[2.5vmin] left-[2.5vmin] z-[150] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-purple-400/80 bg-gradient-to-br from-[#241a45] to-[#120b24] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(168,85,247,0.5)] transition-all hover:scale-110 hover:border-purple-300 hover:shadow-[0_0_3.5vmin_rgba(168,85,247,0.8)] active:scale-95 cursor-pointer"
+                title="Open Locked Game Settings"
+              >
+                ⚙️
+                <span className="absolute -top-[0.3vmin] -right-[0.3vmin] flex h-[2vmin] w-[2vmin] items-center justify-center rounded-full bg-amber-500 text-[1.1vmin] font-black text-black shadow">
+                  🔒
+                </span>
+              </button>
+
+              {/* Settings Overlay Popover */}
+              {isSettingsExpanded && (
+                <div
+                  className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-[2vmin] backdrop-blur-sm"
+                  onClick={() => setIsSettingsExpanded(false)}
+                >
+                  <div
+                    className="relative flex max-h-[85vh] w-[50vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#141024] p-[2.4vmin] text-white shadow-[0_0_4vmin_rgba(139,92,246,0.45)]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between border-b border-purple-500/30 pb-[1.4vmin] mb-[1.8vmin]">
+                      <div className="flex items-center gap-[0.8vmin]">
+                        <span className="text-[2.4vmin]">⚙️</span>
+                        <span className="text-[2vmin] font-black uppercase tracking-wider text-white">Game Settings</span>
+                        <span className="ml-[0.6vmin] rounded-full border border-amber-400/80 bg-amber-500/20 px-[1.2vmin] py-[0.3vmin] text-[1.1vmin] font-black text-amber-300">
+                          🔒 LOCKED
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setIsSettingsExpanded(false)}
+                        className="flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                        title="Close"
                       >
-                        {msg.text}
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Settings list (Read Only) */}
+                    <div className="flex flex-col gap-[1.4vmin] overflow-y-auto max-h-[50vh] pr-[1vmin]">
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                        <span className="text-[1.35vmin] font-bold text-gray-300">👥 Number of Players</span>
+                        <span className="text-[1.45vmin] font-black text-purple-300">{players.length} Players</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                        <span className="text-[1.35vmin] font-bold text-gray-300">💵 Starting Cash</span>
+                        <span className="text-[1.45vmin] font-black text-emerald-400">${startingCash.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                        <span className="text-[1.35vmin] font-bold text-gray-300">🚩 START Pass / Land Bonus</span>
+                        <span className="text-[1.8vmin] font-black text-cyan-200 drop-shadow-[0_0_0.7vmin_rgba(103,232,249,0.9)]">+${passStartBonus} / +${landStartBonus}</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                        <span className="text-[1.35vmin] font-bold text-gray-300">⚡ Game Speed</span>
+                        <span className="text-[1.4vmin] font-black text-amber-300">{fastMode ? "⚡ Fast Speed" : "🐢 Normal Speed"}</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
+                        <span className="text-[1.35vmin] font-bold text-gray-300">🏨 Rest House</span>
+                        <span className="text-[1.4vmin] font-black text-green-300">{restHouseMode === "pot" ? "🎁 Collect Pot" : "😴 Skip Turn"}</span>
+                      </div>
+                      <div className="border-t border-white/10 pt-[1vmin] mt-[0.6vmin]">
+                        <span className="text-[1.3vmin] font-bold text-gray-400 mb-[0.8vmin] block">📋 Game Rules:</span>
+                        <div className="grid grid-cols-2 gap-[0.8vmin]">
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
+                            <span className="text-[1.35vmin]">{enableMovementCards ? "✅" : "❌"}</span>
+                            <span className="text-[1.2vmin] font-bold text-gray-300">Movement Cards</span>
+                          </div>
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
+                            <span className="text-[1.35vmin]">{enableTrading ? "✅" : "❌"}</span>
+                            <span className="text-[1.2vmin] font-bold text-gray-300">Trading</span>
+                          </div>
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
+                            <span className="text-[1.35vmin]">{enableMortgage ? "✅" : "❌"}</span>
+                            <span className="text-[1.2vmin] font-bold text-gray-300">Mortgage</span>
+                          </div>
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
+                            <span className="text-[1.35vmin]">{jailCollectsRent ? "✅" : "❌"}</span>
+                            <span className="text-[1.2vmin] font-bold text-gray-300">Jail Rent</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  );
-                })
-              )}
-              <div ref={chatMessagesEndRef} />
-            </div>
 
-            {/* Input Footer */}
-            <form onSubmit={handleSendChatMessage} className="flex items-center gap-[0.8vmin] border-t border-indigo-500/30 bg-[#160f2e] p-[1.1vmin]">
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Type a message..."
-                maxLength={200}
-                className="flex-1 rounded-[0.9vmin] border border-purple-500/40 bg-[#0e091f] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium text-white placeholder:text-gray-500 focus:border-cyan-400 focus:bg-[#140c2c] focus:outline-none transition-all"
-              />
-              <button
-                type="submit"
-                disabled={!chatInput.trim()}
-                className="flex items-center justify-center rounded-[0.9vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[1.6vmin] py-[0.8vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-                title="Send message"
-              >
-                ✈️
-              </button>
-            </form>
-          </div>
-        )}
-      </div>
+                    <button
+                      onClick={() => setIsSettingsExpanded(false)}
+                      className="mt-[2.2vmin] w-full rounded-[1vmin] bg-gradient-to-r from-purple-600 to-indigo-600 py-[1.1vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 cursor-pointer"
+                    >
+                      Close Settings
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ================= FLOATING CHAT SYSTEM (BOTTOM RIGHT) ================= */}
+          <button
+            onClick={() => {
+              setIsChatOpen((prev) => !prev);
+              if (!isChatOpen) setUnreadChatCount(0);
+            }}
+            className="fixed bottom-[2.5vmin] right-[2.5vmin] z-[160] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-indigo-400/80 bg-gradient-to-br from-[#1e153b] via-[#140e2b] to-[#0d091d] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(99,102,241,0.5)] transition-all hover:scale-110 hover:border-cyan-300 hover:shadow-[0_0_3.5vmin_rgba(6,182,212,0.7)] active:scale-95 cursor-pointer"
+            title="Open Player Chat"
+          >
+            💬
+            {!isChatOpen && unreadChatCount > 0 && (
+              <span className="absolute -top-[0.4vmin] -right-[0.4vmin] flex h-[2.2vmin] w-[2.2vmin] items-center justify-center rounded-full bg-gradient-to-r from-red-500 to-rose-500 text-[1.1vmin] font-black text-white shadow-lg animate-bounce">
+                {unreadChatCount > 9 ? "9+" : unreadChatCount}
+              </span>
+            )}
+          </button>
+
+          {/* Chat Window Popover */}
+          {isChatOpen && (
+            <div className="fixed bottom-[9vmin] right-[2.5vmin] z-[180] flex h-[54vmin] w-[42vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-indigo-500/50 bg-[#120c24] text-white shadow-[0_0_4.5vmin_rgba(99,102,241,0.45)] backdrop-blur-md">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-indigo-500/30 bg-[#191133] px-[1.8vmin] py-[1.2vmin]">
+                <div className="flex items-center gap-[0.8vmin]">
+                  <span className="text-[2vmin]">💬</span>
+                  <span className="text-[1.65vmin] font-black uppercase tracking-wider text-white">Player Chat</span>
+                  <span className="rounded-full bg-emerald-500/20 border border-emerald-400/50 px-[0.8vmin] py-[0.1vmin] text-[0.85vmin] font-bold text-emerald-300">
+                    ● Live
+                  </span>
+                </div>
+                <button
+                  onClick={() => setIsChatOpen(false)}
+                  className="flex h-[3vmin] w-[3vmin] items-center justify-center rounded-full bg-white/10 text-[1.2vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                  title="Close chat"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Messages Body */}
+              <div className="flex flex-1 flex-col gap-[1vmin] overflow-y-auto p-[1.4vmin] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden bg-[#0d091a]">
+                {chatMessages.length === 0 ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-[0.8vmin] text-center text-gray-400">
+                    <span className="text-[3vmin] opacity-60">👋</span>
+                    <p className="text-[1.2vmin] font-medium">No messages yet.</p>
+                    <p className="text-[1vmin] text-gray-500">Say hello to other players!</p>
+                  </div>
+                ) : (
+                  chatMessages.map((msg) => {
+                    const isSelf = currentPlayer && msg.senderId === currentPlayer.id;
+                    return (
+                      <div
+                        key={msg.id}
+                        className={`flex flex-col gap-[0.2vmin] ${isSelf ? "items-end" : "items-start"}`}
+                      >
+                        <div className="flex items-center gap-[0.6vmin] px-[0.2vmin]">
+                          <span className="text-[0.95vmin] font-black" style={{ color: msg.senderColor }}>
+                            {msg.senderName} {isSelf ? "(You)" : ""}
+                          </span>
+                          <span className="text-[0.8vmin] text-gray-400">{msg.timestamp}</span>
+                        </div>
+                        <div
+                          className={`max-w-[85%] rounded-[1.2vmin] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium leading-normal shadow ${isSelf
+                              ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-tr-none"
+                              : "bg-[#1c1538] border border-purple-500/30 text-gray-100 rounded-tl-none"
+                            }`}
+                        >
+                          {msg.text}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={chatMessagesEndRef} />
+              </div>
+
+              {/* Input Footer */}
+              <form onSubmit={handleSendChatMessage} className="flex items-center gap-[0.8vmin] border-t border-indigo-500/30 bg-[#160f2e] p-[1.1vmin]">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Type a message..."
+                  maxLength={200}
+                  className="flex-1 rounded-[0.9vmin] border border-purple-500/40 bg-[#0e091f] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium text-white placeholder:text-gray-500 focus:border-cyan-400 focus:bg-[#140c2c] focus:outline-none transition-all"
+                />
+                <button
+                  type="submit"
+                  disabled={!chatInput.trim()}
+                  className="flex items-center justify-center rounded-[0.9vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[1.6vmin] py-[0.8vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  title="Send message"
+                >
+                  ✈️
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
       </div>
     </main>
   );
