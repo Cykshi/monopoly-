@@ -70,6 +70,15 @@ interface ChatMessage {
   timestamp: string;
 }
 
+interface AuctionState {
+  id: string;
+  tileId: number;
+  currentBid: number;
+  highestBidderId: number | null;
+  passedPlayerIds: number[];
+  timeLeft: number;
+}
+
 const COUNTRY_FLAG_EMOJIS: Record<string, string> = {
   BD: "🇧🇩",
   FR: "🇫🇷",
@@ -323,6 +332,10 @@ export default function GameBoard() {
   const [enableMortgage, setEnableMortgage] = useState(true);
   // If true, players in JAIL still collect rent when others land on their tiles
   const [jailCollectsRent, setJailCollectsRent] = useState(false);
+  const [enableAuction, setEnableAuction] = useState(true);
+  const [activeAuction, setActiveAuction] = useState<AuctionState | null>(null);
+  const activeAuctionRef = useRef<AuctionState | null>(null);
+  activeAuctionRef.current = activeAuction;
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
   // Turn Timer state (120 seconds per turn)
   const [turnTimeLeft, setTurnTimeLeft] = useState(TURN_TIME_LIMIT);
@@ -523,6 +536,35 @@ export default function GameBoard() {
       if (!isChatOpenRef.current) {
         setUnreadChatCount((prev) => prev + 1);
       }
+    });
+
+    newSocket.on("auction:start", (data: { auction: AuctionState }) => {
+      setActiveAuction(data.auction);
+      setActiveModal(null);
+      const tile = BOARD_TILES.find((t) => t.id === data.auction.tileId);
+      addLog(`🔨 AUCTION STARTED for ${tile?.name || "property"}! Bidding starts at $2.`);
+    });
+
+    newSocket.on("auction:bid", (data: { auction: AuctionState }) => {
+      setActiveAuction(data.auction);
+      const bidder = playersRef.current.find((p) => p.id === data.auction.highestBidderId);
+      const tile = BOARD_TILES.find((t) => t.id === data.auction.tileId);
+      addLog(`🔨 ${bidder?.name || "Player"} bid $${data.auction.currentBid} on ${tile?.name || "property"}!`);
+    });
+
+    newSocket.on("auction:pass", (data: { auction: AuctionState }) => {
+      setActiveAuction(data.auction);
+    });
+
+    newSocket.on("auction:end", (data: { auction: AuctionState }) => {
+      if (data.auction.highestBidderId !== null) {
+        const winnerP = playersRef.current.find((p) => p.id === data.auction.highestBidderId);
+        const tile = BOARD_TILES.find((t) => t.id === data.auction.tileId);
+        if (winnerP && tile) {
+          setPropertyOwnership((prev) => ({ ...prev, [tile.id]: winnerP.id }));
+        }
+      }
+      setActiveAuction(null);
     });
 
     newSocket.on("connect", handleConnect);
@@ -1395,6 +1437,120 @@ export default function GameBoard() {
       socketRef.current.emit("chat:message", newMsg);
     }
   };
+
+  // ================= AUCTION SYSTEM HANDLERS =================
+  const startAuction = (tile: Tile) => {
+    if (!enableAuction) return;
+
+    const newAuction: AuctionState = {
+      id: `auc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      tileId: tile.id,
+      currentBid: 2, // Starts at $2 per requirements
+      highestBidderId: null,
+      passedPlayerIds: [],
+      timeLeft: 15,
+    };
+
+    setActiveAuction(newAuction);
+    setActiveModal(null);
+    socketRef.current?.emit("auction:start", { auction: newAuction });
+    addLog(`🔨 AUCTION STARTED for ${tile.name}! Bidding starts at $2.`);
+  };
+
+  const handlePlaceBid = (increment: number) => {
+    if (!activeAuction || !currentPlayer) return;
+
+    const newBidAmount = activeAuction.currentBid + increment;
+
+    if (currentPlayer.money < newBidAmount) {
+      addLog(`⚠️ You don't have $${newBidAmount.toLocaleString()} to bid.`);
+      return;
+    }
+
+    if (activeAuction.highestBidderId === currentPlayer.id) {
+      addLog("⚠️ You are already the highest bidder!");
+      return;
+    }
+
+    const updatedAuction: AuctionState = {
+      ...activeAuction,
+      currentBid: newBidAmount,
+      highestBidderId: currentPlayer.id,
+      timeLeft: 15, // Reset timer to 15s on new bid
+    };
+
+    setActiveAuction(updatedAuction);
+    socketRef.current?.emit("auction:bid", { auction: updatedAuction });
+    addLog(`🔨 ${currentPlayer.name} bid $${newBidAmount} on ${BOARD_TILES.find((t) => t.id === activeAuction.tileId)?.name || "property"}!`);
+  };
+
+  const handlePassAuction = () => {
+    if (!activeAuction || !currentPlayer) return;
+    if (activeAuction.passedPlayerIds.includes(currentPlayer.id)) return;
+
+    const updatedPassed = [...activeAuction.passedPlayerIds, currentPlayer.id];
+    const updatedAuction: AuctionState = {
+      ...activeAuction,
+      passedPlayerIds: updatedPassed,
+    };
+
+    setActiveAuction(updatedAuction);
+    socketRef.current?.emit("auction:pass", { auction: updatedAuction });
+    addLog(`❌ ${currentPlayer.name} passed on the auction.`);
+
+    const remainingActive = alivePlayers.filter((p) => !updatedPassed.includes(p.id));
+    if (
+      remainingActive.length === 0 ||
+      (remainingActive.length === 1 && activeAuction.highestBidderId === remainingActive[0].id)
+    ) {
+      handleEndAuction(updatedAuction);
+    }
+  };
+
+  const handleEndAuction = (auctionToEnd: AuctionState) => {
+    const tile = BOARD_TILES.find((t) => t.id === auctionToEnd.tileId);
+    if (!tile) {
+      setActiveAuction(null);
+      return;
+    }
+
+    if (auctionToEnd.highestBidderId !== null) {
+      const winnerPlayer = players.find((p) => p.id === auctionToEnd.highestBidderId);
+      if (winnerPlayer) {
+        setPlayers((prev) =>
+          prev.map((p) => (p.id === winnerPlayer.id ? { ...p, money: p.money - auctionToEnd.currentBid } : p))
+        );
+        setPropertyOwnership((prev) => ({ ...prev, [tile.id]: winnerPlayer.id }));
+        addLog(`🎉 AUCTION WON! ${winnerPlayer.name} won ${tile.name} for $${auctionToEnd.currentBid}!`);
+        socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: winnerPlayer.id });
+        socketRef.current?.emit("auction:end", { auction: auctionToEnd });
+      }
+    } else {
+      addLog(`🔨 Auction for ${tile.name} ended with no bids. Property remains unowned.`);
+      socketRef.current?.emit("auction:end", { auction: auctionToEnd });
+    }
+
+    setActiveAuction(null);
+  };
+
+  // Auction countdown timer
+  useEffect(() => {
+    if (!activeAuction) return;
+
+    const interval = window.setInterval(() => {
+      setActiveAuction((prev) => {
+        if (!prev) return null;
+        if (prev.timeLeft <= 1) {
+          handleEndAuction(prev);
+          return null;
+        }
+        return { ...prev, timeLeft: prev.timeLeft - 1 };
+      });
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAuction?.id, activeAuction?.currentBid]);
 
   const upgradeHouse = (tileId: number) => {
     if (!currentPlayer) return;
@@ -2344,13 +2500,27 @@ export default function GameBoard() {
                       })()}
 
                     {!getTileOwner(activeModal.id) && OWNABLE_TYPES.has(activeModal.type) && (
-                      <button
-                        onClick={() => buyProperty(activeModal)}
-                        disabled={(currentPlayer?.money ?? 0) < (parsePrice(activeModal.price) || 0)}
-                        className="mt-[2vmin] w-full rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
-                      >
-                        Buy for {activeModal.price}
-                      </button>
+                      <div className="mt-[2vmin] flex gap-[1vmin]">
+                        <button
+                          onClick={() => buyProperty(activeModal)}
+                          disabled={(currentPlayer?.money ?? 0) < (parsePrice(activeModal.price) || 0)}
+                          className="flex-1 rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
+                        >
+                          Buy for {activeModal.price}
+                        </button>
+                        {enableAuction && (
+                          <button
+                            onClick={() => {
+                              const tileToAuction = activeModal;
+                              setActiveModal(null);
+                              startAuction(tileToAuction);
+                            }}
+                            className="flex-1 rounded-[0.9vmin] border-[0.18vmin] border-amber-500 bg-amber-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-amber-100 shadow-[inset_0_0_1.4vmin_rgba(245,158,11,0.55),0_0_0.8vmin_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-amber-400 hover:bg-amber-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(245,158,11,0.85),0_0_1.6vmin_rgba(245,158,11,0.65)] cursor-pointer"
+                          >
+                            🔨 Pass & Auction
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -3750,6 +3920,17 @@ export default function GameBoard() {
                     >
                       {jailCollectsRent ? "🔒 Rent Ok" : "❌ No Rent"}
                     </button>
+
+                    {/* Auctions */}
+                    <button
+                      onClick={() => setEnableAuction((prev) => !prev)}
+                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableAuction
+                          ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(217,119,6,0.45)]"
+                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                        }`}
+                    >
+                      {enableAuction ? "🔨 Auctions" : "❌ No Auction"}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -3961,6 +4142,206 @@ export default function GameBoard() {
               </form>
             </div>
           )}
+
+        {/* ================= DUAL-COLUMN AUCTION POP-UP MODAL ================= */}
+        {activeAuction && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md">
+            <div className="relative flex max-h-[92vh] w-[90vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-amber-500/50 bg-[#120b24] text-white shadow-[0_0_5vmin_rgba(245,158,11,0.45)]">
+              {/* Header */}
+              <div className="relative flex items-center justify-between border-b border-amber-500/30 bg-[#190f33] px-[2.4vmin] py-[1.6vmin]">
+                <div className="flex items-center gap-[1vmin]">
+                  <span className="text-[2.4vmin]">🔨</span>
+                  <div>
+                    <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-amber-300">
+                      PROPERTY AUCTION
+                    </h3>
+                    <p className="text-[1.1vmin] font-medium text-gray-300">
+                      Bidding starts at $2. Highest bidder wins the property!
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-[1.2vmin]">
+                  <div className="flex items-center gap-[0.6vmin] rounded-full border border-amber-400/60 bg-amber-500/20 px-[1.4vmin] py-[0.4vmin] shadow">
+                    <span className="text-[1.2vmin] font-bold text-amber-200">⏳ Time Left:</span>
+                    <span className="font-mono text-[1.6vmin] font-black text-amber-300 animate-pulse">
+                      {activeAuction.timeLeft}s
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Body: Dual Column */}
+              {(() => {
+                const tile = BOARD_TILES.find((t) => t.id === activeAuction.tileId);
+                if (!tile) return null;
+                const highestBidder = players.find((p) => p.id === activeAuction.highestBidderId);
+                const hasCurrentPassed = currentPlayer && activeAuction.passedPlayerIds.includes(currentPlayer.id);
+                const isCurrentHighest = currentPlayer && activeAuction.highestBidderId === currentPlayer.id;
+
+                return (
+                  <div className="flex flex-1 overflow-y-auto p-[2.4vmin] gap-[2vmin]">
+                    {/* Left Column: Bidding Controls */}
+                    <div className="flex flex-1 flex-col gap-[1.8vmin] justify-between">
+                      {/* Current Bid Display */}
+                      <div className="flex flex-col items-center justify-center rounded-[1.6vmin] border-2 border-amber-500/40 bg-[#1b1236] p-[2vmin] text-center shadow-inner">
+                        <span className="text-[1.2vmin] font-black uppercase tracking-widest text-gray-400">Current Highest Bid</span>
+                        <span className="my-[0.4vmin] font-mono text-[4.2vmin] font-black text-amber-300 drop-shadow-[0_0_1.5vmin_rgba(245,158,11,0.7)]">
+                          ${activeAuction.currentBid.toLocaleString()}
+                        </span>
+                        {highestBidder ? (
+                          <div className="flex items-center gap-[0.7vmin] rounded-full border border-emerald-400/50 bg-emerald-500/15 px-[1.4vmin] py-[0.3vmin]">
+                            <span className="h-[1.2vmin] w-[1.2vmin] rounded-full" style={{ backgroundColor: highestBidder.color }} />
+                            <span className="text-[1.35vmin] font-black text-emerald-300">
+                              Highest Bidder: {highestBidder.name}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[1.2vmin] font-bold italic text-gray-400">
+                            No bids placed yet (Starts at $2)
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Bidding Increments Buttons (+$2, +$10, +$100) */}
+                      <div className="flex flex-col gap-[1vmin]">
+                        <span className="text-[1.2vmin] font-black uppercase tracking-wider text-amber-300">
+                          Place a Bid (Shows Resulting Total Bid):
+                        </span>
+                        <div className="grid grid-cols-3 gap-[1vmin]">
+                          {[2, 10, 100].map((inc) => {
+                            const resultingBid = activeAuction.currentBid + inc;
+                            const canAfford = currentPlayer && (currentPlayer.money ?? 0) >= resultingBid;
+                            const isDisabled = !currentPlayer || !canAfford || hasCurrentPassed || isCurrentHighest;
+
+                            return (
+                              <button
+                                key={inc}
+                                onClick={() => handlePlaceBid(inc)}
+                                disabled={isDisabled}
+                                className={`flex flex-col items-center justify-center rounded-[1.2vmin] border-2 py-[1.4vmin] px-[1vmin] transition-all cursor-pointer ${
+                                  isCurrentHighest
+                                    ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300 opacity-60 cursor-not-allowed"
+                                    : isDisabled
+                                    ? "border-white/10 bg-white/5 text-gray-500 opacity-40 cursor-not-allowed"
+                                    : "border-amber-400/80 bg-gradient-to-br from-amber-600 via-orange-600 to-amber-700 text-white shadow-[0_0_1.6vmin_rgba(245,158,11,0.5)] hover:scale-[1.04] hover:brightness-110 active:scale-95"
+                                }`}
+                              >
+                                <span className="text-[1.8vmin] font-black">+${inc}</span>
+                                <span className="mt-[0.2vmin] font-mono text-[1.35vmin] font-bold text-amber-200">
+                                  (${resultingBid.toLocaleString()})
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Status Note & Pass Button */}
+                      <div className="flex flex-col gap-[1vmin]">
+                        {hasCurrentPassed ? (
+                          <div className="rounded-[1vmin] border border-red-500/40 bg-red-950/30 py-[1vmin] text-center text-[1.25vmin] font-bold text-red-300">
+                            ❌ You passed on this auction
+                          </div>
+                        ) : isCurrentHighest ? (
+                          <div className="rounded-[1vmin] border border-emerald-500/40 bg-emerald-950/30 py-[1vmin] text-center text-[1.25vmin] font-bold text-emerald-300">
+                            👑 You are currently the highest bidder!
+                          </div>
+                        ) : (
+                          <button
+                            onClick={handlePassAuction}
+                            className="w-full rounded-[1vmin] border border-red-500/40 bg-red-950/40 py-[1.2vmin] text-[1.3vmin] font-black uppercase text-red-200 transition hover:bg-red-900/60 hover:text-white cursor-pointer active:scale-95"
+                          >
+                            Pass / Withdraw from Auction
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Bidders Status Grid */}
+                      <div className="flex flex-col gap-[0.6vmin] border-t border-white/10 pt-[1.2vmin]">
+                        <span className="text-[1.15vmin] font-black uppercase text-gray-400">Players Status:</span>
+                        <div className="flex flex-wrap gap-[0.6vmin]">
+                          {alivePlayers.map((p) => {
+                            const isPassed = activeAuction.passedPlayerIds.includes(p.id);
+                            const isHighest = activeAuction.highestBidderId === p.id;
+                            return (
+                              <div
+                                key={p.id}
+                                className={`flex items-center gap-[0.5vmin] rounded-full border px-[1vmin] py-[0.3vmin] text-[1.05vmin] font-bold ${
+                                  isHighest
+                                    ? "border-emerald-400 bg-emerald-500/20 text-emerald-300"
+                                    : isPassed
+                                    ? "border-red-500/40 bg-red-950/40 text-gray-500 line-through"
+                                    : "border-white/15 bg-white/5 text-gray-200"
+                                }`}
+                              >
+                                <span className="h-[0.8vmin] w-[0.8vmin] rounded-full" style={{ backgroundColor: p.color }} />
+                                <span>{p.name}</span>
+                                <span>{isHighest ? "👑" : isPassed ? "❌" : "⚡"}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Full Info of the Card Being Auctioned */}
+                    <div className="w-[42vmin] shrink-0 rounded-[1.6vmin] border border-purple-500/30 bg-[#161226] p-[2vmin] shadow-lg flex flex-col justify-between">
+                      <div>
+                        {/* Header Badge */}
+                        <div className="flex flex-col items-center text-center pb-[1.4vmin] border-b border-white/10">
+                          {renderTileIconOrFlag(tile, "w-[4.8vmin] h-[3.2vmin]")}
+                          <h4 className="mt-[0.8vmin] text-[2.2vmin] font-black text-white uppercase">{tile.name}</h4>
+                          <span className="text-[1.2vmin] font-bold text-emerald-400 font-mono">Bank Value: {tile.price}</span>
+                        </div>
+
+                        {/* Rent Table */}
+                        {PROPERTY_TYPES.has(tile.type) && tile.rents && (
+                          <div className="my-[1.4vmin] space-y-[0.6vmin] text-[1.25vmin]">
+                            <div className="text-[1.1vmin] font-black uppercase text-purple-300 tracking-wider mb-[0.4vmin]">Rent Structure:</div>
+                            {[
+                              { label: "Base Rent", val: tile.rents[0] },
+                              { label: "1 House", val: tile.rents[1] },
+                              { label: "2 Houses", val: tile.rents[2] },
+                              { label: "3 Houses", val: tile.rents[3] },
+                              { label: "4 Houses", val: tile.rents[4] },
+                              { label: "Hotel", val: tile.rents[5] },
+                            ].map((r) => (
+                              <div key={r.label} className="flex justify-between text-gray-300">
+                                <span>{r.label}</span>
+                                <span className="font-mono font-black text-emerald-300">${r.val}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Utility Table */}
+                        {UTILITY_TYPES.has(tile.type) && UTILITY_RENT_TABLE[tile.type] && (
+                          <div className="my-[1.4vmin] space-y-[0.6vmin] text-[1.25vmin]">
+                            <div className="text-[1.1vmin] font-black uppercase text-purple-300 tracking-wider mb-[0.4vmin]">Utility Rent Tiers:</div>
+                            {UTILITY_RENT_TABLE[tile.type].map((amt, idx) => (
+                              <div key={idx} className="flex justify-between text-gray-300">
+                                <span>If owner holds {idx + 1}</span>
+                                <span className="font-mono font-black text-emerald-300">${amt}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* House / Hotel Cost Footer */}
+                      {PROPERTY_TYPES.has(tile.type) && (
+                        <div className="flex items-center justify-between border-t border-white/10 pt-[1.2vmin] text-[1.2vmin]">
+                          <span className="text-gray-400">🏠 House: <strong className="text-white">${tile.houseCost || 100}</strong></span>
+                          <span className="text-gray-400">🏨 Hotel: <strong className="text-white">${tile.hotelCost || 100}</strong></span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
         </div>
       </div>
     </main>
