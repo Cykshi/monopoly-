@@ -1,0 +1,8 @@
+# Runtime room persistence (one JSON file per room). This is live game state,
+# not source — never commit it.
+data/
+*.tmp
+
+# Local server logs
+*.log
+*.err

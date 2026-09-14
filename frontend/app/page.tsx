@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import Flag from "react-world-flags";
 import DiceScene from "@/app/dice";
+import { computeRestoredState, type PlayerRestoreState } from "@/lib/restore-state";
 
 interface Tile {
   id: number;
@@ -78,6 +79,10 @@ interface AuctionState {
   passedPlayerIds: number[];
   timeLeft: number;
 }
+
+// The rejoin payload type (PlayerRestoreState) and the pure mapping from it to
+// client state both live in @/lib/restore-state so they can be unit-tested
+// without React — see computeRestoredState there.
 
 const COUNTRY_FLAG_EMOJIS: Record<string, string> = {
   BD: "🇧🇩",
@@ -302,6 +307,18 @@ export default function GameBoard() {
   const [peerCount, setPeerCount] = useState(1);
   const [joinCode, setJoinCode] = useState("");
   const [lobbyError, setLobbyError] = useState<string | null>(null);
+  // Durable session token issued by the server on join. Kept in memory for the
+  // live socket and mirrored to localStorage (keyed by room code) so a page
+  // refresh can rebind to the same player record via player:rejoin.
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  // Which player record in `players` this browser controls. Learned from the
+  // server on a rejoin (playerState.me.id) so a refreshed client repaints the
+  // correct seat instead of guessing from isCurrentPlayer.
+  const [myPlayerId, setMyPlayerId] = useState<number | null>(null);
+  const sessionTokenRef = useRef<string | null>(null);
+  // Mirror of roomId that reconnect handlers can read without being re-created
+  // (the socket effect runs once, so a plain state read there would be stale).
+  const socketRoomRef = useRef<string | null>(null);
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [dice, setDice] = useState<[number, number]>([1, 1]);
   const [rollTrigger, setRollTrigger] = useState(0);
@@ -344,8 +361,12 @@ export default function GameBoard() {
   const activeAuctionRef = useRef<AuctionState | null>(null);
   activeAuctionRef.current = activeAuction;
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
-  // Turn Timer state (120 seconds per turn)
+  // Turn Timer state. The AUTHORITATIVE clock lives on the server now: the
+  // client only renders a countdown derived from the deadline the server sends
+  // (in room:joined / turn:changed). turnTimeLeft is a display value; the client
+  // never eliminates anyone on its own clock anymore.
   const [turnTimeLeft, setTurnTimeLeft] = useState(TURN_TIME_LIMIT);
+  const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
   const isTurnTimedOutRef = useRef(false);
 
   // Vote Kick & Voluntary Bankrupt states
@@ -470,6 +491,111 @@ export default function GameBoard() {
     playersRef.current = players;
   }, [players]);
 
+  // Mirror of propertyOwnership for socket handlers that need the latest
+  // ownership without re-subscribing (e.g. clearing houses on an elimination).
+  const propertyOwnershipRef = useRef(propertyOwnership);
+
+  useEffect(() => {
+    propertyOwnershipRef.current = propertyOwnership;
+  }, [propertyOwnership]);
+
+  useEffect(() => {
+    socketRoomRef.current = roomId;
+  }, [roomId]);
+
+  // On first mount, restore the last room code from localStorage so the socket
+  // effect below can attempt a player:rejoin as soon as it connects.
+  useEffect(() => {
+    try {
+      const lastRoom = window.localStorage.getItem(LAST_ROOM_KEY);
+      if (lastRoom) {
+        socketRoomRef.current = lastRoom;
+        // Reflect it in state too, so the UI resumes the room context.
+        setRoomId(lastRoom);
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- Session token persistence (keyed by room code) --------------------
+  // The room code is also persisted so a full page reload knows WHICH room to
+  // attempt a rejoin against (state alone is wiped on reload).
+  const SESSION_STORAGE_PREFIX = "monopoly:session:";
+  const LAST_ROOM_KEY = "monopoly:last-room";
+
+  const rememberLastRoom = (room: string) => {
+    try {
+      window.localStorage.setItem(LAST_ROOM_KEY, room);
+    } catch {
+      // ignore
+    }
+  };
+
+  const saveSessionToken = (room: string, token: string) => {
+    setSessionToken(token);
+    sessionTokenRef.current = token;
+    try {
+      window.localStorage.setItem(`${SESSION_STORAGE_PREFIX}${room}`, token);
+    } catch {
+      // localStorage can be unavailable (private mode / blocked) — the in-memory
+      // token still works for this tab's lifetime, so this is non-fatal.
+    }
+  };
+
+  const loadSessionToken = (room: string): string | null => {
+    try {
+      return window.localStorage.getItem(`${SESSION_STORAGE_PREFIX}${room}`);
+    } catch {
+      return null;
+    }
+  };
+
+  const clearSessionToken = (room: string) => {
+    setSessionToken(null);
+    sessionTokenRef.current = null;
+    try {
+      window.localStorage.removeItem(`${SESSION_STORAGE_PREFIX}${room}`);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Repaint the whole board from a rejoin payload. Called when the server
+  // returns playerState on a successful player:rejoin — replaces the default
+  // blank slate with this player's real money, position, properties, and any
+  // in-flight trade/auction they're party to.
+  //
+  // The mapping payload -> state is a PURE function (computeRestoredState) so it
+  // can be tested headlessly against a real server payload; this closure only
+  // applies its result to the setters. A null field means "leave that slice
+  // untouched" rather than "clear it".
+  const applyRestoredState = (restored: PlayerRestoreState) => {
+    const next = computeRestoredState<Player, TradeProposal, ChatMessage>(restored);
+    if (next.players) {
+      setPlayers(next.players);
+      playersRef.current = next.players;
+    }
+    if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
+    if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
+    if (next.trades) setTrades(next.trades);
+    if (next.chatMessages) setChatMessages(next.chatMessages);
+    setActiveAuction(next.activeAuction as AuctionState | null);
+    if (next.myPlayerId !== null) setMyPlayerId(next.myPlayerId);
+    // Adopt the server's turn clock so the rejoin repaints the correct turn and
+    // countdown immediately, rather than waiting for the next turn:changed.
+    if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
+    if (next.currentTurnPlayerId !== null) {
+      const turnId = next.currentTurnPlayerId;
+      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
+    }
+
+    // A restored (i.e. already-started) room means the game is in progress.
+    setIsGameStarted(next.isGameStarted);
+    addLog(next.logMessage);
+  };
+
   useEffect(() => {
     const newSocket = io("http://localhost:3001", { reconnectionAttempts: 8, timeout: 4000 });
     socketRef.current = newSocket;
@@ -477,6 +603,39 @@ export default function GameBoard() {
     const handleConnect = () => {
       setIsConnected(true);
       setConnectionLabel("Connected • Choose a room");
+
+      // If we already hold a session token for the room we were in, ask the
+      // server to rebind this new socket to our existing player record. If the
+      // server doesn't recognise it we simply stay in the lobby (the server
+      // replies ok:false) and the user can join normally.
+      const currentRoom = socketRoomRef.current;
+      const token = currentRoom ? loadSessionToken(currentRoom) : null;
+      if (currentRoom && token) {
+        newSocket.emit(
+          "player:rejoin",
+          { roomId: currentRoom, token },
+          (res: { ok: boolean; roomId?: string; rejoined?: boolean; error?: string; reason?: string; playerState?: PlayerRestoreState }) => {
+            if (!res || !res.ok) {
+              // Stale/unrecognised token — forget it and treat as a fresh join.
+              clearSessionToken(currentRoom);
+              try {
+                window.localStorage.removeItem(LAST_ROOM_KEY);
+              } catch {
+                // ignore
+              }
+              socketRoomRef.current = null;
+              setMyPlayerId(null);
+              setRoomId(null);
+              setConnectionLabel("Connected • Choose a room");
+            } else {
+              // The ack carries the same restore payload as room:joined; apply
+              // it here too so state is repainted even if event ordering varies.
+              if (res.playerState) applyRestoredState(res.playerState);
+              setConnectionLabel("Connected • Rejoined room");
+            }
+          }
+        );
+      }
     };
     const handleDisconnect = () => {
       setIsConnected(false);
@@ -485,6 +644,43 @@ export default function GameBoard() {
 
     newSocket.on("player:moved", (data: PlayerMovedEvent) => {
       setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, position: data.position, money: data.money } : p)));
+    });
+    // The server owns turn order. When it advances, repaint the current-player
+    // flag from the server's truth so every client agrees on whose turn it is,
+    // and adopt the server's turn deadline for the countdown. This is the SAME
+    // event whether the turn ended normally or the server forced it on a timeout,
+    // so there's nothing to special-case here.
+    newSocket.on("turn:changed", (data: { currentTurnPlayerId: number | null; turnDeadline?: number | null }) => {
+      if (typeof data?.turnDeadline === "number") setTurnDeadline(data.turnDeadline);
+      if (typeof data?.currentTurnPlayerId !== "number") return;
+      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === data.currentTurnPlayerId })));
+    });
+    // Server-forced elimination (e.g. a turn timeout). Apply it locally so the
+    // eliminated player's board state clears for everyone, not just the server.
+    newSocket.on("player:bankrupt", (data: { playerId: number; reason?: string }) => {
+      if (!data || typeof data.playerId !== "number") return;
+      const p = playersRef.current.find((x) => x.id === data.playerId);
+      const pName = p?.name?.trim() || `Player ${data.playerId}`;
+      if (data.reason === "timeout") {
+        addLog(`⏰ TIME EXPIRED! ${pName} failed to play in time and is ELIMINATED!`);
+      }
+      setPlayers((prev) =>
+        prev.map((x) => (x.id === data.playerId ? { ...x, isBankrupt: true, money: 0, isCurrentPlayer: false } : x))
+      );
+      setPropertyOwnership((prev) => {
+        const next = { ...prev };
+        for (const [tileId, ownerId] of Object.entries(next)) {
+          if (ownerId === data.playerId) delete next[Number(tileId)];
+        }
+        return next;
+      });
+      setPropertyHouses((prev) => {
+        const next = { ...prev };
+        for (const [tileId, ownerId] of Object.entries(propertyOwnershipRef.current)) {
+          if (ownerId === data.playerId) delete next[Number(tileId)];
+        }
+        return next;
+      });
     });
     newSocket.on("property:bought", (data: PropertyBoughtEvent) => {
       setPropertyOwnership((prev) => ({ ...prev, [data.tileId]: data.playerId }));
@@ -576,10 +772,34 @@ export default function GameBoard() {
 
     // Room membership: the server is the source of truth for the code, the
     // host/guest role and how many peers are currently connected.
-    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; connectedCount?: number }) => {
+    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; token?: string; connectedCount?: number; playerState?: PlayerRestoreState | null }) => {
       setRoomId(data.roomId);
       setRoomRole(data.role);
       setPeerCount(data.connectedCount ?? 1);
+      // Persist the server-issued session token keyed by room code so a refresh
+      // can rejoin the same player instead of becoming a stranger.
+      if (data.token) saveSessionToken(data.roomId, data.token);
+      rememberLastRoom(data.roomId);
+      // On a rejoin the server also hands back this player's live state —
+      // repaint the board from it rather than keeping the blank defaults.
+      if (data.playerState) applyRestoredState(data.playerState);
+      // Complete the identity handshake: tell the server which seat this socket
+      // controls, tied to the session token. The server verifies the token owns
+      // the seat, so this can't be used to impersonate another player. Without
+      // this the server refuses every turn-gated action from this socket.
+      const seat = data.playerState?.me?.id ?? (data.role === "host" ? 1 : undefined);
+      if (data.token) {
+        newSocket.emit(
+          "player:identify",
+          { roomId: data.roomId, token: data.token, ...(seat !== undefined ? { playerId: seat } : {}) },
+          (res: { ok: boolean; playerId?: number; currentTurnPlayerId?: number | null; turnDeadline?: number | null; error?: string }) => {
+            if (res && res.ok && typeof res.turnDeadline === "number") setTurnDeadline(res.turnDeadline);
+            if (res && res.ok && typeof res.currentTurnPlayerId === "number") {
+              setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === res.currentTurnPlayerId })));
+            }
+          }
+        );
+      }
     });
     newSocket.on("room:left", () => {
       setRoomId(null);
@@ -655,9 +875,13 @@ export default function GameBoard() {
     }
     setLobbyBusy(true);
     setLobbyError(null);
-    s.emit("room:create", {}, (res: { ok: boolean; roomId?: string; error?: string }) => {
+    s.emit("room:create", {}, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
       setLobbyBusy(false);
-      if (!res || !res.ok) setLobbyError(res?.error || "Could not create a room.");
+      if (!res || !res.ok) {
+        setLobbyError(res?.error || "Could not create a room.");
+        return;
+      }
+      if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
     });
   };
 
@@ -675,12 +899,13 @@ export default function GameBoard() {
     }
     setLobbyBusy(true);
     setLobbyError(null);
-    s.emit("room:join", { roomId: wanted }, (res: { ok: boolean; roomId?: string; error?: string }) => {
+    s.emit("room:join", { roomId: wanted }, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
       setLobbyBusy(false);
       if (!res || !res.ok) {
         setLobbyError(res?.error || `No room found with code ${wanted}.`);
         return;
       }
+      if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
       setJoinCode("");
     });
   };
@@ -700,6 +925,15 @@ export default function GameBoard() {
 
   const handleLeaveRoom = () => {
     socketRef.current?.emit("room:leave");
+    // Leaving on purpose forfeits the session — drop the stored token so a
+    // later visit to the same code starts fresh instead of auto-rejoining.
+    if (roomId) clearSessionToken(roomId);
+    try {
+      window.localStorage.removeItem(LAST_ROOM_KEY);
+    } catch {
+      // ignore
+    }
+    socketRoomRef.current = null;
     setRoomId(null);
     setRoomRole(null);
     setPeerCount(1);
@@ -1240,6 +1474,12 @@ export default function GameBoard() {
     if (winner) return;
     if (gamePhase !== "ACTION" && gamePhase !== "END TURN") return;
 
+    // Tell the server our turn is over. The SERVER decides whether that's legal
+    // (only the player on turn may end it) and advances the authoritative turn
+    // itself, broadcasting turn:changed so everyone repaints from truth. We do
+    // NOT trust our local flag to decide who plays next.
+    socketRef.current?.emit("turn:ended", { playerId: currentPlayer?.id });
+
     setPlayers((prev) => {
       const currentIdx = prev.findIndex((p) => p.isCurrentPlayer);
       let nextIdx = currentIdx;
@@ -1269,41 +1509,39 @@ export default function GameBoard() {
     isTurnTimedOutRef.current = false;
   };
 
-  // Reset turn timer to 120s whenever active player changes or game starts
+  // Snap the displayed clock back to the full limit whenever the active player
+  // changes or the game starts, so the label doesn't briefly show a stale value
+  // before the server's deadline arrives (the interval below then takes over).
   useEffect(() => {
     setTurnTimeLeft(TURN_TIME_LIMIT);
     isTurnTimedOutRef.current = false;
   }, [currentPlayer?.id, isGameStarted]);
 
-  // Turn timer countdown interval (120s per turn)
+  // Turn timer display. The server owns the clock: it sends a `turnDeadline`
+  // (epoch ms) whenever the turn changes, and it — not the client — eliminates
+  // a player who lets the clock run out. Here we only RENDER the remaining time
+  // from that deadline, so every client shows the same countdown.
   useEffect(() => {
     if (!isGameStarted || winner) return;
 
     const interval = window.setInterval(() => {
-      setTurnTimeLeft((prev) => {
-        if (prev <= 1) return 0;
-        return prev - 1;
-      });
+      if (turnDeadline === null) {
+        // No server deadline yet (e.g. pre-game) — fall back to a local tick so
+        // the label still counts down rather than sitting frozen.
+        setTurnTimeLeft((prev) => (prev <= 1 ? 0 : prev - 1));
+        return;
+      }
+      const remaining = Math.max(0, Math.round((turnDeadline - Date.now()) / 1000));
+      setTurnTimeLeft(remaining);
     }, 1000);
 
     return () => window.clearInterval(interval);
-  }, [isGameStarted, winner, currentPlayer?.id]);
+  }, [isGameStarted, winner, currentPlayer?.id, turnDeadline]);
 
-  // Handle turn timeout when 120 seconds expire
-  useEffect(() => {
-    if (!isGameStarted || winner || turnTimeLeft > 0) return;
-
-    const pName = currentPlayer?.name?.trim() || `Player ${currentPlayer?.id || 1}`;
-
-    // Eliminate player for timeout
-    if (currentPlayer && !currentPlayer.isBankrupt) {
-      addLog(`⏰ TIME EXPIRED! ${pName} failed to play within 120 seconds and is ELIMINATED!`);
-      declareBankruptcy(currentPlayer.id);
-      setTurnTimeLeft(TURN_TIME_LIMIT);
-      isTurnTimedOutRef.current = false;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turnTimeLeft, isGameStarted, winner, currentPlayer?.id]);
+  // NOTE: there is deliberately NO client-side timeout handler anymore. Expiry
+  // is enforced server-side; the server eliminates the idle player and sends
+  // player:bankrupt + turn:changed, which the listeners apply. The countdown
+  // above renders the server's deadline and never drives elimination itself.
 
   // This effect is no longer needed since we handle timeout by eliminating the player
 
@@ -1317,7 +1555,9 @@ export default function GameBoard() {
     );
     setPropertyOwnership((prev) => ({ ...prev, [tile.id]: currentPlayer.id }));
     addLog(`${currentPlayer.name} bought ${tile.name} for -${tile.price}`);
-    socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: currentPlayer.id });
+    // Send the real price so the server can enforce affordability (anti-cheat)
+    // instead of trusting an absent value as zero cost.
+    socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: currentPlayer.id, price: cost });
     setActiveModal(null);
   };
 
@@ -1610,7 +1850,9 @@ export default function GameBoard() {
         );
         setPropertyOwnership((prev) => ({ ...prev, [tile.id]: winnerPlayer.id }));
         addLog(`🎉 AUCTION WON! ${winnerPlayer.name} won ${tile.name} for $${auctionToEnd.currentBid}!`);
-        socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: winnerPlayer.id });
+        // Ownership is awarded server-side by auction:end — emitting a separate
+        // property:bought here would be rejected (winner isn't standing on the
+        // tile), so it's intentionally not sent.
         socketRef.current?.emit("auction:end", { auction: auctionToEnd });
       }
     } else {
@@ -1659,7 +1901,7 @@ export default function GameBoard() {
     );
     setPropertyHouses((prev) => ({ ...prev, [tileId]: currentHouses + 1 }));
     addLog(`${currentPlayer.name} built on ${tile.name} (-$${cost})`);
-    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1 });
+    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1, playerId: currentPlayer.id });
   };
 
   // Sells the WHOLE tile (property or utility) back to the bank for half its
@@ -3432,6 +3674,18 @@ export default function GameBoard() {
                 </span>
                 <span className="text-[1.05vmin] font-bold text-gray-400">
                   {peerCount} online{roomRole === "host" ? " • host" : ""}
+                  {sessionToken ? (
+                    <span
+                      className="ml-[0.6vmin] text-emerald-400"
+                      title={
+                        myPlayerId
+                          ? `Session saved as Player ${myPlayerId} — you'll rejoin this seat after a refresh`
+                          : "Session saved — you'll rejoin this room after a refresh"
+                      }
+                    >
+                      • session saved{myPlayerId ? ` (P${myPlayerId})` : ""}
+                    </span>
+                  ) : null}
                 </span>
               </div>
 
