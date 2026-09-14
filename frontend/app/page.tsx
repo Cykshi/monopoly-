@@ -499,6 +499,29 @@ export default function GameBoard() {
     propertyOwnershipRef.current = propertyOwnership;
   }, [propertyOwnership]);
 
+  // Mirrors of the property modal + auction setting for the (mount-once) Escape
+  // keydown listener, so it can tell whether the current modal is one the player
+  // is FORBIDDEN to dismiss without choosing Buy/Auction.
+  const activeModalRef = useRef(activeModal);
+  useEffect(() => {
+    activeModalRef.current = activeModal;
+  }, [activeModal]);
+  const enableAuctionRef = useRef(enableAuction);
+  useEffect(() => {
+    enableAuctionRef.current = enableAuction;
+  }, [enableAuction]);
+
+  // The ONE case where the property modal is a forced choice: landing on an
+  // UNOWNED, ownable tile while Auction is enabled. Here the player must Buy or
+  // send it to Auction — there is no "skip", so ✕ / click-outside / Escape are
+  // all disabled. With Auction OFF (or on any other tile / an owned tile) this
+  // is false and the modal keeps its normal dismiss behaviour. Defined BEFORE
+  // the Escape listener so both share the exact same condition.
+  const isMandatoryPropertyDecision = (tile: Tile | null): boolean =>
+    Boolean(tile && enableAuction && propertyOwnership[tile.id] === undefined && OWNABLE_TYPES.has(tile.type));
+  // Same decision for the CURRENTLY open modal, read by the JSX below.
+  const mandatoryPropertyDecision = isMandatoryPropertyDecision(activeModal);
+
   useEffect(() => {
     socketRoomRef.current = roomId;
   }, [roomId]);
@@ -759,12 +782,28 @@ export default function GameBoard() {
       setActiveAuction(data.auction);
     });
 
+    // Server-authoritative countdown: the room's 1s interval broadcasts the live
+    // auction every tick, so the client just mirrors `timeLeft` instead of
+    // running a second local clock that could drift from (or race) the server.
+    newSocket.on("auction:tick", (data: { auction: AuctionState }) => {
+      setActiveAuction(data.auction);
+    });
+
     newSocket.on("auction:end", (data: { auction: AuctionState }) => {
       if (data.auction.highestBidderId !== null) {
         const winnerP = playersRef.current.find((p) => p.id === data.auction.highestBidderId);
         const tile = BOARD_TILES.find((t) => t.id === data.auction.tileId);
         if (winnerP && tile) {
+          // The server awards ownership and settles it authoritatively; we mirror
+          // it here AND charge the winner the winning bid, so the money side of
+          // the sale is settled on EVERY end path — including the timer-driven
+          // auto-end the server fires on its own (which never went through the
+          // old client-side countdown/handleEndAuction).
           setPropertyOwnership((prev) => ({ ...prev, [tile.id]: winnerP.id }));
+          setPlayers((prev) =>
+            prev.map((p) => (p.id === winnerP.id ? { ...p, money: p.money - data.auction.currentBid } : p))
+          );
+          addLog(`🎉 AUCTION WON! ${winnerP.name} won ${tile.name} for $${data.auction.currentBid}!`);
         }
       }
       setActiveAuction(null);
@@ -836,6 +875,26 @@ export default function GameBoard() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // With Auction ON, the unowned-ownable landing modal forces a choice
+        // (Buy or Auction) and must NOT be dismissible with Escape. Every
+        // other modal keeps its normal Escape-to-close behaviour, so we only
+        // swallow the key when THIS modal is the mandatory one.
+        //
+        // IMPORTANT: this listener is registered once (deps []), so it closes
+        // over the INITIAL render's values. We must read the CURRENT modal and
+        // the CURRENT auction setting from their refs — reading `enableAuction`
+        // or `activeModal` directly here would use their mount-time values and
+        // wrongly block Escape even after Auction is switched OFF.
+        const modal = activeModalRef.current;
+        const mustDecide = Boolean(
+          modal &&
+          enableAuctionRef.current &&
+          propertyOwnershipRef.current[modal.id] === undefined &&
+          OWNABLE_TYPES.has(modal.type)
+        );
+        if (mustDecide) {
+          return;
+        }
         setActiveModal(null);
         setSpecialModal(null);
         setShowCardSelector(false);
@@ -1835,52 +1894,22 @@ export default function GameBoard() {
     }
   };
 
+  // A client can end an auction ONLY in the sane short-circuit case where the
+  // last rival passed (see handlePassAuction). It just asks the server to end it;
+  // the single `auction:end` LISTENER settles ownership + winner's money + log,
+  // so there is exactly one settlement path whether the auction ends by this
+  // request or by the server's own timer. No local settling here — that would
+  // double-charge the winner now that the listener does it.
   const handleEndAuction = (auctionToEnd: AuctionState) => {
-    const tile = BOARD_TILES.find((t) => t.id === auctionToEnd.tileId);
-    if (!tile) {
-      setActiveAuction(null);
-      return;
-    }
-
-    if (auctionToEnd.highestBidderId !== null) {
-      const winnerPlayer = players.find((p) => p.id === auctionToEnd.highestBidderId);
-      if (winnerPlayer) {
-        setPlayers((prev) =>
-          prev.map((p) => (p.id === winnerPlayer.id ? { ...p, money: p.money - auctionToEnd.currentBid } : p))
-        );
-        setPropertyOwnership((prev) => ({ ...prev, [tile.id]: winnerPlayer.id }));
-        addLog(`🎉 AUCTION WON! ${winnerPlayer.name} won ${tile.name} for $${auctionToEnd.currentBid}!`);
-        // Ownership is awarded server-side by auction:end — emitting a separate
-        // property:bought here would be rejected (winner isn't standing on the
-        // tile), so it's intentionally not sent.
-        socketRef.current?.emit("auction:end", { auction: auctionToEnd });
-      }
-    } else {
-      addLog(`🔨 Auction for ${tile.name} ended with no bids. Property remains unowned.`);
-      socketRef.current?.emit("auction:end", { auction: auctionToEnd });
-    }
-
-    setActiveAuction(null);
+    socketRef.current?.emit("auction:end", { auction: auctionToEnd });
   };
 
-  // Auction countdown timer
-  useEffect(() => {
-    if (!activeAuction) return;
-
-    const interval = window.setInterval(() => {
-      setActiveAuction((prev) => {
-        if (!prev) return null;
-        if (prev.timeLeft <= 1) {
-          handleEndAuction(prev);
-          return null;
-        }
-        return { ...prev, timeLeft: prev.timeLeft - 1 };
-      });
-    }, 1000);
-
-    return () => window.clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAuction?.id, activeAuction?.currentBid]);
+  // NOTE: there is deliberately NO client-side auction countdown clock here.
+  // The server owns the auction timer (Room.startAuctionTimer) and broadcasts
+  // `auction:tick` every second plus the auto-end `auction:end` on expiry, so the
+  // client only mirrors those payloads (see the auction:tick listener). A second
+  // local clock would be drift-prone duplicate logic racing the authoritative
+  // server, exactly what we avoid for turn timing.
 
   const upgradeHouse = (tileId: number) => {
     if (!currentPlayer) return;
@@ -1962,6 +1991,35 @@ export default function GameBoard() {
   };
 
   const getTransparentColor = (hex: string, alpha: string) => `${hex}${alpha}`;
+
+  // Styling for the property-auction info card. It follows the SAME colour
+  // convention as an owned tile on the board, but the colour SOURCE adapts:
+  //   - no highest bidder yet -> the plain dark game-theme card colour (the
+  //     card is deliberately NOT colourful until someone actually bids)
+  //   - a highest bidder      -> THAT bidder's colour, with a soft glow border
+  // Uses getTransparentColor so the tint matches the owner-tint look exactly.
+  // The accent colour the auction UI pulses with. It follows the game theme
+  // (violet/indigo) until a bid exists, then adopts the highest bidder's colour
+  // so the whole modal reads as one living, themed panel.
+  const auctionAccent = (bidder: Player | undefined): string =>
+    bidder ? bidder.color : "#8b5cf6"; // violet-500 fallback = the game theme
+  const auctionCardStyle = (bidder: Player | undefined): React.CSSProperties => {
+    if (!bidder) {
+      return {
+        backgroundColor: "#161226",
+        borderColor: "rgba(168,85,247,0.30)",
+        // Soft, low-key glow so the idle card still feels part of the theme.
+        boxShadow: "0 0 1.4vmin rgba(168,85,247,0.22)",
+      };
+    }
+    return {
+      backgroundColor: getTransparentColor(bidder.color, "1f"),
+      borderColor: getTransparentColor(bidder.color, "90"),
+      // Soft glow: a wide, faint halo + a crisp 0.5vmin ring + a gentle inset
+      // wash — the same recipe used for an owned board tile.
+      boxShadow: `0 0 1.8vmin ${bidder.color}66, 0 0 0.5vmin ${bidder.color}, inset 0 0 1vmin ${bidder.color}22`,
+    };
+  };
 
   const handleTileClick = (tile: Tile) => {
     if (tile.type === "card") {
@@ -2725,7 +2783,9 @@ export default function GameBoard() {
           {activeModal && (
             <div
               className="absolute inset-0 z-[100] flex items-center justify-center rounded-[2vmin] bg-black/70 p-[4vmin] backdrop-blur-md"
-              onClick={() => setActiveModal(null)}
+              // With Auction ON and an unowned ownable tile, the player must
+              // choose Buy or Auction — clicking the backdrop must NOT dismiss.
+              onClick={mandatoryPropertyDecision ? undefined : () => setActiveModal(null)}
             >
               <div className="relative w-[42vmin]" onClick={(e) => e.stopPropagation()}>
                 {/* Flag / icon badge - centered on the card's top edge, half
@@ -2919,15 +2979,26 @@ export default function GameBoard() {
                         )}
                       </div>
                     )}
+
+                    {/* With Auction ON row is a forced choice, so make the
+                        absent ✕ read as intentional, not broken. */}
+                    {mandatoryPropertyDecision && (
+                      <p className="mt-[1.2vmin] text-center text-[1.05vmin] font-semibold uppercase tracking-wider text-amber-200/80">
+                        🔨 Buy or send to auction — no skipping
+                      </p>
+                    )}
                   </div>
                 </div>
 
-                <button
-                  onClick={() => setActiveModal(null)}
-                  className="absolute right-[1.4vmin] top-[1.4vmin] z-30 text-[2vmin] text-white/50 hover:text-white"
-                >
-                  ✕
-                </button>
+                {/* Forced-choice modal: no ✕ — Buy or Auction are the only exits. */}
+                {!mandatoryPropertyDecision && (
+                  <button
+                    onClick={() => setActiveModal(null)}
+                    className="absolute right-[1.4vmin] top-[1.4vmin] z-30 text-[2vmin] text-white/50 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -4594,31 +4665,90 @@ export default function GameBoard() {
           )}
 
         {/* ================= DUAL-COLUMN AUCTION POP-UP MODAL ================= */}
-        {activeAuction && (
+        {activeAuction && (() => {
+          // Accent for the whole modal: the game's violet/indigo theme until a
+          // bid lands, then the current highest bidder's colour (see
+          // auctionAccent). Keeping it here means the border, glow, header and
+          // bid controls all breathe in the SAME colour as the auctioned card.
+          const accent = auctionAccent(players.find((p) => p.id === activeAuction.highestBidderId));
+          return (
           <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md">
-            <div className="relative flex max-h-[92vh] w-[90vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-amber-500/50 bg-[#120b24] text-white shadow-[0_0_5vmin_rgba(245,158,11,0.45)]">
+            <div
+              className="relative flex max-h-[92vh] w-[90vmin] flex-col overflow-hidden rounded-[2vmin] border-2 bg-[#120b24] text-white"
+              style={{
+                borderColor: accent + "80",
+                boxShadow: `0 0 5vmin ${accent}55, inset 0 0 3vmin ${accent}14`,
+              }}
+            >
               {/* Header */}
-              <div className="relative flex items-center justify-between border-b border-amber-500/30 bg-[#190f33] px-[2.4vmin] py-[1.6vmin]">
+              <div
+                className="relative flex items-center justify-between border-b bg-[#190f33] px-[2.4vmin] py-[1.6vmin]"
+                style={{ borderColor: accent + "4d" }}
+              >
                 <div className="flex items-center gap-[1vmin]">
                   <span className="text-[2.4vmin]">🔨</span>
                   <div>
-                    <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-amber-300">
+                    <h3
+                      className="text-[2.2vmin] font-black uppercase tracking-wider"
+                      style={{ color: accent, textShadow: `0 0 1.6vmin ${accent}99` }}
+                    >
                       PROPERTY AUCTION
                     </h3>
-                    <p className="text-[1.1vmin] font-medium text-gray-300">
+                    <p className="text-[1.1vmin] font-medium text-indigo-200/80">
                       Bidding starts at $2. Highest bidder wins the property!
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-[1.2vmin]">
-                  <div className="flex items-center gap-[0.6vmin] rounded-full border border-amber-400/60 bg-amber-500/20 px-[1.4vmin] py-[0.4vmin] shadow">
-                    <span className="text-[1.2vmin] font-bold text-amber-200">⏳ Time Left:</span>
-                    <span className="font-mono text-[1.6vmin] font-black text-amber-300 animate-pulse">
-                      {activeAuction.timeLeft}s
-                    </span>
-                  </div>
+                  <div className="flex items-center gap-[0.6vmin]">
+                    {(() => {
+                      // The countdown is the auction's most time-critical piece of
+                      // information, so it gets its own urgency scale: calm violet
+                      // while there is room to think, amber under 6s, and a loud red
+                      // that pulses and grows for the final 3 seconds. The bar below
+                      // drains in lockstep so the remaining time is readable at a
+                      // glance from across the table.
+                      const t = activeAuction.timeLeft;
+                      const urgent = t <= 3;
+                      const warn = t <= 6 && !urgent;
+                      const timerColor = urgent ? "#f87171" : warn ? "#fbbf24" : accent;
+                      const pct = Math.max(0, Math.min(100, (t / 15) * 100));
+                      return (
+                        <div
+                          className={`flex flex-col items-center gap-[0.5vmin] rounded-[1.2vmin] border-2 bg-black/40 px-[1.8vmin] py-[0.7vmin] shadow-lg transition-all ${urgent ? "animate-pulse scale-105" : ""}`}
+                          style={{
+                            borderColor: timerColor + "cc",
+                            boxShadow: `0 0 ${urgent ? "3vmin" : "1.6vmin"} ${timerColor}${urgent ? "88" : "44"}`,
+                          }}
+                        >
+                          <div className="flex items-center gap-[0.7vmin] leading-none">
+                            <span className="text-[1.5vmin]">⏳</span>
+                            <span
+                              className={`font-mono ${urgent ? "text-[3.4vmin]" : "text-[2.8vmin]"} font-black tabular-nums leading-none text-white transition-all`}
+                              style={{ textShadow: `0 0 2vmin ${timerColor}cc` }}
+                            >
+                              {t}s
+                            </span>
+                          </div>
+                          <span className="text-[0.95vmin] font-black uppercase tracking-[0.25vmin] leading-none text-white">
+                            {urgent ? "⏱ LAST CHANCE!" : "Time Left"}
+                          </span>
+                          <div className="h-[0.5vmin] w-[12vmin] overflow-hidden rounded-full bg-white/15">
+                            <div
+                              className="h-full rounded-full transition-all duration-1000 ease-linear"
+                              style={{
+                                width: `${pct}%`,
+                                background: `linear-gradient(90deg, ${timerColor}66, ${timerColor})`,
+                                boxShadow: `0 0 1vmin ${timerColor}`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                  })()}
                 </div>
               </div>
+            </div>
 
               {/* Body: Dual Column */}
               {(() => {
@@ -4633,9 +4763,14 @@ export default function GameBoard() {
                     {/* Left Column: Bidding Controls */}
                     <div className="flex flex-1 flex-col gap-[1.8vmin] justify-between">
                       {/* Current Bid Display */}
-                      <div className="flex flex-col items-center justify-center rounded-[1.6vmin] border-2 border-amber-500/40 bg-[#1b1236] p-[2vmin] text-center shadow-inner">
+                      <div className="flex flex-col items-center justify-center rounded-[1.6vmin] border-2 bg-[#1b1236] p-[2vmin] text-center shadow-inner"
+                        style={{ borderColor: accent + "59" }}
+                      >
                         <span className="text-[1.2vmin] font-black uppercase tracking-widest text-gray-400">Current Highest Bid</span>
-                        <span className="my-[0.4vmin] font-mono text-[4.2vmin] font-black text-amber-300 drop-shadow-[0_0_1.5vmin_rgba(245,158,11,0.7)]">
+                        <span
+                          className="my-[0.4vmin] font-mono text-[4.2vmin] font-black"
+                          style={{ color: accent, textShadow: `0 0 2vmin ${accent}cc` }}
+                        >
                           ${activeAuction.currentBid.toLocaleString()}
                         </span>
                         {highestBidder ? (
@@ -4654,7 +4789,7 @@ export default function GameBoard() {
 
                       {/* Bidding Increments Buttons (+$2, +$10, +$100) */}
                       <div className="flex flex-col gap-[1vmin]">
-                        <span className="text-[1.2vmin] font-black uppercase tracking-wider text-amber-300">
+                        <span className="text-[1.2vmin] font-black uppercase tracking-wider text-indigo-300">
                           Place a Bid (Shows Resulting Total Bid):
                         </span>
                         <div className="grid grid-cols-3 gap-[1vmin]">
@@ -4673,11 +4808,11 @@ export default function GameBoard() {
                                     ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300 opacity-60 cursor-not-allowed"
                                     : isDisabled
                                     ? "border-white/10 bg-white/5 text-gray-500 opacity-40 cursor-not-allowed"
-                                    : "border-amber-400/80 bg-gradient-to-br from-amber-600 via-orange-600 to-amber-700 text-white shadow-[0_0_1.6vmin_rgba(245,158,11,0.5)] hover:scale-[1.04] hover:brightness-110 active:scale-95"
+                                    : "border-violet-400/80 bg-gradient-to-br from-violet-600 via-indigo-600 to-purple-700 text-white shadow-[0_0_1.6vmin_rgba(139,92,246,0.55)] hover:scale-[1.04] hover:brightness-110 active:scale-95"
                                 }`}
                               >
                                 <span className="text-[1.8vmin] font-black">+${inc}</span>
-                                <span className="mt-[0.2vmin] font-mono text-[1.35vmin] font-bold text-amber-200">
+                                <span className="mt-[0.2vmin] font-mono text-[1.35vmin] font-bold text-indigo-200">
                                   (${resultingBid.toLocaleString()})
                                 </span>
                               </button>
@@ -4735,7 +4870,7 @@ export default function GameBoard() {
                     </div>
 
                     {/* Right Column: Full Info of the Card Being Auctioned */}
-                    <div className="w-[42vmin] shrink-0 rounded-[1.6vmin] border border-purple-500/30 bg-[#161226] p-[2vmin] shadow-lg flex flex-col justify-between">
+                    <div className="w-[42vmin] shrink-0 rounded-[1.6vmin] border border-purple-500/30 bg-[#161226] p-[2vmin] shadow-lg flex flex-col justify-between transition-colors duration-300" style={auctionCardStyle(highestBidder)}>
                       <div>
                         {/* Header Badge */}
                         <div className="flex flex-col items-center text-center pb-[1.4vmin] border-b border-white/10">
@@ -4791,7 +4926,8 @@ export default function GameBoard() {
               })()}
             </div>
           </div>
-        )}
+          );
+        })()}
         </div>
       </div>
     </main>
