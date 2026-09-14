@@ -1,4 +1,4 @@
-﻿﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
@@ -491,6 +491,21 @@ export default function GameBoard() {
     playersRef.current = players;
   }, [players]);
 
+  // Mirror of myPlayerId for socket handlers mounted once: lets them tell the
+  // local player's own roll apart from a peer's without re-subscribing.
+  const myPlayerIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    myPlayerIdRef.current = myPlayerId;
+  }, [myPlayerId]);
+
+  // Which player the in-flight dice animation is settling FOR. Set when a roll is
+  // started (locally by rollDice, remotely by the player:rolled listener) so the
+  // shared handleDiceSettled knows whose movement/landing to replay. Cleared once
+  // consumed. pendingRollRemoteRef marks that animation as a peer's roll, so the
+  // settle path replays it without re-broadcasting it.
+  const pendingRollPlayerIdRef = useRef<number | null>(null);
+  const pendingRollRemoteRef = useRef(false);
+
   // Mirror of propertyOwnership for socket handlers that need the latest
   // ownership without re-subscribing (e.g. clearing houses on an elimination).
   const propertyOwnershipRef = useRef(propertyOwnership);
@@ -667,6 +682,21 @@ export default function GameBoard() {
 
     newSocket.on("player:moved", (data: PlayerMovedEvent) => {
       setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, position: data.position, money: data.money } : p)));
+    });
+    // A peer rolled. Replay the dice animation for everyone, then let the shared
+    // DiceScene onSettled (handleDiceSettled) walk that player across the board
+    // and resolve their landing — identical to the local roll path. The server
+    // rebroadcasts with socket.to(roomId), which EXCLUDES the sender, so the
+    // roller never receives their own event; the playerId guard below is a second
+    // line of defence against ever double-playing a roll.
+    newSocket.on("player:rolled", (data: { playerId?: number; dice?: [number, number]; total?: number }) => {
+      if (!data || !Array.isArray(data.dice) || data.dice.length !== 2) return;
+      if (data.playerId === myPlayerIdRef.current) return; // our own roll — already played
+      pendingRollPlayerIdRef.current = data.playerId ?? null;
+      pendingRollRemoteRef.current = true;
+      setDice([data.dice[0], data.dice[1]]);
+      setRollTrigger((value) => value + 1);
+      setIsRolling(true);
     });
     // The server owns turn order. When it advances, repaint the current-player
     // flag from the server's truth so every client agrees on whose turn it is,
@@ -1032,8 +1062,14 @@ export default function GameBoard() {
     return table[tierIndex];
   };
 
-  const animateMovement = (steps: number) => {
-    const player = playersRef.current.find((p) => p.isCurrentPlayer);
+  // Steps a player one tile at a time and resolves what they land on. Defaults to
+  // the local current player, but accepts an explicit playerId so a REMOTE roll
+  // (arriving over player:rolled) animates the player who actually rolled, not
+  // whoever this tab happens to think is on turn.
+  const animateMovement = (steps: number, playerId?: number) => {
+    const player = playerId !== undefined
+      ? playersRef.current.find((p) => p.id === playerId)
+      : playersRef.current.find((p) => p.isCurrentPlayer);
     if (!player) return;
 
     setIsMoving(true);
@@ -1450,25 +1486,30 @@ export default function GameBoard() {
     setRollTrigger((value) => value + 1);
     setIsRolling(true);
     setGamePhase("ROLLING...");
+    pendingRollPlayerIdRef.current = currentPlayer?.id ?? null;
+    pendingRollRemoteRef.current = false;
   };
 
-  const handleDiceSettled = () => {
-    if (!isRolling) return;
-
-    const [first, second] = dice;
+  // Applies a settled roll for a given player: jail handling, the walk across the
+  // board, then the landing effect. Extracted from handleDiceSettled so a REMOTE
+  // roll arriving over player:rolled replays exactly the same logic for the player
+  // who actually rolled. `broadcast` is true only for the local player's own roll
+  // (the socket.to(roomId) rebroadcast never loops back to the sender, so a remote
+  // roll must not be re-emitted here).
+  const applyRollResult = (playerId: number, first: number, second: number, broadcast: boolean) => {
     const total = first + second;
     const isDoubles = first === second;
-    const player = playersRef.current.find((p) => p.isCurrentPlayer);
+    const player = playersRef.current.find((p) => p.id === playerId);
+    if (!player) return;
 
-    setIsRolling(false);
-    socketRef.current?.emit("player:rolled", { dice: [first, second], total });
+    if (broadcast) socketRef.current?.emit("player:rolled", { dice: [first, second], total });
 
-    if (player?.inJail) {
+    if (player.inJail) {
       if (isDoubles) {
         addLog(`Rolled ${total} (${first} + ${second}) — doubles! ${player.name} breaks out of JAIL.`);
         setPlayers((prev) => prev.map((p) => (p.id === player.id ? { ...p, inJail: false, jailTurns: 0 } : p)));
         triggerJailBreak(player.id);
-        animateMovement(total);
+        animateMovement(total, player.id);
       } else {
         const nextJailTurns = (player.jailTurns || 0) + 1;
         if (nextJailTurns >= 3) {
@@ -1491,7 +1532,23 @@ export default function GameBoard() {
     }
 
     addLog(`Rolled ${total} (${first} + ${second})`);
-    animateMovement(total);
+    animateMovement(total, player.id);
+  };
+
+  const handleDiceSettled = () => {
+    if (!isRolling) return;
+
+    const [first, second] = dice;
+    const playerId = pendingRollPlayerIdRef.current ?? playersRef.current.find((p) => p.isCurrentPlayer)?.id;
+    const isRemote = pendingRollRemoteRef.current;
+    pendingRollPlayerIdRef.current = null;
+    pendingRollRemoteRef.current = false;
+    setIsRolling(false);
+
+    if (playerId === undefined) return;
+    // Only a LOCALLY-initiated roll is broadcast; a remote roll was already sent
+    // by its owner (and never loops back here — see the listener's guard).
+    applyRollResult(playerId, first, second, !isRemote);
   };
 
   const payBail = () => {
@@ -4823,11 +4880,7 @@ export default function GameBoard() {
 
                       {/* Status Note & Pass Button */}
                       <div className="flex flex-col gap-[1vmin]">
-                        {hasCurrentPassed ? (
-                          <div className="rounded-[1vmin] border border-red-500/40 bg-red-950/30 py-[1vmin] text-center text-[1.25vmin] font-bold text-red-300">
-                            ❌ You passed on this auction
-                          </div>
-                        ) : isCurrentHighest ? (
+                        {isCurrentHighest ? (
                           <div className="rounded-[1vmin] border border-emerald-500/40 bg-emerald-950/30 py-[1vmin] text-center text-[1.25vmin] font-bold text-emerald-300">
                             👑 You are currently the highest bidder!
                           </div>
