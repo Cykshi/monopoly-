@@ -1,0 +1,119 @@
+================================================
+🚀 Monopoly Multiplayer Server running on http://localhost:3001
+📡 Socket.IO Real-time Engine active on port 3001
+================================================
+🟢 Socket connected: pkp3LQ8PpNIXkNHwAAAC (lobby — not in a room yet)
+✨ Created new game room: MK3KRP
+🏗️  Room MK3KRP created by pkp3LQ8PpNIXkNHwAAAC
+🧹 Room MK3KRP is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: pkp3LQ8PpNIXkNHwAAAC (was in Room MK3KRP)
+🟢 Socket connected: mbzjmCJ_RiaIgcVNAAAF (lobby — not in a room yet)
+🔴 Socket disconnected: mbzjmCJ_RiaIgcVNAAAF (lobby)
+🟢 Socket connected: v5xtG1rXhDQCGMuPAAAI (lobby — not in a room yet)
+🔴 Socket disconnected: v5xtG1rXhDQCGMuPAAAI (lobby)
+🟢 Socket connected: nH0L9Ev8TvjJ9VAkAAAL (lobby — not in a room yet)
+✨ Created new game room: J8DRX3
+🏗️  Room J8DRX3 created by nH0L9Ev8TvjJ9VAkAAAL
+🧹 Room J8DRX3 is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: nH0L9Ev8TvjJ9VAkAAAL (lobby)
+🟢 Socket connected: elYjTpVF-l-fJQaIAAAN (lobby — not in a room yet)
+✨ Created new game room: MMNK3H
+🏗️  Room MMNK3H created by elYjTpVF-l-fJQaIAAAN
+🧹 Room MMNK3H is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: elYjTpVF-l-fJQaIAAAN (was in Room MMNK3H)
+🟢 Socket connected: UvT7ilkFsu4zIvtzAAAQ (lobby — not in a room yet)
+✨ Created new game room: 3WKGX6
+🏗️  Room 3WKGX6 created by UvT7ilkFsu4zIvtzAAAQ
+🧹 Room 3WKGX6 is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: UvT7ilkFsu4zIvtzAAAQ (was in Room 3WKGX6)
+🟢 Socket connected: vXqyEr4r9is85DsOAAAT (lobby — not in a room yet)
+🔴 Socket disconnected: vXqyEr4r9is85DsOAAAT (lobby)
+🟢 Socket connected: 0a_kAV5eH6rQPH80AAAW (lobby — not in a room yet)
+🔴 Socket disconnected: 0a_kAV5eH6rQPH80AAAW (lobby)
+🟢 Socket connected: kM4D_eiFkgoH9J8HAAAZ (lobby — not in a room yet)
+🟢 Socket connected: gNXJC4bHFXffwiUqAAAb (lobby — not in a room yet)
+🟢 Socket connected: K1OGjrP9Z7tdBNDGAAAd (lobby — not in a room yet)
+🟢 Socket connected: aYA5TAx-W6hH_-lJAAAf (lobby — not in a room yet)
+🟢 Socket connected: UgrM682e3N5cesEoAAAh (lobby — not in a room yet)
+✨ Created new game room: 3ZN7M5
+🏗️  Room 3ZN7M5 created by gNXJC4bHFXffwiUqAAAb
+➡️  Socket K1OGjrP9Z7tdBNDGAAAd joined room 3ZN7M5 (2 connected)
+🧹 Room 3ZN7M5 is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: gNXJC4bHFXffwiUqAAAb (was in Room 3ZN7M5)
+🔴 Socket disconnected: K1OGjrP9Z7tdBNDGAAAd (lobby)
+🔴 Socket disconnected: aYA5TAx-W6hH_-lJAAAf (lobby)
+🔴 Socket disconnected: UgrM682e3N5cesEoAAAh (lobby)
+🟢 Socket connected: sJq8jC_twAAFa_YxAAAj (lobby — not in a room yet)
+🟢 Socket connected: GS7BLZgdmKFso3WpAAAl (lobby — not in a room yet)
+🟢 Socket connected: BaRvXOebBaJHz8BUAAAn (lobby — not in a room yet)
+🟢 Socket connected: gmMacNxRqrzqQRWkAAAp (lobby — not in a room yet)
+✨ Created new game room: DK6V3J
+🏗️  Room DK6V3J created by sJq8jC_twAAFa_YxAAAj
+➡️  Socket GS7BLZgdmKFso3WpAAAl joined room DK6V3J (2 connected)
+🧹 Room DK6V3J is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: sJq8jC_twAAFa_YxAAAj (was in Room DK6V3J)
+🔴 Socket disconnected: GS7BLZgdmKFso3WpAAAl (lobby)
+🔴 Socket disconnected: BaRvXOebBaJHz8BUAAAn (lobby)
+🔴 Socket disconnected: gmMacNxRqrzqQRWkAAAp (lobby)
+🔴 Socket disconnected: kM4D_eiFkgoH9J8HAAAZ (lobby)
+🟢 Socket connected: et_kfCJReIhlYhYEAAAs (lobby — not in a room yet)
+✨ Created new game room: RCFSJN
+🏗️  Room RCFSJN created by et_kfCJReIhlYhYEAAAs
+🧹 Room RCFSJN is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: et_kfCJReIhlYhYEAAAs (was in Room RCFSJN)
+🟢 Socket connected: eNemZ8eqVoD7lUp6AAAv (lobby — not in a room yet)
+🟢 Socket connected: lMXPo_2JLRCyrydWAAAy (lobby — not in a room yet)
+🔴 Socket disconnected: lMXPo_2JLRCyrydWAAAy (lobby)
+🟢 Socket connected: ve49xVqNOHHC17kSAAA1 (lobby — not in a room yet)
+🔴 Socket disconnected: ve49xVqNOHHC17kSAAA1 (lobby)
+🟢 Socket connected: SY6eF977FSjRlj4jAAA4 (lobby — not in a room yet)
+✨ Created new game room: U2Y56L
+🏗️  Room U2Y56L created by SY6eF977FSjRlj4jAAA4
+🧹 Room U2Y56L is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: SY6eF977FSjRlj4jAAA4 (was in Room U2Y56L)
+🟢 Socket connected: xAhsVzKvU1FLO8pmAAA7 (lobby — not in a room yet)
+✨ Created new game room: NNGRSD
+🏗️  Room NNGRSD created by xAhsVzKvU1FLO8pmAAA7
+🧹 Room NNGRSD is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: xAhsVzKvU1FLO8pmAAA7 (was in Room NNGRSD)
+🟢 Socket connected: UNx9zMql_i8Ha_e7AAA- (lobby — not in a room yet)
+✨ Created new game room: YXESY6
+🏗️  Room YXESY6 created by UNx9zMql_i8Ha_e7AAA-
+🧹 Room YXESY6 is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: UNx9zMql_i8Ha_e7AAA- (was in Room YXESY6)
+✨ Created new game room: RQLT8G
+🏗️  Room RQLT8G created by eNemZ8eqVoD7lUp6AAAv
+🧹 Room RQLT8G is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: eNemZ8eqVoD7lUp6AAAv (was in Room RQLT8G)
+🟢 Socket connected: 4wnjiEzlaBTfGbPPAABB (lobby — not in a room yet)
+✨ Created new game room: 9MVHRC
+🏗️  Room 9MVHRC created by 4wnjiEzlaBTfGbPPAABB
+🟢 Socket connected: 14kv3fl1nQ5yKcmBAABE (lobby — not in a room yet)
+🧹 Room 9MVHRC is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: 4wnjiEzlaBTfGbPPAABB (was in Room 9MVHRC)
+🟢 Socket connected: 2fZ3rkpP7rTojC01AABG (lobby — not in a room yet)
+🟢 Socket connected: avv2Qhd7ujJV2pgnAABI (lobby — not in a room yet)
+🟢 Socket connected: 0x6_eMSYwFtKhgR2AABK (lobby — not in a room yet)
+🟢 Socket connected: krYmTB-UWcZ3d8M2AABM (lobby — not in a room yet)
+✨ Created new game room: MNJUEK
+🏗️  Room MNJUEK created by 2fZ3rkpP7rTojC01AABG
+➡️  Socket avv2Qhd7ujJV2pgnAABI joined room MNJUEK (2 connected)
+🧹 Room MNJUEK is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: 2fZ3rkpP7rTojC01AABG (was in Room MNJUEK)
+🔴 Socket disconnected: avv2Qhd7ujJV2pgnAABI (lobby)
+🔴 Socket disconnected: 0x6_eMSYwFtKhgR2AABK (lobby)
+🔴 Socket disconnected: krYmTB-UWcZ3d8M2AABM (lobby)
+✨ Created new game room: 6N4D6H
+🏗️  Room 6N4D6H created by 14kv3fl1nQ5yKcmBAABE
+🧹 Room 6N4D6H is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: 14kv3fl1nQ5yKcmBAABE (was in Room 6N4D6H)
+🟢 Socket connected: nJdAlJcJ9BqxHXIcAABP (lobby — not in a room yet)
+✨ Created new game room: 6SJEYB
+🏗️  Room 6SJEYB created by nJdAlJcJ9BqxHXIcAABP
+🧹 Room 6SJEYB is empty — torn down (0 room(s) remaining)
+🔴 Socket disconnected: nJdAlJcJ9BqxHXIcAABP (was in Room 6SJEYB)
+🟢 Socket connected: ygReHwt8fMEhZe1FAABS (lobby — not in a room yet)
+🔴 Socket disconnected: ygReHwt8fMEhZe1FAABS (lobby)
+🟢 Socket connected: GQ9it7cN_eQrK951AABV (lobby — not in a room yet)
+✨ Created new game room: TAC87P
+🏗️  Room TAC87P created by GQ9it7cN_eQrK951AABV

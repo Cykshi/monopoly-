@@ -1,4 +1,4 @@
-"use client";
+﻿﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
@@ -296,6 +296,13 @@ export default function GameBoard() {
 
   const [isConnected, setIsConnected] = useState(false);
   const [connectionLabel, setConnectionLabel] = useState("Connecting...");
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [roomRole, setRoomRole] = useState<"host" | "guest" | null>(null);
+  const [peerCount, setPeerCount] = useState(1);
+  const [joinCode, setJoinCode] = useState("");
+  const [lobbyError, setLobbyError] = useState<string | null>(null);
+  const [lobbyBusy, setLobbyBusy] = useState(false);
   const [dice, setDice] = useState<[number, number]>([1, 1]);
   const [rollTrigger, setRollTrigger] = useState(0);
   const [isRolling, setIsRolling] = useState(false);
@@ -469,7 +476,7 @@ export default function GameBoard() {
 
     const handleConnect = () => {
       setIsConnected(true);
-      setConnectionLabel("LIVE • Room 8c3bc");
+      setConnectionLabel("Connected • Choose a room");
     };
     const handleDisconnect = () => {
       setIsConnected(false);
@@ -567,6 +574,29 @@ export default function GameBoard() {
       setActiveAuction(null);
     });
 
+    // Room membership: the server is the source of truth for the code, the
+    // host/guest role and how many peers are currently connected.
+    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; connectedCount?: number }) => {
+      setRoomId(data.roomId);
+      setRoomRole(data.role);
+      setPeerCount(data.connectedCount ?? 1);
+    });
+    newSocket.on("room:left", () => {
+      setRoomId(null);
+      setRoomRole(null);
+      setPeerCount(1);
+    });
+    newSocket.on("room:peer-joined", (data: { connectedCount?: number }) => {
+      setPeerCount(data.connectedCount ?? 1);
+    });
+    newSocket.on("room:peer-left", (data: { connectedCount?: number }) => {
+      setPeerCount(data.connectedCount ?? 1);
+    });
+    newSocket.on("room:error", (err: { error?: string }) => {
+      setLobbyError(err?.error || "Room error.");
+      setLobbyBusy(false);
+    });
+
     newSocket.on("connect", handleConnect);
     newSocket.on("disconnect", handleDisconnect);
     newSocket.on("connect_error", handleDisconnect);
@@ -615,6 +645,64 @@ export default function GameBoard() {
 
   const addLog = (msg: string) => {
     setActionLog((prev) => [msg, ...prev].slice(0, 60));
+  };
+
+  const handleCreateRoom = () => {
+    const s = socketRef.current;
+    if (!s) {
+      setLobbyError("Not connected to the server yet. Please wait a moment.");
+      return;
+    }
+    setLobbyBusy(true);
+    setLobbyError(null);
+    s.emit("room:create", {}, (res: { ok: boolean; roomId?: string; error?: string }) => {
+      setLobbyBusy(false);
+      if (!res || !res.ok) setLobbyError(res?.error || "Could not create a room.");
+    });
+  };
+
+  const handleJoinRoom = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const s = socketRef.current;
+    if (!s) {
+      setLobbyError("Not connected to the server yet. Please wait a moment.");
+      return;
+    }
+    const wanted = joinCode.trim().toUpperCase();
+    if (!wanted) {
+      setLobbyError("Enter a room code to join.");
+      return;
+    }
+    setLobbyBusy(true);
+    setLobbyError(null);
+    s.emit("room:join", { roomId: wanted }, (res: { ok: boolean; roomId?: string; error?: string }) => {
+      setLobbyBusy(false);
+      if (!res || !res.ok) {
+        setLobbyError(res?.error || `No room found with code ${wanted}.`);
+        return;
+      }
+      setJoinCode("");
+    });
+  };
+
+  const handleCopyRoomCode = async () => {
+    if (!roomId) return;
+    try {
+      await navigator.clipboard.writeText(roomId);
+      setCopiedCode(true);
+      window.setTimeout(() => setCopiedCode(false), 1600);
+    } catch {
+      // Clipboard access can be blocked (insecure origin / denied permission).
+      // The code is displayed on screen regardless, so this is non-fatal.
+      setCopiedCode(false);
+    }
+  };
+
+  const handleLeaveRoom = () => {
+    socketRef.current?.emit("room:leave");
+    setRoomId(null);
+    setRoomRole(null);
+    setPeerCount(1);
   };
 
   const collectToRestHouse = (amount: number) => {
@@ -1729,6 +1817,72 @@ export default function GameBoard() {
         }
       `}</style>
 
+      {/* ================= LOBBY GATE =================
+          The board is only meaningful once you're inside a room, so the
+          lobby covers it until then. Creating or joining a room is what
+          actually puts this socket into a Socket.io room server-side —
+          without it every game event would be dropped. */}
+      {!roomId && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#050508]/95 backdrop-blur-sm">
+          <div className="w-[46vmin] max-w-[92vw] rounded-[1.8vmin] border-white/12 bg-[#0f0c16] p-[3vmin] shadow-[0_0_6vmin_rgba(139,92,246,0.25)]">
+            <h1 className="text-center text-[3vmin] font-black uppercase tracking-widest text-white">
+              Monopoly
+            </h1>
+            <p className="mt-[0.6vmin] text-center text-[1.2vmin] font-bold uppercase tracking-widest text-gray-400">
+              Play with friends in a private room
+            </p>
+
+            {/* Connection state — you can't create or join until this is on. */}
+            <div className="mt-[2vmin] flex items-center justify-center gap-[0.7vmin]">
+              <div
+                className={`h-[1vmin] w-[1vmin] rounded-full ${isConnected
+                    ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
+                    : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
+                  }`}
+              />
+              <span className="text-[1.15vmin] font-bold text-gray-300">{connectionLabel}</span>
+            </div>
+
+            <button
+              onClick={handleCreateRoom}
+              disabled={!isConnected || lobbyBusy}
+              className="mt-[2vmin] w-full rounded-[1vmin] border-[0.2vmin] border-emerald-400/60 bg-gradient-to-r from-emerald-500/30 to-teal-500/20 px-[2vmin] py-[1.3vmin] text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.8vmin_rgba(16,185,129,0.4)] transition-all hover:scale-[1.02] hover:from-emerald-500/50 hover:to-teal-500/40 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+            >
+              Create a Room
+            </button>
+
+            <div className="my-[1.6vmin] flex items-center gap-[1vmin]">
+              <span className="h-[0.1vmin] flex-1 bg-white/12" />
+              <span className="text-[1vmin] font-bold uppercase tracking-widest text-gray-500">or join</span>
+              <span className="h-[0.1vmin] flex-1 bg-white/12" />
+            </div>
+
+            <form onSubmit={handleJoinRoom} className="flex gap-[0.8vmin]">
+              <input
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 6))}
+                placeholder="ROOM CODE"
+                maxLength={6}
+                className="min-w-0 flex-1 rounded-[1vmin] border-[0.2vmin] border-white/15 bg-black/50 px-[1.4vmin] py-[1.2vmin] text-center font-mono text-[1.7vmin] font-black uppercase tracking-[0.35vmin] text-cyan-200 placeholder:text-[1.2vmin] placeholder:tracking-normal placeholder:text-gray-600 focus:border-cyan-400/70 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!isConnected || lobbyBusy || !joinCode.trim()}
+                className="shrink-0 rounded-[1vmin] border-[0.2vmin] border-cyan-400/60 bg-cyan-500/20 px-[2vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wide text-cyan-100 transition-all hover:scale-[1.02] hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+              >
+                Join
+              </button>
+            </form>
+
+            {lobbyError && (
+              <p className="mt-[1.2vmin] rounded-[0.8vmin] border-red-500/40 bg-red-500/10 px-[1.2vmin] py-[0.8vmin] text-center text-[1.1vmin] font-bold text-red-300">
+                {lobbyError}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex h-[96vmin] w-full items-center gap-[1.6vmin]">
         {/* ================= LEFT SIDEBAR - PROPERTIES YOU OWN ================= */}
         <div className="flex max-h-[96vmin] w-[32vmin] flex-col self-start rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
@@ -2238,7 +2392,8 @@ export default function GameBoard() {
                 </span>
               </div>
 
-              {/* Rightmost: Room and LIVE connection indicator */}
+              {/* Rightmost: LIVE connection indicator. The room code pill itself lives
+                  in the Players panel on the right, next to Leave. */}
               <div className="flex shrink-0 items-center gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] shadow-md">
                 <div
                   className={`h-[1vmin] w-[1vmin] shrink-0 rounded-full ${isConnected
@@ -3267,6 +3422,47 @@ export default function GameBoard() {
 
         {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
         <div className="flex h-[96vmin] w-full min-w-[36vmin] flex-1 flex-col self-start overflow-y-auto rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+          {/* Room code pill + Leave button, relocated here from the centre
+              console so the code stays visible while you play. */}
+          {roomId && (
+            <div className="mb-[1.2vmin] flex flex-col gap-[0.8vmin] rounded-[1vmin] border-[0.18vmin] border-white/10 bg-black/40 p-[1vmin]">
+              <div className="flex items-center justify-between px-[0.3vmin]">
+                <span className="text-[1.05vmin] font-black uppercase tracking-widest text-gray-400">
+                  Room code
+                </span>
+                <span className="text-[1.05vmin] font-bold text-gray-400">
+                  {peerCount} online{roomRole === "host" ? " • host" : ""}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-[0.8vmin]">
+                <button
+                  onClick={handleCopyRoomCode}
+                  title="Copy room code to share"
+                  className="flex min-w-0 flex-1 items-center justify-center gap-[0.8vmin] rounded-[1vmin] border-[0.25vmin] border-cyan-400/60 bg-cyan-500/15 px-[1.4vmin] py-[1vmin] shadow-md transition-all hover:scale-[1.02] hover:border-cyan-300 hover:bg-cyan-500/25 active:scale-95 cursor-pointer"
+                >
+                  <span className="text-[1.6vmin] leading-none">{copiedCode ? "✓" : "🔑"}</span>
+                  <span className="font-mono text-[2vmin] font-black uppercase tracking-[0.3vmin] text-cyan-200">
+                    {copiedCode ? "COPIED" : roomId}
+                  </span>
+                </button>
+
+                <button
+                  onClick={handleLeaveRoom}
+                  title="Leave this room and return to the lobby"
+                  className="flex shrink-0 items-center gap-[0.6vmin] rounded-[1vmin] border-[0.25vmin] border-red-400/70 bg-gradient-to-r from-red-500/35 to-red-600/20 px-[1.6vmin] py-[1vmin] text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.6vmin_rgba(239,68,68,0.5)] transition-all hover:scale-[1.04] hover:border-red-300 hover:from-red-500/60 hover:to-red-600/40 hover:shadow-[0_0_2.4vmin_rgba(239,68,68,0.85)] active:scale-95 cursor-pointer"
+                >
+                  <span className="text-[1.7vmin] leading-none">🚪</span>
+                  <span>Leave</span>
+                </button>
+              </div>
+
+              <span className="px-[0.3vmin] text-[0.95vmin] text-gray-500">
+                Tap the code to copy it and share with friends
+              </span>
+            </div>
+          )}
+
           <div className="mb-[0.8vmin] flex items-center justify-between px-[0.3vmin]">
             <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">
               Players
@@ -3651,29 +3847,29 @@ export default function GameBoard() {
 
           {/* ================= SETTINGS PANEL (ONLY IN SIDEBAR BEFORE GAME START) ================= */}
           {!isGameStarted && (
-            <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-purple-500/35 bg-[#141024] p-[1.6vmin] shadow-[0_0_2.5vmin_rgba(139,92,246,0.18)]">
+            <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-cyan-500/40 bg-[#0d1b22] p-[1.6vmin] shadow-[0_0_2vmin_rgba(34,211,238,0.18),0_1vmin_2vmin_rgba(0,0,0,0.4)]">
               <div className="flex flex-col gap-[1.6vmin]">
                 {/* Header */}
-                <div className="flex items-center justify-between border-b border-purple-500/25 pb-[1.1vmin]">
+                <div className="flex items-center justify-between border-b border-cyan-500/25 pb-[1.1vmin]">
                   <div className="flex items-center gap-[0.8vmin]">
-                    <span className="text-[2.2vmin]">⚙️</span>
-                    <span className="text-[1.8vmin] font-black uppercase tracking-wider text-white">
+                    <span className="text-[1.8vmin]">⚙️</span>
+                    <span className="text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">
                       GAME SETTINGS
                     </span>
                   </div>
-                  <span className="rounded-full border-2 border-emerald-400/80 bg-emerald-500/25 px-[1.2vmin] py-[0.4vmin] text-[1.2vmin] font-black uppercase tracking-wider text-emerald-300 shadow-[0_0_1.2vmin_rgba(52,211,153,0.4)] animate-pulse">
-                    🟢 SETUP (EDITABLE)
+                  <span className="rounded-[0.5vmin] border-cyan-400/50 bg-cyan-500/15 px-[1vmin] py-[0.35vmin] text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
+                    Editable
                   </span>
                 </div>
 
                 {/* Setting: Number of Players (2 to 6) */}
                 <div className="flex flex-col gap-[0.8vmin]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                      👥 Number of Players:
+                    <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                      Number of Players
                     </span>
-                    <span className="text-[1.6vmin] font-black text-purple-400">
-                      {players.length} Players
+                    <span className="text-[1.4vmin] font-semibold text-slate-100">
+                      {players.length}
                     </span>
                   </div>
                   <div className="grid grid-cols-5 gap-[0.6vmin]">
@@ -3683,9 +3879,9 @@ export default function GameBoard() {
                         <button
                           key={count}
                           onClick={() => handlePlayerCountChange(count)}
-                          className={`rounded-[0.9vmin] py-[0.85vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${isActive
-                              ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] scale-[1.03]"
-                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                          className={`rounded-[0.6vmin] border py-[0.8vmin] text-[1.25vmin] font-semibold transition-colors cursor-pointer ${isActive
+                              ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                              : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                             }`}
                           title={`Set player count to ${count}`}
                         >
@@ -3699,10 +3895,10 @@ export default function GameBoard() {
                 {/* Setting 1: Starting Cash */}
                 <div className="flex flex-col gap-[0.8vmin]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                      💵 Starting Cash:
+                    <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                      Starting Cash
                     </span>
-                    <span className="text-[1.7vmin] font-black text-emerald-400">
+                    <span className="text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">
                       ${startingCash.toLocaleString()}
                     </span>
                   </div>
@@ -3711,9 +3907,9 @@ export default function GameBoard() {
                       <button
                         key={cash}
                         onClick={() => handleStartingCashChange(cash)}
-                        className={`rounded-[0.9vmin] py-[0.95vmin] text-[1.35vmin] font-black transition-all cursor-pointer ${startingCash === cash
-                            ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_0_1.4vmin_rgba(16,185,129,0.55)] scale-[1.03]"
-                            : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
+                        className={`rounded-[0.6vmin] border py-[0.9vmin] text-[1.25vmin] font-semibold transition-colors cursor-pointer ${startingCash === cash
+                            ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                            : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                           }`}
                         title={`Set starting cash to $${cash.toLocaleString()}`}
                       >
@@ -3726,34 +3922,34 @@ export default function GameBoard() {
                 {/* Setting 2: START Bonus (Pass / Land) */}
                 <div className="flex flex-col gap-[0.8vmin]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                      🚩 START Bonus:
+                    <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                      START Bonus
                     </span>
-                    <span className="text-[1.5vmin] font-bold text-gray-100">
-                      Pass <span className="text-[1.8vmin] font-black text-emerald-300 drop-shadow-[0_0_0.6vmin_rgba(52,211,153,0.9)]">+${passStartBonus}</span> / Land{" "}
-                      <span className="text-[1.8vmin] font-black text-emerald-300 drop-shadow-[0_0_0.6vmin_rgba(52,211,153,0.9)]">+${landStartBonus}</span>
+                    <span className="text-[1.35vmin] font-medium text-slate-400">
+                      Pass <span className="text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${passStartBonus}</span> / Land{" "}
+                      <span className="text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${landStartBonus}</span>
                     </span>
                   </div>
                   <div className="flex flex-col gap-[0.8vmin]">
                     {/* Pass Bonus */}
                     <div className="flex flex-col gap-[0.4vmin]">
-                      <label className="text-[1.1vmin] font-bold text-gray-300">Pass Bonus:</label>
+                      <label className="text-[1.05vmin] font-medium text-cyan-300/70">Pass Bonus</label>
                       <div className="flex items-center justify-center gap-[0.8vmin]">
                         <button
                           onClick={() => handlePassBonusChange(Math.max(0, passStartBonus - 50))}
                           disabled={isGameStarted || passStartBonus === 0}
-                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
                           title="Decrease by $50"
                         >
                           ◀
                         </button>
-                        <div className="flex-1 text-center rounded-[0.6vmin] border-2 border-emerald-500/40 bg-[#221c38] py-[0.6vmin] px-[1vmin]">
-                          <span className="text-[1.9vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(52,211,153,0.9)]">+${passStartBonus}</span>
+                        <div className="flex-1 text-center rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 py-[0.55vmin] px-[1vmin]">
+                          <span className="text-[1.5vmin] font-black text-emerald-300">+${passStartBonus}</span>
                         </div>
                         <button
                           onClick={() => handlePassBonusChange(passStartBonus + 50)}
                           disabled={isGameStarted}
-                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
                           title="Increase by $50"
                         >
                           ▶
@@ -3763,23 +3959,23 @@ export default function GameBoard() {
 
                     {/* Land Bonus */}
                     <div className="flex flex-col gap-[0.4vmin]">
-                      <label className="text-[1.1vmin] font-bold text-gray-300">Land Bonus:</label>
+                      <label className="text-[1.05vmin] font-medium text-cyan-300/70">Land Bonus</label>
                       <div className="flex items-center justify-center gap-[0.8vmin]">
                         <button
                           onClick={() => handleLandBonusChange(Math.max(0, landStartBonus - 50))}
                           disabled={isGameStarted || landStartBonus === 0}
-                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
                           title="Decrease by $50"
                         >
                           ◀
                         </button>
-                        <div className="flex-1 text-center rounded-[0.6vmin] border-2 border-emerald-500/40 bg-[#221c38] py-[0.6vmin] px-[1vmin]">
-                          <span className="text-[1.9vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(52,211,153,0.9)]">+${landStartBonus}</span>
+                        <div className="flex-1 text-center rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 py-[0.55vmin] px-[1vmin]">
+                          <span className="text-[1.5vmin] font-black text-emerald-300">+${landStartBonus}</span>
                         </div>
                         <button
                           onClick={() => handleLandBonusChange(landStartBonus + 50)}
                           disabled={isGameStarted}
-                          className="flex items-center justify-center w-[3.5vmin] h-[3.5vmin] rounded-[0.6vmin] border-2 border-emerald-500/60 bg-[#2a1f4a] hover:bg-[#3a2f5a] text-emerald-400 font-black text-[1.4vmin] transition disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_0_1vmin_rgba(16,185,129,0.4)] hover:border-emerald-400"
+                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
                           title="Increase by $50"
                         >
                           ▶
@@ -3801,10 +3997,10 @@ export default function GameBoard() {
                           key={preset.label}
                           onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
                           disabled={isGameStarted}
-                          className={`rounded-[0.7vmin] py-[0.6vmin] text-[1.1vmin] font-black transition-all cursor-pointer ${isActive
-                              ? "border-[0.2vmin] border-indigo-300 bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-[0_0_1.2vmin_rgba(99,102,241,0.55)] scale-[1.02]"
-                              : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400 hover:bg-[#30264e] hover:text-white"
-                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          className={`rounded-[0.5vmin] border py-[0.55vmin] text-[1.05vmin] font-semibold transition-colors cursor-pointer ${isActive
+                              ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                              : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
+                            } disabled:opacity-40 disabled:cursor-not-allowed`}
                           title={`${preset.label} (Pass: +$${preset.pass}, Land: +$${preset.land})`}
                         >
                           {preset.label}
@@ -3816,133 +4012,133 @@ export default function GameBoard() {
 
                 {/* Setting 3: Movement Speed */}
                 <div className="flex flex-col gap-[0.6vmin]">
-                  <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
-                    ⚡ Game Speed:
+                  <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                    Game Speed
                   </span>
                   <div className="flex gap-[0.5vmin]">
                     <button
                       onClick={() => setFastMode(false)}
-                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${!fastMode
-                          ? "border-[0.25vmin] border-purple-300 bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_1.2vmin_rgba(168,85,247,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`flex-1 rounded-[0.6vmin] border py-[0.85vmin] text-[1.2vmin] font-semibold transition-colors cursor-pointer ${!fastMode
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      1x Normal
+                      Normal
                     </button>
                     <button
                       onClick={() => setFastMode(true)}
-                      className={`flex-1 rounded-[0.9vmin] py-[0.9vmin] text-[1.25vmin] font-black transition-all cursor-pointer active:scale-95 ${fastMode
-                          ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(245,158,11,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`flex-1 rounded-[0.6vmin] border py-[0.85vmin] text-[1.2vmin] font-semibold transition-colors cursor-pointer ${fastMode
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      ⚡ Fast
+                      Fast
                     </button>
                   </div>
                 </div>
 
                 {/* Setting 4: Rest House Mode */}
                 <div className="flex flex-col gap-[0.6vmin]">
-                  <span className="text-[1.35vmin] font-black uppercase tracking-wide text-gray-200">
-                    🏨 Rest House Money:
+                  <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                    Rest House Money
                   </span>
                   <div className="grid grid-cols-2 gap-[0.6vmin]">
                     <button
                       onClick={() => setRestHouseMode("pot")}
-                      className={`rounded-[0.9vmin] py-[0.9vmin] text-[1.2vmin] font-black transition-all cursor-pointer active:scale-95 ${restHouseMode === "pot"
-                          ? "border-[0.25vmin] border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-[0_0_1.2vmin_rgba(16,185,129,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`rounded-[0.6vmin] border py-[0.85vmin] text-[1.15vmin] font-semibold transition-colors cursor-pointer ${restHouseMode === "pot"
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      🎁 Collect Pot
+                      Collect Pot
                     </button>
                     <button
                       onClick={() => setRestHouseMode("rest")}
-                      className={`rounded-[0.9vmin] py-[0.9vmin] text-[1.2vmin] font-black transition-all cursor-pointer active:scale-95 ${restHouseMode === "rest"
-                          ? "border-[0.25vmin] border-orange-300 bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-[0_0_1.2vmin_rgba(249,115,22,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`rounded-[0.6vmin] border py-[0.85vmin] text-[1.15vmin] font-semibold transition-colors cursor-pointer ${restHouseMode === "rest"
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      😴 Skip Turn
+                      Skip Turn
                     </button>
                   </div>
-                  <span className="text-[1.15vmin] text-gray-400 italic">
+                  <span className="text-[1.05vmin] text-cyan-200/50">
                     {restHouseMode === "pot" ? "Money accumulates & pays out on landing" : "Player skips one turn, no money gained"}
                   </span>
                 </div>
 
                 {/* Setting 5: Game Rules Toggle */}
                 <div className="flex flex-col gap-[0.8vmin]">
-                  <span className="text-[1.4vmin] font-black uppercase tracking-wide text-gray-200">
-                    📋 Game Rules:
+                  <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                    Game Rules
                   </span>
                   <div className="grid grid-cols-2 gap-[0.6vmin]">
                     {/* Movement Cards */}
                     <button
                       onClick={() => setEnableMovementCards((prev) => !prev)}
-                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableMovementCards
-                          ? "border-[0.25vmin] border-blue-300 bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-[0_0_1.2vmin_rgba(59,130,246,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableMovementCards
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      {enableMovementCards ? "🎴 Cards" : "❌ No Cards"}
+                      {enableMovementCards ? "Cards: On" : "Cards: Off"}
                     </button>
 
                     {/* Trading */}
                     <button
                       onClick={() => setEnableTrading((prev) => !prev)}
-                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableTrading
-                          ? "border-[0.25vmin] border-pink-300 bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-[0_0_1.2vmin_rgba(219,39,119,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableTrading
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      {enableTrading ? "🤝 Trading" : "❌ No Trade"}
+                      {enableTrading ? "Trading: On" : "Trading: Off"}
                     </button>
 
                     {/* Mortgage */}
                     <button
                       onClick={() => setEnableMortgage((prev) => !prev)}
-                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableMortgage
-                          ? "border-[0.25vmin] border-yellow-300 bg-gradient-to-r from-yellow-600 to-amber-600 text-white shadow-[0_0_1.2vmin_rgba(217,119,6,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableMortgage
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      {enableMortgage ? "💳 Mortgage" : "❌ No Mort"}
+                      {enableMortgage ? "Mortgage: On" : "Mortgage: Off"}
                     </button>
 
                     {/* Jail Rent */}
                     <button
                       onClick={() => setJailCollectsRent((prev) => !prev)}
-                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${jailCollectsRent
-                          ? "border-[0.25vmin] border-red-300 bg-gradient-to-r from-red-600 to-pink-600 text-white shadow-[0_0_1.2vmin_rgba(220,38,38,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${jailCollectsRent
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      {jailCollectsRent ? "🔒 Rent Ok" : "❌ No Rent"}
+                      {jailCollectsRent ? "Jail Rent: On" : "Jail Rent: Off"}
                     </button>
 
                     {/* Auctions */}
                     <button
                       onClick={() => setEnableAuction((prev) => !prev)}
-                      className={`rounded-[0.9vmin] py-[0.85vmin] px-[0.8vmin] text-[1.15vmin] font-black transition-all cursor-pointer active:scale-95 ${enableAuction
-                          ? "border-[0.25vmin] border-amber-300 bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-[0_0_1.2vmin_rgba(217,119,6,0.45)]"
-                          : "border-2 border-white/20 bg-[#221c38] text-gray-100 hover:border-purple-400"
+                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableAuction
+                          ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
+                          : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
                     >
-                      {enableAuction ? "🔨 Auctions" : "❌ No Auction"}
+                      {enableAuction ? "Auctions: On" : "Auctions: Off"}
                     </button>
                   </div>
                 </div>
               </div>
 
               {/* Start Game Button */}
-              <div className="mt-[1.4vmin] border-t-2 border-white/10 pt-[1.1vmin]">
+              <div className="mt-[1.4vmin] border-t border-cyan-500/25 pt-[1.1vmin]">
                 <button
                   onClick={handleStartGame}
-                  className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[1.1vmin] border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-[1.4vmin] text-[1.55vmin] font-black uppercase tracking-widest text-white shadow-[0_0_2.5vmin_rgba(16,185,129,0.5)] transition-all hover:scale-[1.02] hover:brightness-110 active:scale-95 cursor-pointer"
+                  className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[0.8vmin] border-cyan-300/60 bg-gradient-to-r from-cyan-600 to-teal-600 py-[1.25vmin] text-[1.35vmin] font-black uppercase tracking-[0.14em] text-white shadow-[0_0_2vmin_rgba(34,211,238,0.55)] transition-all hover:brightness-110 hover:shadow-[0_0_2.8vmin_rgba(34,211,238,0.85)] active:scale-[0.98] cursor-pointer"
                 >
-                  <span className="text-[1.8vmin]">▶</span>
-                  <span>Start Game & Lock Settings</span>
+                  <span className="text-[1.4vmin]">▶</span>
+                  <span>Start Game</span>
                 </button>
               </div>
             </div>
@@ -3953,11 +4149,11 @@ export default function GameBoard() {
             <>
               <button
                 onClick={() => setIsSettingsExpanded(true)}
-                className="fixed bottom-[2.5vmin] left-[2.5vmin] z-[150] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-purple-400/80 bg-gradient-to-br from-[#241a45] to-[#120b24] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(168,85,247,0.5)] transition-all hover:scale-110 hover:border-purple-300 hover:shadow-[0_0_3.5vmin_rgba(168,85,247,0.8)] active:scale-95 cursor-pointer"
+                className="fixed bottom-[2.5vmin] left-[2.5vmin] z-[150] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-cyan-400/70 bg-[#0e2b33] text-[2.2vmin] text-cyan-100 shadow-[0_0_2vmin_rgba(34,211,238,0.5)] transition-all hover:border-cyan-300 hover:shadow-[0_0_3vmin_rgba(34,211,238,0.85)] active:scale-95 cursor-pointer"
                 title="Open Locked Game Settings"
               >
                 ⚙️
-                <span className="absolute -top-[0.3vmin] -right-[0.3vmin] flex h-[2vmin] w-[2vmin] items-center justify-center rounded-full bg-amber-500 text-[1.1vmin] font-black text-black shadow">
+                <span className="absolute -top-[0.3vmin] -right-[0.3vmin] flex h-[2vmin] w-[2vmin] items-center justify-center rounded-full border-cyan-400/60 bg-[#0e2b33] text-[0.9vmin] font-bold text-cyan-200">
                   🔒
                 </span>
               </button>
@@ -3969,20 +4165,20 @@ export default function GameBoard() {
                   onClick={() => setIsSettingsExpanded(false)}
                 >
                   <div
-                    className="relative flex max-h-[85vh] w-[50vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#141024] p-[2.4vmin] text-white shadow-[0_0_4vmin_rgba(139,92,246,0.45)]"
+                    className="relative flex max-h-[85vh] w-[50vmin] flex-col overflow-hidden rounded-[1.6vmin] border-2 border-cyan-500/50 bg-[#0d1b22] p-[2.4vmin] text-white shadow-[0_0_3.5vmin_rgba(34,211,238,0.45),0_1.5vmin_3vmin_rgba(0,0,0,0.55)]"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <div className="flex items-center justify-between border-b border-purple-500/30 pb-[1.4vmin] mb-[1.8vmin]">
+                    <div className="flex items-center justify-between border-b border-cyan-500/25 pb-[1.4vmin] mb-[1.8vmin]">
                       <div className="flex items-center gap-[0.8vmin]">
-                        <span className="text-[2.4vmin]">⚙️</span>
-                        <span className="text-[2vmin] font-black uppercase tracking-wider text-white">Game Settings</span>
-                        <span className="ml-[0.6vmin] rounded-full border border-amber-400/80 bg-amber-500/20 px-[1.2vmin] py-[0.3vmin] text-[1.1vmin] font-black text-amber-300">
-                          🔒 LOCKED
+                        <span className="text-[1.9vmin]">⚙</span>
+                        <span className="text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">Game Settings</span>
+                        <span className="ml-[0.6vmin] rounded-[0.5vmin] border border-cyan-400/50 bg-cyan-500/15 px-[1vmin] py-[0.3vmin] text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
+                          Locked
                         </span>
                       </div>
                       <button
                         onClick={() => setIsSettingsExpanded(false)}
-                        className="flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                        className="flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-cyan-500/15 text-[1.4vmin] text-cyan-200 transition-colors hover:bg-cyan-500/30 hover:text-white cursor-pointer"
                         title="Close"
                       >
                         ✕
@@ -3991,44 +4187,44 @@ export default function GameBoard() {
 
                     {/* Settings list (Read Only) */}
                     <div className="flex flex-col gap-[1.4vmin] overflow-y-auto max-h-[50vh] pr-[1vmin]">
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                        <span className="text-[1.35vmin] font-bold text-gray-300">👥 Number of Players</span>
-                        <span className="text-[1.45vmin] font-black text-purple-300">{players.length} Players</span>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
+                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Number of Players</span>
+                        <span className="text-[1.3vmin] font-bold text-cyan-100">{players.length}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                        <span className="text-[1.35vmin] font-bold text-gray-300">💵 Starting Cash</span>
-                        <span className="text-[1.45vmin] font-black text-emerald-400">${startingCash.toLocaleString()}</span>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
+                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Starting Cash</span>
+                        <span className="text-[1.3vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">${startingCash.toLocaleString()}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                        <span className="text-[1.35vmin] font-bold text-gray-300">🚩 START Pass / Land Bonus</span>
-                        <span className="text-[1.8vmin] font-black text-cyan-200 drop-shadow-[0_0_0.7vmin_rgba(103,232,249,0.9)]">+${passStartBonus} / +${landStartBonus}</span>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
+                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">START Pass / Land Bonus</span>
+                        <span className="text-[1.3vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${passStartBonus} / +${landStartBonus}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                        <span className="text-[1.35vmin] font-bold text-gray-300">⚡ Game Speed</span>
-                        <span className="text-[1.4vmin] font-black text-amber-300">{fastMode ? "⚡ Fast Speed" : "🐢 Normal Speed"}</span>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
+                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Game Speed</span>
+                        <span className="text-[1.3vmin] font-bold text-cyan-100">{fastMode ? "Fast" : "Normal"}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-white/10 bg-white/5 p-[1.2vmin]">
-                        <span className="text-[1.35vmin] font-bold text-gray-300">🏨 Rest House</span>
-                        <span className="text-[1.4vmin] font-black text-green-300">{restHouseMode === "pot" ? "🎁 Collect Pot" : "😴 Skip Turn"}</span>
+                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
+                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Rest House</span>
+                        <span className="text-[1.3vmin] font-bold text-cyan-100">{restHouseMode === "pot" ? "Collect Pot" : "Skip Turn"}</span>
                       </div>
-                      <div className="border-t border-white/10 pt-[1vmin] mt-[0.6vmin]">
-                        <span className="text-[1.3vmin] font-bold text-gray-400 mb-[0.8vmin] block">📋 Game Rules:</span>
+                      <div className="border-t border-cyan-500/25 pt-[1vmin] mt-[0.6vmin]">
+                        <span className="text-[1.2vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90 mb-[0.8vmin] block">Game Rules</span>
                         <div className="grid grid-cols-2 gap-[0.8vmin]">
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
-                            <span className="text-[1.35vmin]">{enableMovementCards ? "✅" : "❌"}</span>
-                            <span className="text-[1.2vmin] font-bold text-gray-300">Movement Cards</span>
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
+                            <span className={`text-[1.1vmin] font-bold ${enableMovementCards ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableMovementCards ? "On" : "Off"}</span>
+                            <span className="text-[1.15vmin] text-cyan-200/70">Movement Cards</span>
                           </div>
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
-                            <span className="text-[1.35vmin]">{enableTrading ? "✅" : "❌"}</span>
-                            <span className="text-[1.2vmin] font-bold text-gray-300">Trading</span>
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
+                            <span className={`text-[1.1vmin] font-bold ${enableTrading ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableTrading ? "On" : "Off"}</span>
+                            <span className="text-[1.15vmin] text-cyan-200/70">Trading</span>
                           </div>
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
-                            <span className="text-[1.35vmin]">{enableMortgage ? "✅" : "❌"}</span>
-                            <span className="text-[1.2vmin] font-bold text-gray-300">Mortgage</span>
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
+                            <span className={`text-[1.1vmin] font-bold ${enableMortgage ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableMortgage ? "On" : "Off"}</span>
+                            <span className="text-[1.15vmin] text-cyan-200/70">Mortgage</span>
                           </div>
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-white/10 bg-white/5 p-[1vmin]">
-                            <span className="text-[1.35vmin]">{jailCollectsRent ? "✅" : "❌"}</span>
-                            <span className="text-[1.2vmin] font-bold text-gray-300">Jail Rent</span>
+                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
+                            <span className={`text-[1.1vmin] font-bold ${jailCollectsRent ? "text-emerald-300" : "text-cyan-300/50"}`}>{jailCollectsRent ? "On" : "Off"}</span>
+                            <span className="text-[1.15vmin] text-cyan-200/70">Jail Rent</span>
                           </div>
                         </div>
                       </div>
@@ -4036,7 +4232,7 @@ export default function GameBoard() {
 
                     <button
                       onClick={() => setIsSettingsExpanded(false)}
-                      className="mt-[2.2vmin] w-full rounded-[1vmin] bg-gradient-to-r from-purple-600 to-indigo-600 py-[1.1vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 cursor-pointer"
+                      className="mt-[2.2vmin] w-full rounded-[0.8vmin] border-cyan-400/50 bg-gradient-to-r from-cyan-600 to-teal-600 py-[1.1vmin] text-[1.2vmin] font-black uppercase tracking-[0.14em] text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.5)] transition-all hover:brightness-110 cursor-pointer"
                     >
                       Close Settings
                     </button>
