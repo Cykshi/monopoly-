@@ -988,6 +988,99 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') ack({ ok: true });
   }));
 
+  // Two-player rent settlement. This exists because player:moved's turnGate only
+  // lets a socket report state for ITS OWN seat, so the landing player's client
+  // could never broadcast the OWNER's new balance (it would be rejected as
+  // NOT_YOUR_PLAYER). Rather than loosen that gate — which would let a client
+  // credit money to anyone — the server applies both sides itself here.
+  // Rules enforced:
+  //   - payerId must be the acting/turn player (same gate as every other action)
+  //   - ownerId must actually own tileId per room.propertyOwnership (closes the
+  //     spoofing gap: a hostile client can't claim rent for a tile it doesn't own)
+  //   - amount must be a finite number > 0
+  // KNOWN LIMITATION: the amount is NOT checked against the board's rent tables
+  // (tile type / house count) — those live only in the frontend today. Proper
+  // validation needs board data ported server-side, part of the eventual full
+  // server-authoritative decision.
+  socket.on('rent:paid', withRoom((room, roomId, data, ack) => {
+    if (!data || data.payerId === undefined || data.ownerId === undefined || data.tileId === undefined) {
+      return reject(ack, 'BAD_PAYLOAD', 'rent:paid needs payerId, ownerId and tileId.');
+    }
+    const payer = findPlayer(room, data.payerId);
+    if (!payer) return reject(ack, 'UNKNOWN_PLAYER', `No player ${data.payerId} in this room.`);
+    const owner = findPlayer(room, data.ownerId);
+    if (!owner) return reject(ack, 'UNKNOWN_OWNER', `No player ${data.ownerId} in this room.`);
+    if (data.payerId === data.ownerId) {
+      return reject(ack, 'SAME_PLAYER', 'A player cannot pay rent to themselves.');
+    }
+
+    // Paying rent is a turn action: only the identified player on turn may pay.
+    const gateError = turnGate(room, ack, data.payerId);
+    if (gateError) return gateError;
+
+    // Ownership is verified against SERVER state, not the client's claim.
+    if (room.propertyOwnership[data.tileId] !== data.ownerId) {
+      return reject(ack, 'NOT_OWNER', `Tile ${data.tileId} is not owned by player ${data.ownerId}.`);
+    }
+    if (!Number.isFinite(data.amount) || data.amount <= 0) {
+      return reject(ack, 'BAD_AMOUNT', `Amount ${data.amount} must be a positive number.`);
+    }
+
+    // Debit payer (clamped at 0 like the rest of the codebase), credit owner.
+    payer.money = Math.max(0, (Number.isFinite(payer.money) ? payer.money : 0) - data.amount);
+    owner.money = (Number.isFinite(owner.money) ? owner.money : 0) + data.amount;
+    // A rent payment changes two balances: a meaningful state change, persist it.
+    persistRoom(room);
+    console.log(`💰 Room ${roomId}: Player ${data.payerId} paid $${data.amount} rent to Player ${data.ownerId} (tile ${data.tileId})`);
+    socket.to(roomId).emit('rent:paid', {
+      payerId: data.payerId,
+      ownerId: data.ownerId,
+      tileId: data.tileId,
+      payerMoney: payer.money,
+      ownerMoney: owner.money,
+    });
+    if (typeof ack === 'function') ack({ ok: true });
+  }));
+
+  // Two-player position swap (Surprise card "swap places"). Same reasoning as
+  // rent:paid — the acting client legitimately moves BOTH players, but
+  // player:moved's gate would reject the emit for the non-acting one, so the
+  // server performs the swap on its own copy and broadcasts once for both.
+  // Rules enforced:
+  //   - playerId must be the acting/turn player via turnGate
+  //   - targetId must name a real player in this room, distinct from playerId
+  socket.on('players:swapped', withRoom((room, roomId, data, ack) => {
+    if (!data || data.playerId === undefined || data.targetId === undefined) {
+      return reject(ack, 'BAD_PAYLOAD', 'players:swapped needs playerId and targetId.');
+    }
+    const player = findPlayer(room, data.playerId);
+    if (!player) return reject(ack, 'UNKNOWN_PLAYER', `No player ${data.playerId} in this room.`);
+    const target = findPlayer(room, data.targetId);
+    if (!target) return reject(ack, 'UNKNOWN_TARGET', `No player ${data.targetId} in this room.`);
+    if (data.playerId === data.targetId) {
+      return reject(ack, 'SAME_PLAYER', 'A player cannot swap places with themselves.');
+    }
+
+    // Swapping is a turn action: only the identified player on turn may swap.
+    const gateError = turnGate(room, ack, data.playerId);
+    if (gateError) return gateError;
+
+    // Swap the two positions on the server's copy.
+    const temp = player.position;
+    player.position = target.position;
+    target.position = temp;
+    // A swap changes two players' positions: persist it.
+    persistRoom(room);
+    console.log(`🔄 Room ${roomId}: Players ${data.playerId} and ${data.targetId} swapped places`);
+    socket.to(roomId).emit('players:swapped', {
+      playerId: data.playerId,
+      targetId: data.targetId,
+      playerPosition: player.position,
+      targetPosition: target.position,
+    });
+    if (typeof ack === 'function') ack({ ok: true });
+  }));
+
   // A roll must be within real two-dice range and be made by the player whose
   // turn it is. We don't trust a client-supplied total: it's recomputed.
   socket.on('player:rolled', withRoom((room, roomId, data, ack) => {
@@ -1397,6 +1490,7 @@ io.on('connection', (socket) => {
     const internalEvents = [
       'room:create', 'room:join', 'player:rejoin', 'player:identify', 'room:leave',
       'player:moved', 'player:rolled', 'player:skill-card', 'turn:ended', 'property:bought',
+      'rent:paid', 'players:swapped',
       'house:upgraded', 'player:bankrupt', 'player:kicked', 'trade:created',
       'trade:updated', 'trade:accepted', 'trade:rejected', 'trade:cancelled',
       'chat:message', 'auction:start', 'auction:bid', 'auction:pass', 'auction:end',

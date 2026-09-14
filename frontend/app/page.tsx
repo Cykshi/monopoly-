@@ -1,4 +1,4 @@
-"use client";
+﻿﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
@@ -39,14 +39,35 @@ interface PlayerMovedEvent {
   money: number;
 }
 
+interface RentPaidEvent {
+  payerId: number;
+  ownerId: number;
+  tileId: number;
+  payerMoney: number;
+  ownerMoney: number;
+}
+
+interface PlayersSwappedEvent {
+  playerId: number;
+  targetId: number;
+  playerPosition: number;
+  targetPosition: number;
+}
+
 interface PropertyBoughtEvent {
   tileId: number;
   playerId: number;
+  // Price the buyer paid; the emit already sends it. Used by remote clients to
+  // mirror the buyer's balance (they don't run the affordability check locally).
+  price?: number;
 }
 
 interface HouseUpgradedEvent {
   tileId: number;
   houses: number;
+  // Who built, and what it cost, so remote clients can mirror the deduction.
+  playerId?: number;
+  cost?: number;
 }
 
 interface TradeProposal {
@@ -298,8 +319,15 @@ const isBalanceRelevant = (msg: string, playerName: string) => {
 export default function GameBoard() {
   const socketRef = useRef<Socket | null>(null);
   const moveTimeoutRef = useRef<number | null>(null);
+  // Periodic game:request-sync interval. Kept in a ref so both the disconnect
+  // handler and the effect cleanup can stop it from outside the effect closure.
+  const syncIntervalRef = useRef<number | null>(null);
 
   const [isConnected, setIsConnected] = useState(false);
+  // Mirror of isConnected that the periodic sync interval can read without being
+  // re-created (the socket effect runs once, so a plain state read there would be
+  // stale by the time the interval fires).
+  const isConnectedRef = useRef(false);
   const [connectionLabel, setConnectionLabel] = useState("Connecting...");
   const [copiedCode, setCopiedCode] = useState(false);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -541,6 +569,10 @@ export default function GameBoard() {
     socketRoomRef.current = roomId;
   }, [roomId]);
 
+  useEffect(() => {
+    isConnectedRef.current = isConnected;
+  }, [isConnected]);
+
   // On first mount, restore the last room code from localStorage so the socket
   // effect below can attempt a player:rejoin as soon as it connects.
   useEffect(() => {
@@ -629,9 +661,37 @@ export default function GameBoard() {
       setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
     }
 
-    // A restored (i.e. already-started) room means the game is in progress.
+    // A restored (i.e.-started) room means the game is in progress.
     setIsGameStarted(next.isGameStarted);
     addLog(next.logMessage);
+  };
+
+  // Drift correction from a game:sync payload. Shares the pure computeRestoredState
+  // mapping with applyRestoredState, but deliberately skips two of its side effects:
+  //   - it does NOT set myPlayerId: game:sync carries no `me` field, so
+  //     computeRestoredState returns myPlayerId=null anyway; the acting client
+  //     already knows its own seat and a periodic sync must not clobber it.
+  //   - it does NOT setIsGameStarted or log the rejoin-flavored "♻️ Reconnected"
+  //     line — a periodic sync isn't a reconnect, and that message would
+  //     misleadingly report "$0 on hand" since game:sync has no `me`.
+  const applySyncState = (restored: PlayerRestoreState) => {
+    const next = computeRestoredState<Player, TradeProposal, ChatMessage>(restored);
+    if (next.players) {
+      setPlayers(next.players);
+      playersRef.current = next.players;
+    }
+    if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
+    if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
+    if (next.trades) setTrades(next.trades);
+    if (next.chatMessages) setChatMessages(next.chatMessages);
+    setActiveAuction(next.activeAuction as AuctionState | null);
+    if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
+    if (next.currentTurnPlayerId !== null) {
+      const turnId = next.currentTurnPlayerId;
+      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
+    }
+    // deliberately NOT touching myPlayerId or isGameStarted here — this is a
+    // drift correction for an already-known player, not an identity restore.
   };
 
   useEffect(() => {
@@ -641,6 +701,16 @@ export default function GameBoard() {
     const handleConnect = () => {
       setIsConnected(true);
       setConnectionLabel("Connected • Choose a room");
+
+      // (Re)start the periodic drift-correction heartbeat. handleDisconnect stops
+      // it, so on every (re)connect we make sure exactly one timer is running.
+      if (syncIntervalRef.current === null) {
+        syncIntervalRef.current = window.setInterval(() => {
+          if (isConnectedRef.current && socketRoomRef.current) {
+            newSocket.emit("game:request-sync");
+          }
+        }, 15000);
+      }
 
       // If we already hold a session token for the room we were in, ask the
       // server to rebind this new socket to our existing player record. If the
@@ -670,18 +740,66 @@ export default function GameBoard() {
               // it here too so state is repainted even if event ordering varies.
               if (res.playerState) applyRestoredState(res.playerState);
               setConnectionLabel("Connected • Rejoined room");
+              // Supplement (not replace) player:rejoin: the rejoin restores our
+              // identity; a follow-up sync makes the board/ownership/turn state
+              // match the server even if some broadcast was missed mid-session.
+              newSocket.emit("game:request-sync");
             }
           }
         );
+      } else if (currentRoom) {
+        // We know the room but hold no token to rejoin with (e.g. the token was
+        // cleared). player:rejoin is unavailable, so fall back to a plain sync
+        // so the board still repaints from server truth.
+        newSocket.emit("game:request-sync");
       }
     };
     const handleDisconnect = () => {
       setIsConnected(false);
       setConnectionLabel("Offline");
+      // Stop the sync heartbeat while offline — it would no-op anyway (gated on
+      // isConnectedRef) but clearing it avoids a stray timer firing on reconnect
+      // races; handleConnect restarts the flow and the next tick resumes.
+      if (syncIntervalRef.current !== null) {
+        window.clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
     };
 
     newSocket.on("player:moved", (data: PlayerMovedEvent) => {
       setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, position: data.position, money: data.money } : p)));
+    });
+    // Server-authoritative two-player rent settlement. The server applied both
+    // balances itself (the acting client can't broadcast the owner's seat), so we
+    // just mirror the numbers it sends for the payer and the owner.
+    newSocket.on("rent:paid", (data: RentPaidEvent) => {
+      setPlayers((prev) =>
+        prev.map((p) => {
+          if (p.id === data.payerId) return { ...p, money: data.payerMoney };
+          if (p.id === data.ownerId) return { ...p, money: data.ownerMoney };
+          return p;
+        })
+      );
+    });
+    // Server-authoritative position swap (Surprise card). Apply both players'
+    // new positions from the server's single broadcast.
+    newSocket.on("players:swapped", (data: PlayersSwappedEvent) => {
+      setPlayers((prev) =>
+        prev.map((p) => {
+          if (p.id === data.playerId) return { ...p, position: data.playerPosition };
+          if (p.id === data.targetId) return { ...p, position: data.targetPosition };
+          return p;
+        })
+      );
+    });
+    // Drift-correction safety net. The server replies to game:request-sync with
+    // serializeRoomState(room), which is structurally compatible with the same
+    // restore mapping a rejoin uses. We deliberately do NOT route this through
+    // applyRestoredState (that would set isGameStarted and log a misleading
+    // "Reconnected" line); applySyncState applies only the board/ownership/turn
+    // slices and leaves our own identity untouched.
+    newSocket.on("game:sync", (data: PlayerRestoreState) => {
+      applySyncState(data);
     });
     // A peer rolled. Replay the dice animation for everyone, then let the shared
     // DiceScene onSettled (handleDiceSettled) walk that player across the board
@@ -737,9 +855,18 @@ export default function GameBoard() {
     });
     newSocket.on("property:bought", (data: PropertyBoughtEvent) => {
       setPropertyOwnership((prev) => ({ ...prev, [data.tileId]: data.playerId }));
+      // Mirror the buyer's spend on REMOTE clients — local buyers already
+      // deducted locally, but peers only saw the tile change hands.
+      if (typeof data.price === "number") {
+        setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, money: p.money - data.price! } : p)));
+      }
     });
     newSocket.on("house:upgraded", (data: HouseUpgradedEvent) => {
       setPropertyHouses((prev) => ({ ...prev, [data.tileId]: data.houses }));
+      // Same fix for builds: peers must see the builder's balance drop too.
+      if (typeof data.playerId === "number" && typeof data.cost === "number") {
+        setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, money: p.money - data.cost! } : p)));
+      }
     });
 
     newSocket.on("trade:created", (trade: TradeProposal) => {
@@ -890,7 +1017,20 @@ export default function GameBoard() {
     newSocket.on("disconnect", handleDisconnect);
     newSocket.on("connect_error", handleDisconnect);
 
+    // Periodic drift correction: while connected AND in a room, ask the server
+    // for a fresh game:sync so any missed broadcast self-heals without a refresh.
+    // Gated on the refs (not state) because this effect runs once.
+    syncIntervalRef.current = window.setInterval(() => {
+      if (isConnectedRef.current && socketRoomRef.current) {
+        newSocket.emit("game:request-sync");
+      }
+    }, 15000);
+
     return () => {
+      if (syncIntervalRef.current !== null) {
+        window.clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
       newSocket.disconnect();
       socketRef.current = null;
     };
@@ -1066,7 +1206,7 @@ export default function GameBoard() {
   // the local current player, but accepts an explicit playerId so a REMOTE roll
   // (arriving over player:rolled) animates the player who actually rolled, not
   // whoever this tab happens to think is on turn.
-  const animateMovement = (steps: number, playerId?: number) => {
+  const animateMovement = (steps: number, playerId?: number, broadcast = true) => {
     const player = playerId !== undefined
       ? playersRef.current.find((p) => p.id === playerId)
       : playersRef.current.find((p) => p.isCurrentPlayer);
@@ -1078,12 +1218,26 @@ export default function GameBoard() {
 
     let remaining = steps;
     let currentPos = player.position;
+    // Accumulate the START/pass-START bonuses applied during the walk so the
+    // single post-move broadcast carries the player's FINAL money (the server
+    // applies whatever we send).
+    let moneyDelta = 0;
 
     const step = () => {
       if (remaining <= 0) {
         setIsMoving(false);
         setGamePhase("ACTION");
-        handleLanding(BOARD_TILES[currentPos], player.id);
+        // Movement is complete: emit ONE authoritative post-move state (never per
+        // step). Mirrors player:rolled's broadcast flag — false when replaying a
+        // remote player's roll, so we don't echo their own move back at them.
+        if (broadcast) {
+          socketRef.current?.emit("player:moved", {
+            playerId: player.id,
+            position: currentPos,
+            money: player.money + moneyDelta,
+          });
+        }
+        handleLanding(BOARD_TILES[currentPos], player.id, broadcast);
         return;
       }
 
@@ -1092,6 +1246,7 @@ export default function GameBoard() {
 
       const landsOnStart = currentPos === 0 && remaining <= 0;
       const startBonus = currentPos === 0 ? (landsOnStart ? landStartBonus : passStartBonus) : 0;
+      moneyDelta += startBonus;
 
       if (currentPos === 0) {
         setHasSkillCard(true);
@@ -1257,13 +1412,14 @@ export default function GameBoard() {
   // Instantly moves a player to a target tile (for card-driven jumps rather
   // than a dice roll), crediting the pass-START bonus if the jump wraps
   // around, then resolves whatever they land on exactly like a normal move.
-  const teleportAndLand = (playerId: number, targetIndex: number) => {
+  const teleportAndLand = (playerId: number, targetIndex: number, broadcast = true) => {
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
 
     const wrapped = targetIndex < player.position;
     const landsOnStart = targetIndex === 0;
     const startBonus = landsOnStart ? landStartBonus : wrapped ? passStartBonus : 0;
+    const nextMoney = player.money + startBonus;
 
     setPlayers((prev) =>
       prev.map((p) =>
@@ -1272,16 +1428,26 @@ export default function GameBoard() {
           : p
       )
     );
+    // Broadcast the new position (+ any START bonus money) so remote clients
+    // follow the jump. Gated like the roll path: only for the local player's
+    // own card draw, never when replaying someone else's.
+    if (broadcast) {
+      socketRef.current?.emit("player:moved", {
+        playerId,
+        position: targetIndex,
+        money: nextMoney,
+      });
+    }
     if (startBonus > 0) {
       addLog(`${player.name} ${landsOnStart ? "landed on" : "passed"} START (+$${startBonus})`);
     }
 
-    moveTimeoutRef.current = window.setTimeout(() => handleLanding(BOARD_TILES[targetIndex], playerId), 300);
+    moveTimeoutRef.current = window.setTimeout(() => handleLanding(BOARD_TILES[targetIndex], playerId, broadcast), 300);
   };
 
   // Rolls and applies a Treasure/Surprise outcome. The odds and effects
   // match exactly what the rules modal for these tiles already promises.
-  const resolveCard = (kind: "treasure" | "surprise", playerId: number) => {
+  const resolveCard = (kind: "treasure" | "surprise", playerId: number, broadcast = true) => {
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
 
@@ -1290,15 +1456,21 @@ export default function GameBoard() {
     if (kind === "treasure") {
       if (roll <= 2) {
         setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 100, mood: "happy" } : p)));
+        if (broadcast) {
+          socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + 100 });
+        }
         addLog(`${player.name} drew Treasure (${roll}): +$100 from the bank.`);
       } else if (roll <= 4) {
         setHasSkillCard(true);
         setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 200, mood: "happy" } : p)));
+        if (broadcast) {
+          socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + 200 });
+        }
         addLog(`${player.name} drew Treasure (${roll}): +$200 and a free Movement Card.`);
       } else if (roll === 5) {
         const targetIdx = findNearestTileIndex(player.position, "airport");
         addLog(`${player.name} drew Treasure (${roll}): advances to the nearest Airport.`);
-        teleportAndLand(playerId, targetIdx);
+        teleportAndLand(playerId, targetIdx, broadcast);
       } else {
         const amount = 150;
         if (player.money < amount) {
@@ -1306,6 +1478,9 @@ export default function GameBoard() {
         } else {
           setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money - amount, mood: "flat" } : p)));
           collectToRestHouse(amount);
+          if (broadcast) {
+            socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money - amount });
+          }
           addLog(`${player.name} drew Treasure (${roll}): pays -$150 luxury tax.`);
         }
       }
@@ -1316,13 +1491,23 @@ export default function GameBoard() {
       setPlayers((prev) =>
         prev.map((p) => (p.id === playerId ? { ...p, position: 10, inJail: true, jailTurns: 0, mood: "flat" } : p))
       );
+      // KNOWN GAP: player:moved carries no inJail flag, so the position syncs to
+      // tile 10 but the jail state does NOT reach remote clients. Fixing this
+      // needs a follow-up event or a payload extension (server-authoritative
+      // vs. broadcast-everything decision) — out of scope here.
+      if (broadcast) {
+        socketRef.current?.emit("player:moved", { playerId, position: 10, money: player.money });
+      }
       addLog(`${player.name} drew Surprise (${roll}): sent straight to JAIL.`);
     } else if (roll <= 4) {
       const targetIdx = (player.position + 8) % BOARD_SIZE;
       addLog(`${player.name} drew Surprise (${roll}): jumps forward 8 spaces.`);
-      teleportAndLand(playerId, targetIdx);
+      teleportAndLand(playerId, targetIdx, broadcast);
     } else if (roll === 5) {
       setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 250, mood: "happy" } : p)));
+      if (broadcast) {
+        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + 250 });
+      }
       addLog(`${player.name} drew Surprise (${roll}): receives a $250 dividend.`);
     } else {
       const others = playersRef.current.filter((p) => p.id !== playerId && !p.isBankrupt);
@@ -1338,11 +1523,17 @@ export default function GameBoard() {
           return p;
         })
       );
+      // Two-sided swap: player:moved's turnGate would reject the emit for the
+      // non-acting partner, so the server-authoritative players:swapped event
+      // performs and broadcasts both position changes instead.
+      if (broadcast) {
+        socketRef.current?.emit("players:swapped", { playerId, targetId: target.id });
+      }
       addLog(`${player.name} drew Surprise (${roll}): swapped places with ${target.name}.`);
     }
   };
 
-  const handleLanding = (tile: Tile, playerId: number) => {
+  const handleLanding = (tile: Tile, playerId: number, broadcast = true) => {
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
 
@@ -1359,6 +1550,9 @@ export default function GameBoard() {
           p.id === playerId ? { ...p, money: p.money + potPayout, mood: "happy", isResting: true } : p
         )
       );
+      if (broadcast) {
+        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + potPayout });
+      }
       setRestHousePot(0);
       if (potPayout > 0) {
         addLog(`${player.name} landed on REST HOUSE and collected +$${potPayout}.`);
@@ -1389,6 +1583,9 @@ export default function GameBoard() {
           p.id === playerId ? { ...p, money: Math.max(0, p.money - clubFee), mood: "flat" } : p
         )
       );
+      if (broadcast) {
+        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: Math.max(0, player.money - clubFee) });
+      }
       collectToRestHouse(clubFee);
       addLog(`${player.name} paid -$${clubFee} at CLUB (${cardCount} card + ${houseCount} houses).`);
       return;
@@ -1405,6 +1602,9 @@ export default function GameBoard() {
           p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
         )
       );
+      if (broadcast) {
+        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: Math.max(0, player.money - amount) });
+      }
       collectToRestHouse(amount);
       addLog(`${player.name} paid -$${amount} tax.`);
       return;
@@ -1438,6 +1638,13 @@ export default function GameBoard() {
             return p;
           })
         );
+        // Two-sided rent: player:moved's turnGate only lets a socket report its
+        // OWN seat, so this goes through the server-authoritative rent:paid
+        // event, which applies and broadcasts both balances (the backend also
+        // verifies ownerId really owns tileId before applying).
+        if (broadcast) {
+          socketRef.current?.emit("rent:paid", { payerId: playerId, ownerId, tileId: tile.id, amount: rent });
+        }
         addLog(`${player.name} paid -$${rent} rent to ${owner?.name} (+$${rent}) on ${tile.name}.`);
       } else {
         setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
@@ -1447,7 +1654,7 @@ export default function GameBoard() {
     }
 
     if (tile.type === "card") {
-      resolveCard(tile.name === "TREASURE" ? "treasure" : "surprise", playerId);
+      resolveCard(tile.name === "TREASURE" ? "treasure" : "surprise", playerId, broadcast);
       return;
     }
 
@@ -1509,7 +1716,7 @@ export default function GameBoard() {
         addLog(`Rolled ${total} (${first} + ${second}) — doubles! ${player.name} breaks out of JAIL.`);
         setPlayers((prev) => prev.map((p) => (p.id === player.id ? { ...p, inJail: false, jailTurns: 0 } : p)));
         triggerJailBreak(player.id);
-        animateMovement(total, player.id);
+        animateMovement(total, player.id, broadcast);
       } else {
         const nextJailTurns = (player.jailTurns || 0) + 1;
         if (nextJailTurns >= 3) {
@@ -1532,7 +1739,7 @@ export default function GameBoard() {
     }
 
     addLog(`Rolled ${total} (${first} + ${second})`);
-    animateMovement(total, player.id);
+    animateMovement(total, player.id, broadcast);
   };
 
   const handleDiceSettled = () => {
@@ -1987,7 +2194,7 @@ export default function GameBoard() {
     );
     setPropertyHouses((prev) => ({ ...prev, [tileId]: currentHouses + 1 }));
     addLog(`${currentPlayer.name} built on ${tile.name} (-$${cost})`);
-    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1, playerId: currentPlayer.id });
+    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1, playerId: currentPlayer.id, cost });
   };
 
   // Sells the WHOLE tile (property or utility) back to the bank for half its
