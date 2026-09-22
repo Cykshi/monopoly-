@@ -1,4 +1,4 @@
-﻿﻿"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
@@ -31,6 +31,15 @@ interface Player {
   jailTurns?: number;
   isBankrupt?: boolean;
   isResting?: boolean;
+  // Set by the server on players it has actually created a seat for. Client-side
+  // placeholder players (the DEFAULT_PLAYERS templates) never carry it, which is
+  // how the lobby distinguishes "a real player" from "a seat nobody occupies" —
+  // critical for the colour picker, so an empty seat's template colour isn't
+  // mistaken for a colour someone already holds.
+  hasSeat?: boolean;
+  // True once this player finished the lobby entry step. Their NAME is locked
+  // from then on (server-enforced via NAME_LOCKED); colour unlocks at game start.
+  hasEntered?: boolean;
 }
 
 interface PlayerMovedEvent {
@@ -170,7 +179,7 @@ const BOARD_TILES: Tile[] = [
   { id: 39, name: "Beijing", type: "china", countryCode: "CN", price: "$500", rent: 200, rents: [200, 600, 1400, 3000, 3500, 4000], houseCost: 300, hotelCost: 300 },
 ];
 
-const STARTING_MONEY = 2000;
+const STARTING_MONEY = 1500;
 
 const DEFAULT_PLAYERS: Player[] = [
   { id: 1, name: "", color: "#8b5cf6", money: STARTING_MONEY, position: 0, isCurrentPlayer: true, mood: "happy" },
@@ -180,6 +189,34 @@ const DEFAULT_PLAYERS: Player[] = [
   { id: 5, name: "", color: "#06b6d4", money: STARTING_MONEY, position: 0, mood: "happy" },
   { id: 6, name: "", color: "#ec4899", money: STARTING_MONEY, position: 0, mood: "happy" },
 ];
+
+// The fixed colour palette a player may pick from, in picker order. This MUST
+// match PLAYER_COLOR_PALETTE in backend/server.js — the server validates against
+// its copy and rejects anything outside it, so these two lists are one contract.
+//
+// Exactly these nine, no additions or substitutions. The hexes are chosen to read
+// clearly on the near-black board (#050508) and to stay separable at a glance.
+// The two pairs that would otherwise collide are pulled apart deliberately:
+//   * Cyan leans turquoise/teal (#00BCD4) while Deep Sky Blue leans true blue
+//     (#2196F3) — different enough in both hue and lightness to never be confused.
+//   * Lime (#CDDC39) is a yellow-green, clearly distinct from Emerald Green
+//     (#00A86B), which is a deeper, bluer green.
+// Yellow (#FFEB3B) vs Lime and Orange (#FF9800) vs Crimson Red (#E32636) are
+// likewise separated in lightness as well as hue.
+const PLAYER_COLOR_PALETTE: { name: string; hex: string }[] = [
+  { name: "Baby Pink", hex: "#F4A6C0" },
+  { name: "Crimson Red", hex: "#E32636" },
+  { name: "Emerald Green", hex: "#00A86B" },
+  { name: "Wildberry Purple", hex: "#8E44AD" },
+  { name: "Deep Sky Blue", hex: "#2196F3" },
+  { name: "Yellow", hex: "#FFEB3B" },
+  { name: "Orange", hex: "#FF9800" },
+  { name: "Cyan", hex: "#00BCD4" },
+  { name: "Lime", hex: "#CDDC39" },
+];
+
+// Names are capped server-side too; this keeps the input honest up front.
+const PLAYER_NAME_MAX = 20;
 
 const INITIAL_PLAYERS: Player[] = DEFAULT_PLAYERS.slice(0, 2);
 
@@ -335,6 +372,30 @@ export default function GameBoard() {
   const [peerCount, setPeerCount] = useState(1);
   const [joinCode, setJoinCode] = useState("");
   const [lobbyError, setLobbyError] = useState<string | null>(null);
+  // The name typed on the Create/Join screen. Required before either button can
+  // be pressed; it rides along on room:create / room:join so the server's player
+  // record is BORN with it, and the same value is reused by the settings panel.
+  const [entryName, setEntryName] = useState("");
+  // The colour step. `colorPickerOpen` gates the whole game view until the player
+  // has picked — it is deliberately driven by whether WE have a colour yet (not a
+  // separate flag), so a refresh mid-picker naturally reopens it.
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  // The colour this player currently holds as the SERVER sees it. This is the
+  // authority for what's taken — never a local guess.
+  const [myColor, setMyColor] = useState<string | null>(null);
+  // Transient feedback for a swatch that lost a race for the same colour.
+  const [colorShake, setColorShake] = useState<string | null>(null);
+  const [colorError, setColorError] = useState<string | null>(null);
+  // True once the server has stamped the game as started. Mirrors the server's
+  // room.isGameStarted, which is what actually enforces the lock on name/colour.
+  const [serverGameStarted, setServerGameStarted] = useState(false);
+  // The name typed on the Create/Join screen, mirrored into a ref so the socket
+  // effect (mounted ONCE) can read it at room:joined time without re-subscribing
+  // on every keystroke.
+  const entryNameRef = useRef("");
+  useEffect(() => {
+    entryNameRef.current = entryName;
+  }, [entryName]);
   // Durable session token issued by the server on join. Kept in memory for the
   // live socket and mirrored to localStorage (keyed by room code) so a page
   // refresh can rebind to the same player record via player:rejoin.
@@ -389,6 +450,10 @@ export default function GameBoard() {
   const activeAuctionRef = useRef<AuctionState | null>(null);
   activeAuctionRef.current = activeAuction;
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
+  // The room's player CEILING (2..6). This is a maximum, not a target: the game
+  // can start with any count from 2 up to this, and once this many players have
+  // joined the server refuses further joins. Enforced server-side too.
+  const [maxPlayers, setMaxPlayers] = useState(6);
   // Turn Timer state. The AUTHORITATIVE clock lives on the server now: the
   // client only renders a countdown derived from the deadline the server sends
   // (in room:joined / turn:changed). turnTimeLeft is a display value; the client
@@ -444,31 +509,17 @@ export default function GameBoard() {
     if (isGameStarted) return;
     if (count < 2 || count > 6) return;
 
-    setPlayers((prev) => {
-      if (count === prev.length) return prev;
-      if (count < prev.length) {
-        const trimmed = prev.slice(0, count);
-        if (!trimmed.some((p) => p.isCurrentPlayer)) {
-          trimmed[0].isCurrentPlayer = true;
-        }
-        return trimmed;
-      }
-      const updated = [...prev];
-      for (let i = prev.length; i < count; i++) {
-        const template = DEFAULT_PLAYERS[i];
-        updated.push({
-          id: template.id,
-          name: "",
-          color: template.color,
-          money: startingCash,
-          position: 0,
-          mood: "happy",
-          isCurrentPlayer: false,
-        });
-      }
-      return updated;
+    // This is a CEILING, not a headcount. The board keeps all 6 seats available
+    // to render, and the game may start with ANY number from 2 up to this value —
+    // so we never trim the roster down to `count` (that would force an exact
+    // player count, which is the behaviour this setting is meant to stop having).
+    setMaxPlayers(count);
+    // The server owns the ceiling (it enforces it on join), so push the change
+    // rather than keeping it purely local.
+    socketRef.current?.emit("player:set-max-players", { maxPlayers: count }, () => {
+      // The authoritative value comes back in room:players.
     });
-    addLog(`⚙️ Player count updated to ${count} players.`);
+    addLog(`⚙️ Max players set to ${count}.`);
   };
 
   const handlePlayerNameChange = (playerId: number, newName: string) => {
@@ -506,11 +557,18 @@ export default function GameBoard() {
 
   const handleStartGame = () => {
     if (isGameStarted) return;
+    // A game needs at least MIN_PLAYERS, but NOT the configured max: the cap is a
+    // ceiling and starting with fewer (e.g. 2 of a max of 4) is exactly the point.
+    const seated = playersRef.current.filter((p) => p.hasSeat || p.name.trim()).length;
+    if (seated < 2) {
+      addLog("⚠️ Need at least 2 players to start.");
+      return;
+    }
     setPlayers((prev) => normalizePlayerNames(prev));
     setIsGameStarted(true);
     setTurnTimeLeft(TURN_TIME_LIMIT);
     isTurnTimedOutRef.current = false;
-    addLog(`🎮 Game started! Settings are now locked in.`);
+    addLog(`🎮 Game started with ${seated} players! Settings are now locked in.`);
   };
 
   const playersRef = useRef(players);
@@ -573,16 +631,15 @@ export default function GameBoard() {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
 
-  // On first mount, restore the last room code from localStorage so the socket
-  // effect below can attempt a player:rejoin as soon as it connects.
+  // On first mount, remember the last room code so the socket effect below can
+  // ATTEMPT a player:rejoin as soon as it connects. We deliberately do NOT set
+  // roomId here: being "in a room" is only true once the server accepts us, and
+  // assuming it up front briefly shows a room the server may have already ended.
+  // If the rejoin is refused, the app stays cleanly at the lobby.
   useEffect(() => {
     try {
       const lastRoom = window.localStorage.getItem(LAST_ROOM_KEY);
-      if (lastRoom) {
-        socketRoomRef.current = lastRoom;
-        // Reflect it in state too, so the UI resumes the room context.
-        setRoomId(lastRoom);
-      }
+      if (lastRoom) socketRoomRef.current = lastRoom;
     } catch {
       // ignore
     }
@@ -632,6 +689,34 @@ export default function GameBoard() {
     }
   };
 
+  // The server's player records are deliberately money stubs: it seeds every
+  // seat with $0 and only learns a real balance when a client reports one via
+  // player:moved (see the "money still 0 stub" note on property:bought in
+  // backend/server.js). So the CLIENT is the source of truth for balances, and a
+  // restore/sync payload must never be allowed to overwrite a live balance with
+  // the server's $0 stub — that would reset everyone to $0 on every sync.
+  //
+  // Merge policy (same as the room:players handler): adopt server-owned identity
+  // and board facts, but keep the money/position we already track locally for a
+  // player we know. A player we've never seen is taken verbatim.
+  const mergeServerRoster = (incoming: Player[], prev: Player[]): Player[] => {
+    const byId = new Map(prev.map((p) => [p.id, p]));
+    return incoming.map((next) => {
+      const local = byId.get(next.id);
+      if (!local) return next;
+      return {
+        ...next,
+        money: local.money,
+        position: local.position,
+        mood: local.mood ?? next.mood,
+        inJail: local.inJail ?? next.inJail,
+        jailTurns: local.jailTurns ?? next.jailTurns,
+        isBankrupt: local.isBankrupt ?? next.isBankrupt,
+        isResting: local.isResting ?? next.isResting,
+      };
+    });
+  };
+
   // Repaint the whole board from a rejoin payload. Called when the server
   // returns playerState on a successful player:rejoin — replaces the default
   // blank slate with this player's real money, position, properties, and any
@@ -644,8 +729,11 @@ export default function GameBoard() {
   const applyRestoredState = (restored: PlayerRestoreState) => {
     const next = computeRestoredState<Player, TradeProposal, ChatMessage>(restored);
     if (next.players) {
-      setPlayers(next.players);
-      playersRef.current = next.players;
+      // Merge, not replace: the server's roster is money-stubbed to $0 and must
+      // never clobber a live balance (see mergeServerRoster).
+      const merged = mergeServerRoster(next.players, playersRef.current);
+      setPlayers(merged);
+      playersRef.current = merged;
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
@@ -663,6 +751,20 @@ export default function GameBoard() {
 
     // A restored (i.e.-started) room means the game is in progress.
     setIsGameStarted(next.isGameStarted);
+    setServerGameStarted(next.isGameStarted);
+
+    // Repaint this player's own identity from the server's record.
+    // NOTE: we deliberately do NOT open the picker from here any more. Whether
+    // the colour step is still pending is decided in ONE place, from the live
+    // roster (see the `needsColorPick` effect below), because this restore path
+    // runs before the roster is fully populated and would otherwise flash the
+    // picker at a player who already owns a colour.
+    const restoredMe = next.players?.find((p) => p.id === next.myPlayerId);
+    if (restoredMe) {
+      if (restoredMe.name) setEntryName((prev) => prev || restoredMe.name);
+      setMyColor(restoredMe.color || null);
+    }
+
     addLog(next.logMessage);
   };
 
@@ -677,8 +779,13 @@ export default function GameBoard() {
   const applySyncState = (restored: PlayerRestoreState) => {
     const next = computeRestoredState<Player, TradeProposal, ChatMessage>(restored);
     if (next.players) {
-      setPlayers(next.players);
-      playersRef.current = next.players;
+      // This is the periodic drift-correction path — the one that fires every 15s
+      // while sitting in a room, which is exactly when the $0 reset would bite.
+      // Merge so board facts get corrected WITHOUT resetting balances to the
+      // server's money stub.
+      const merged = mergeServerRoster(next.players, playersRef.current);
+      setPlayers(merged);
+      playersRef.current = merged;
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
@@ -692,6 +799,9 @@ export default function GameBoard() {
     }
     // deliberately NOT touching myPlayerId or isGameStarted here — this is a
     // drift correction for an already-known player, not an identity restore.
+    // The one exception is the server's game-started flag, which is a monotonic
+    // fact (once true it stays true) and is what the name/colour lock reads.
+    if (restored.isGameStarted === true) setServerGameStarted(true);
   };
 
   useEffect(() => {
@@ -724,16 +834,16 @@ export default function GameBoard() {
           { roomId: currentRoom, token },
           (res: { ok: boolean; roomId?: string; rejoined?: boolean; error?: string; reason?: string; playerState?: PlayerRestoreState }) => {
             if (!res || !res.ok) {
-              // Stale/unrecognised token — forget it and treat as a fresh join.
+              // The room is gone (its last player left, ending the session) or the
+              // token expired. Forget the stale room + token and return to a
+              // completely fresh state so the user starts over.
               clearSessionToken(currentRoom);
               try {
                 window.localStorage.removeItem(LAST_ROOM_KEY);
               } catch {
                 // ignore
               }
-              socketRoomRef.current = null;
-              setMyPlayerId(null);
-              setRoomId(null);
+              resetToFreshSession();
               setConnectionLabel("Connected • Choose a room");
             } else {
               // The ack carries the same restore payload as room:joined; apply
@@ -826,6 +936,35 @@ export default function GameBoard() {
       if (typeof data?.currentTurnPlayerId !== "number") return;
       setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === data.currentTurnPlayerId })));
     });
+    // The server's authoritative game-over. Reuses the EXISTING `winner` state
+    // and overlay rather than adding a second win UI — the local
+    // last-player-standing check still runs for instant feedback, and this
+    // confirms/corrects it from the server's ruling.
+    newSocket.on("game:over", (data: { winnerId?: number | null; winnerName?: string | null; reason?: string }) => {
+      if (!data) return;
+      // No winner: everyone else left the game. Just end it cleanly.
+      if (data.winnerId === null || data.winnerId === undefined) {
+        setGamePhase("END TURN");
+        addLog("🏳️ Game over — no players left.");
+        return;
+      }
+      if (typeof data.winnerId !== "number") return;
+      const w = playersRef.current.find((p) => p.id === data.winnerId);
+      setWinner(
+        w
+          ? { ...w, isBankrupt: false }
+          : ({
+              id: data.winnerId,
+              name: data.winnerName || `Player ${data.winnerId}`,
+              color: "#FFEB3B",
+              money: 0,
+              position: 0,
+              isBankrupt: false,
+            } as Player)
+      );
+      setGamePhase("END TURN");
+      addLog(`🏆 GAME OVER — ${data.winnerName || `Player ${data.winnerId}`} wins (last player standing)!`);
+    });
     // Server-forced elimination (e.g. a turn timeout). Apply it locally so the
     // eliminated player's board state clears for everyone, not just the server.
     newSocket.on("player:bankrupt", (data: { playerId: number; reason?: string }) => {
@@ -834,6 +973,8 @@ export default function GameBoard() {
       const pName = p?.name?.trim() || `Player ${data.playerId}`;
       if (data.reason === "timeout") {
         addLog(`⏰ TIME EXPIRED! ${pName} failed to play in time and is ELIMINATED!`);
+      } else if (data.reason === "left") {
+        addLog(`🚪 ${pName} left the game and is out.`);
       }
       setPlayers((prev) =>
         prev.map((x) => (x.id === data.playerId ? { ...x, isBankrupt: true, money: 0, isCurrentPlayer: false } : x))
@@ -968,10 +1109,36 @@ export default function GameBoard() {
 
     // Room membership: the server is the source of truth for the code, the
     // host/guest role and how many peers are currently connected.
-    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; token?: string; connectedCount?: number; playerState?: PlayerRestoreState | null }) => {
+    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; token?: string; connectedCount?: number; playerState?: PlayerRestoreState | null; state?: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null } }) => {
       setRoomId(data.roomId);
       setRoomRole(data.role);
       setPeerCount(data.connectedCount ?? 1);
+      // The server's roster snapshot rides along on `state`. Applying it FIRST is
+      // what makes a late joiner see colours and names already taken — without
+      // this, someone who joins after the host picked a colour would be shown a
+      // fully-available palette until the next room:players broadcast.
+      if (Array.isArray(data.state?.players)) {
+        const incoming = new Map(data.state!.players!.map((p) => [p.id, p]));
+        setPlayers((prev) =>
+          prev.map((p) => {
+            const next = incoming.get(p.id);
+            if (!next) return p;
+            return {
+              ...p,
+              name: next.name ?? p.name,
+              // Color is SERVER-owned: take its value verbatim, including null.
+              // Using `?? p.color` here would treat the server's "no colour yet"
+              // as "keep whatever we had", which can leave a player looking like
+              // they own a colour they don't — and stall the picker.
+              color: next.color,
+              hasSeat: next.hasSeat ?? p.hasSeat,
+              hasEntered: next.hasEntered ?? p.hasEntered,
+            };
+          })
+        );
+      }
+      if (typeof data.state?.isGameStarted === "boolean") setServerGameStarted(data.state.isGameStarted);
+      if (typeof data.state?.maxPlayers === "number") setMaxPlayers(data.state.maxPlayers);
       // Persist the server-issued session token keyed by room code so a refresh
       // can rejoin the same player instead of becoming a stranger.
       if (data.token) saveSessionToken(data.roomId, data.token);
@@ -987,15 +1154,63 @@ export default function GameBoard() {
       if (data.token) {
         newSocket.emit(
           "player:identify",
-          { roomId: data.roomId, token: data.token, ...(seat !== undefined ? { playerId: seat } : {}) },
-          (res: { ok: boolean; playerId?: number; currentTurnPlayerId?: number | null; turnDeadline?: number | null; error?: string }) => {
+          { roomId: data.roomId, token: data.token, ...(seat !== undefined ? { playerId: seat } : {}), name: entryNameRef.current || undefined },
+          (res: { ok: boolean; playerId?: number; currentTurnPlayerId?: number | null; turnDeadline?: number | null; name?: string; color?: string | null; error?: string }) => {
             if (res && res.ok && typeof res.turnDeadline === "number") setTurnDeadline(res.turnDeadline);
+            // The identify ack is where a FRESH (non-rejoin) client learns which
+            // seat it holds — a rejoin already knows it from playerState.me.id.
+            if (res && res.ok && typeof res.playerId === "number") setMyPlayerId(res.playerId);
             if (res && res.ok && typeof res.currentTurnPlayerId === "number") {
               setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === res.currentTurnPlayerId })));
+            }
+            // Adopt the seat's own name/colour from the server so a refresh
+            // mid-lobby repaints exactly what this player had chosen.
+            if (res && res.ok && res.name) {
+              setEntryName((prev) => prev || res.name || "");
+            }
+            if (res && res.ok) {
+              setMyColor((prev) => (res.color !== undefined ? res.color : prev));
             }
           }
         );
       }
+    });
+
+    // The lobby roster, broadcast whenever ANY player changes their name or
+    // colour. This is the single live source for "who has what" — every client
+    // re-renders its picker from it, which is how a swatch greys out the instant
+    // someone else claims it. It also carries isGameStarted, so the lock arrives
+    // from the server rather than being inferred locally.
+    newSocket.on("room:players", (data: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null }) => {
+      if (typeof data?.maxPlayers === "number") setMaxPlayers(data.maxPlayers);
+      if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
+      if (Array.isArray(data?.players)) {
+        setPlayers((prev) => {
+          // Keep our own money/position/etc. and only adopt identity fields, so a
+          // lobby broadcast can never clobber live game state mid-match.
+          const incoming = new Map(data.players!.map((p) => [p.id, p]));
+          return prev.map((p) => {
+            const next = incoming.get(p.id);
+            if (!next) return p;
+            return {
+              ...p,
+              name: next.name ?? p.name,
+              // Server-owned: take verbatim (including null) so a colour the
+              // server has cleared can't linger locally. See note above.
+              color: next.color,
+              hasSeat: next.hasSeat ?? p.hasSeat,
+              hasEntered: next.hasEntered ?? p.hasEntered,
+            };
+          });
+        });
+      }
+      if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
+
+      // Track OUR colour from the same broadcast: if another client took a
+      // colour, or the server rejected ours, `myColor` follows the server.
+      const me = myPlayerIdRef.current;
+      const mine = Array.isArray(data?.players) ? data.players.find((p) => p.id === me) : undefined;
+      if (mine) setMyColor(mine.color ?? null);
     });
     newSocket.on("room:left", () => {
       setRoomId(null);
@@ -1102,15 +1317,25 @@ export default function GameBoard() {
       setLobbyError("Not connected to the server yet. Please wait a moment.");
       return;
     }
+    // The name is required to proceed — the button is disabled without one, and
+    // this re-checks so a stray Enter key can't slip past.
+    const name = entryName.trim().slice(0, PLAYER_NAME_MAX);
+    if (!name) {
+      setLobbyError("Enter your name first.");
+      return;
+    }
     setLobbyBusy(true);
     setLobbyError(null);
-    s.emit("room:create", {}, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
+    // The name is bound to the player record server-side on this same call.
+    s.emit("room:create", { name }, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
       setLobbyBusy(false);
       if (!res || !res.ok) {
         setLobbyError(res?.error || "Could not create a room.");
         return;
       }
       if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
+      // Straight into the colour step — no colour is held yet.
+      setColorPickerOpen(true);
     });
   };
 
@@ -1126,9 +1351,14 @@ export default function GameBoard() {
       setLobbyError("Enter a room code to join.");
       return;
     }
+    const name = entryName.trim().slice(0, PLAYER_NAME_MAX);
+    if (!name) {
+      setLobbyError("Enter your name first.");
+      return;
+    }
     setLobbyBusy(true);
     setLobbyError(null);
-    s.emit("room:join", { roomId: wanted }, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
+    s.emit("room:join", { roomId: wanted, name }, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
       setLobbyBusy(false);
       if (!res || !res.ok) {
         setLobbyError(res?.error || `No room found with code ${wanted}.`);
@@ -1136,7 +1366,124 @@ export default function GameBoard() {
       }
       if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
       setJoinCode("");
+      setColorPickerOpen(true);
     });
+  };
+
+  // Ask the server to take a colour. The server is the authority: it refuses a
+  // colour someone else already holds (COLOR_TAKEN), which is the ONLY correct
+  // answer when two players click the same free swatch at the same moment. We do
+  // NOT set myColor locally on click — we wait for the room:players broadcast, so
+  // the UI can never show a colour we don't actually own.
+  const chooseColor = (color: string) => {
+    const s = socketRef.current;
+    if (!s) return;
+    setColorError(null);
+    s.emit("player:set-color", { color }, (res: { ok: boolean; color?: string; code?: string; error?: string }) => {
+      if (res && res.ok) {
+        setMyColor(res.color || color);
+        return;
+      }
+      // Lost the race, or the colour is already fixed for this session.
+      setColorError(
+        res?.code === "COLOR_ALREADY_SET"
+          ? "Your colour is locked. Leave the room to choose a different one."
+          : res?.error || "Could not take that colour."
+      );
+      setColorShake(color);
+      window.setTimeout(() => setColorShake((c) => (c === color ? null : c)), 600);
+    });
+  };
+
+  // The single path for renaming, used by BOTH the lobby picker and the in-game
+  // settings panel so there is one implementation, not two.
+  const commitName = (raw: string) => {
+    const s = socketRef.current;
+    const name = raw.trim().slice(0, PLAYER_NAME_MAX);
+    if (!s || !name) return;
+    s.emit("player:set-name", { name }, () => {
+      // The roster comes back via room:players; nothing to reconcile here.
+    });
+  };
+
+  // Which of the palette colours are already held by someone ELSE? Derived from
+  // server state (players[].color), never from a local guess.
+  //
+  // Important: the local `players` array is pre-seeded with template players so
+  // the board has tokens to render, and those templates each carry a colour. If
+  // we counted those, every colour would look taken before anyone joined. So we
+  // only count players the SERVER has actually created a seat for — flagged by
+  // `hasSeat`, which the server sets on every real seat. (The raw sessionToken is
+  // deliberately NOT sent to clients any more; it would let a peer hijack the
+  // seat, so the server exposes this boolean instead.)
+  //
+  // A disconnected player keeps their seat (and therefore their colour) through
+  // the reconnect grace window, since the server only drops the record on
+  // teardown — so a colour stays reserved across a temporary disconnect.
+  const takenColors = new Set(
+    players
+      .filter((p) => p.id !== myPlayerId && typeof p.color === "string" && p.color && p.hasSeat)
+      .map((p) => (p.color as string).toLowerCase())
+  );
+
+  // Once the game is running the roster is frozen, matching the server's
+  // player:set-name / player:set-color GAME_STARTED lock.
+  const identityLocked = isGameStarted || serverGameStarted;
+
+  // NAME locks earlier than colour: the moment the player has entered the room
+  // (finished the lobby step). Mirrors the server's NAME_LOCKED rule so the UI
+  // doesn't offer an edit the server would refuse anyway.
+  const nameLocked = identityLocked || !!players.find((p) => p.id === myPlayerId)?.hasEntered;
+
+  // Does THIS player still need to pick a colour, according to the SERVER's own
+  // roster? This is the single source of truth for showing the picker. Deriving
+  // it from the live roster (rather than the one-shot rejoin payload) is what
+  // stops a refresh from re-opening the picker for someone who already has a
+  // colour — the server would refuse their pick with COLOR_ALREADY_SET, which is
+  // exactly the "colour is not available" dead-end this avoids.
+  const mySeat = players.find((p) => p.id === myPlayerId);
+  const needsColorPick = !!roomId && !!mySeat && mySeat.hasSeat === true && !mySeat.color;
+
+  // Keep the picker in step with that derived truth. Opening happens here (not
+  // inside each network handler) so every path — create, join, rejoin, refresh,
+  // and a live roster broadcast — reaches the same conclusion from the same data.
+  // It also CLOSES the picker the moment the server confirms our colour, so a
+  // stale open state can't leave us staring at an un-pickable grid.
+  useEffect(() => {
+    if (needsColorPick) setColorPickerOpen(true);
+  }, [needsColorPick]);
+
+  // Wipe EVERY trace of the previous session so a new one genuinely starts from
+  // the beginning. Used when a rejoin is refused (the room was ended because its
+  // last player left, or the token expired) — the server has no record of us any
+  // more, so leaving any of this state behind would leak the old game into the
+  // new room (stale players, a colour we no longer own, a started-game flag).
+  const resetToFreshSession = () => {
+    socketRoomRef.current = null;
+    // Identity + room membership.
+    setRoomId(null);
+    setRoomRole(null);
+    setPeerCount(1);
+    setMyPlayerId(null);
+    setSessionToken(null);
+    sessionTokenRef.current = null;
+    // Identity choices, so the picker starts clean.
+    setMyColor(null);
+    setEntryName("");
+    setColorPickerOpen(false);
+    setColorError(null);
+    // Game state, so the board is not carrying a finished/other game.
+    setPlayers(INITIAL_PLAYERS);
+    playersRef.current = INITIAL_PLAYERS;
+    setPropertyOwnership({});
+    setPropertyHouses({});
+    setActiveAuction(null);
+    setWinner(null);
+    setIsGameStarted(false);
+    setServerGameStarted(false);
+    setIsRolling(false);
+    setIsMoving(false);
+    setGamePhase("YOUR TURN");
   };
 
   const handleCopyRoomCode = async () => {
@@ -1162,10 +1509,10 @@ export default function GameBoard() {
     } catch {
       // ignore
     }
-    socketRoomRef.current = null;
-    setRoomId(null);
-    setRoomRole(null);
-    setPeerCount(1);
+    // Full wipe, not a partial one: leaving ends this session, so the next room
+    // must not inherit our old players/colour/game flags.
+    resetToFreshSession();
+    setConnectionLabel("Connected • Choose a room");
   };
 
   const collectToRestHouse = (amount: number) => {
@@ -1269,6 +1616,12 @@ export default function GameBoard() {
   const checkForWinnerAmong = (list: Player[]) => {
     const alive = list.filter((p) => !p.isBankrupt);
     if (alive.length === 1) setWinner(alive[0]);
+    // Nobody left at all (the last player surrendered or left): the game is over
+    // with no winner. We still surface a Game Over state so the board stops
+    // pretending the game is live — there is no one to take a turn.
+    else if (alive.length === 0) {
+      addLog("🏳️ Game over — no players remain.");
+    }
   };
 
   // A player who can't cover what they owe goes bankrupt: every property
@@ -1676,6 +2029,14 @@ export default function GameBoard() {
       return;
     }
 
+    // A game needs at least 2 players, and the first ROLL is what actually
+    // starts it — so gate here too, not just on the explicit Start button.
+    const seated = playersRef.current.filter((p) => p.hasSeat || p.name.trim()).length;
+    if (!isGameStarted && seated < 2) {
+      addLog("⚠️ Need at least 2 players to start.");
+      return;
+    }
+
     if (!isGameStarted) {
       setPlayers((prev) => normalizePlayerNames(prev));
       setIsGameStarted(true);
@@ -1782,6 +2143,14 @@ export default function GameBoard() {
   const confirmSkillCard = () => {
     if (!selectedCardValue || !hasSkillCard) return;
     if (!isGameStarted) {
+      // Same rule as the explicit Start button and the roll path: the card use
+      // would open the game, so a lone player must not be able to start it.
+      const seated = playersRef.current.filter((p) => p.hasSeat || p.name.trim()).length;
+      if (seated < 2) {
+        addLog("⚠️ Need at least 2 players to start.");
+        setShowCardSelector(false);
+        return;
+      }
       setPlayers((prev) => normalizePlayerNames(prev));
       setIsGameStarted(true);
       addLog(`🃏 Game started! Settings are now locked.`);
@@ -2305,18 +2674,38 @@ export default function GameBoard() {
   // for use in the sidebars - mirrors the same happy/flat expression logic
   // used on the actual board tokens, so a mood change updates everywhere
   // this player's face appears at once.
-  const renderPlayerFace = (player: Player, size: string) => (
+  // The player token/piece graphic. This is THE shared token renderer: the board
+  // pieces, the sidebar roster AND the colour picker all draw through it, so a
+  // token can never look like one thing on the board and another in the picker.
+  //
+  // `player` may be a full Player or any object carrying the fields used here
+  // (color, mood, isCurrentPlayer, id) — the picker passes a lightweight stand-in
+  // so it can preview a colour the player doesn't hold yet.
+  const renderPlayerFace = (
+    player: Pick<Player, "color" | "mood" | "isCurrentPlayer" | "id">,
+    size: string,
+    opts: { dimmed?: boolean; glow?: boolean } = {}
+  ) => (
     <div
-      className="relative flex shrink-0 items-center justify-center rounded-full"
+      className="relative flex shrink-0 items-center justify-center rounded-full transition-all"
       style={{
         height: size,
         width: size,
         background: `radial-gradient(circle at 30% 24%, ${player.color}ff, ${player.color}ee 42%, ${player.color} 68%, #00000066 100%)`,
         border: `0.09vmin solid ${player.color}`,
-        boxShadow: player.isCurrentPlayer
-          ? `0 0 1.8vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.7vmin 1.3vmin rgba(0,0,0,0.75), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.45), inset 0 -0.3vmin 0.4vmin rgba(0,0,0,0.35)`
-          : `0 0 0.6vmin ${player.color}aa, 0 0.5vmin 1vmin rgba(0,0,0,0.65), inset 0 0.22vmin 0.3vmin rgba(255,255,255,0.35), inset 0 -0.25vmin 0.35vmin rgba(0,0,0,0.3)`,
-        animation: player.isCurrentPlayer ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s` : undefined,
+        // `dimmed` is the "someone already took this colour" look: desaturated and
+        // faded, matching how a disabled swatch reads elsewhere in the UI.
+        opacity: opts.dimmed ? 0.28 : 1,
+        filter: opts.dimmed ? "grayscale(1)" : undefined,
+        boxShadow: opts.dimmed
+          ? "none"
+          : player.isCurrentPlayer || opts.glow
+            ? `0 0 1.8vmin ${player.color}cc, 0 0 0.5vmin ${player.color}, 0 0.7vmin 1.3vmin rgba(0,0,0,0.75), inset 0 0.25vmin 0.35vmin rgba(255,255,255,0.45), inset 0 -0.3vmin 0.4vmin rgba(0,0,0,0.35)`
+            : `0 0 0.6vmin ${player.color}aa, 0 0.5vmin 1vmin rgba(0,0,0,0.65), inset 0 0.22vmin 0.3vmin rgba(255,255,255,0.35), inset 0 -0.25vmin 0.35vmin rgba(0,0,0,0.3)`,
+        animation:
+          !opts.dimmed && (player.isCurrentPlayer || opts.glow)
+            ? `tokenGlow 1.4s ease-in-out infinite ${(player.id % 4) * 0.15}s`
+            : undefined,
       }}
     >
       <div
@@ -2379,6 +2768,16 @@ export default function GameBoard() {
           80% { transform: scale(1.08) rotate(-5deg); }
           100% { transform: scale(1) rotate(0deg); }
         }
+        /* A swatch that lost the race for its colour shakes once, so the loser
+           gets an unmistakable "no" beyond the disabled/greyed state. */
+        @keyframes swatchShake {
+          0%, 100% { transform: translateX(0); }
+          20% { transform: translateX(-0.7vmin) rotate(-3deg); }
+          40% { transform: translateX(0.7vmin) rotate(3deg); }
+          60% { transform: translateX(-0.5vmin) rotate(-2deg); }
+          80% { transform: translateX(0.5vmin) rotate(2deg); }
+        }
+        .swatch-shake { animation: swatchShake 0.55s ease-in-out; }
       `}</style>
 
       {/* ================= LOBBY GATE =================
@@ -2407,9 +2806,40 @@ export default function GameBoard() {
               <span className="text-[1.15vmin] font-bold text-gray-300">{connectionLabel}</span>
             </div>
 
+            {/* The name is REQUIRED before either button works: it's bound to the
+                player record server-side along with the session token, so the
+                server knows who this seat is from the very first event. */}
+            <div className="mt-[2vmin] flex flex-col gap-[0.7vmin]">
+              <label
+                htmlFor="lobby-name"
+                className="text-[1.05vmin] font-bold uppercase tracking-widest text-gray-400"
+              >
+                Enter your name
+              </label>
+              <input
+                id="lobby-name"
+                value={entryName}
+                onChange={(e) => setEntryName(e.target.value.slice(0, PLAYER_NAME_MAX))}
+                onKeyDown={(e) => {
+                  // Enter from the name field submits the join form (the natural
+                  // "I typed my name and code, go" gesture).
+                  if (e.key === "Enter" && joinCode.trim()) handleJoinRoom();
+                }}
+                placeholder="YOUR NAME"
+                maxLength={PLAYER_NAME_MAX}
+                autoComplete="off"
+                className="w-full rounded-[1vmin] border-[0.2vmin] border-purple-400/50 bg-black/50 px-[1.4vmin] py-[1.2vmin] text-center text-[1.5vmin] font-black text-white placeholder:text-[1.2vmin] placeholder:font-bold placeholder:tracking-normal placeholder:text-gray-600 focus:border-purple-300/80 focus:outline-none"
+              />
+              {!entryName.trim() && (
+                <span className="text-center text-[1vmin] font-bold uppercase tracking-wider text-amber-300/80">
+                  Required to create or join
+                </span>
+              )}
+            </div>
+
             <button
               onClick={handleCreateRoom}
-              disabled={!isConnected || lobbyBusy}
+              disabled={!isConnected || lobbyBusy || !entryName.trim()}
               className="mt-[2vmin] w-full rounded-[1vmin] border-[0.2vmin] border-emerald-400/60 bg-gradient-to-r from-emerald-500/30 to-teal-500/20 px-[2vmin] py-[1.3vmin] text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.8vmin_rgba(16,185,129,0.4)] transition-all hover:scale-[1.02] hover:from-emerald-500/50 hover:to-teal-500/40 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
             >
               Create a Room
@@ -2431,7 +2861,7 @@ export default function GameBoard() {
               />
               <button
                 type="submit"
-                disabled={!isConnected || lobbyBusy || !joinCode.trim()}
+                disabled={!isConnected || lobbyBusy || !joinCode.trim() || !entryName.trim()}
                 className="shrink-0 rounded-[1vmin] border-[0.2vmin] border-cyan-400/60 bg-cyan-500/20 px-[2vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wide text-cyan-100 transition-all hover:scale-[1.02] hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
               >
                 Join
@@ -2443,6 +2873,97 @@ export default function GameBoard() {
                 {lobbyError}
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= COLOUR PICKER (post-join step) =================
+          Shown once we're in a room but before the game view. Gated on roomId so
+          it can't appear to a client that never joined, and on !myColor so a
+          refresh mid-lobby naturally lands the player back here. Which swatches
+          are available comes from the SERVER roster (room:players), so a colour
+          someone else already holds is disabled the moment they take it. */}
+      {needsColorPick && !identityLocked && (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-[#050508]/95 backdrop-blur-sm">
+          <div className="w-[58vmin] max-w-[94vw] rounded-[1.8vmin] border-[0.2vmin] border-white/12 bg-[#0f0c16] p-[3vmin] shadow-[0_0_6vmin_rgba(139,92,246,0.25)]">
+            <h2 className="text-center text-[2.4vmin] font-black uppercase tracking-widest text-white">
+              Pick your colour
+            </h2>
+            <p className="mt-[0.6vmin] text-center text-[1.15vmin] font-bold uppercase tracking-widest text-gray-400">
+              {entryName.trim() || "Player"} • Room {roomId}
+            </p>
+            <p className="mt-[0.5vmin] text-center text-[1vmin] font-semibold text-gray-500">
+              Greyed-out colours are already taken. Your choice is permanent.
+            </p>
+
+            <div className="mt-[2.4vmin] grid grid-cols-3 gap-[1.4vmin]">
+              {PLAYER_COLOR_PALETTE.map(({ name, hex }) => {
+                const isTaken = takenColors.has(hex.toLowerCase());
+                const isMine = (myColor || "").toLowerCase() === hex.toLowerCase();
+                const shaking = colorShake === hex;
+                return (
+                  <button
+                    key={hex}
+                    onClick={() => !isTaken && !isMine && chooseColor(hex)}
+                    disabled={isTaken || isMine}
+                    aria-label={isTaken ? `${name} taken` : isMine ? `Your colour ${name}` : `Choose colour ${name}`}
+                    title={isTaken ? "Taken by another player" : isMine ? "Your colour" : `Choose ${name}`}
+                    className={`group relative flex flex-col items-center justify-center gap-[0.5vmin] rounded-[1.4vmin] border-[0.25vmin] p-[1vmin] transition-all ${shaking ? "swatch-shake" : ""} ${isTaken
+                        ? "cursor-not-allowed border-white/10 bg-white/[0.02]"
+                        : isMine
+                          ? "cursor-default border-white bg-white/[0.08]"
+                          : "cursor-pointer border-white/15 bg-white/[0.03] hover:scale-[1.06] hover:border-white/40"
+                      }`}
+                  >
+                    {/* The REAL token piece, recoloured — not an abstract block.
+                        Disabled colours render the same token, dimmed + greyed. */}
+                    <div className={`relative transition-transform ${!isTaken && !isMine ? "group-hover:scale-110" : ""}`}>
+                      {renderPlayerFace(
+                        { color: hex, mood: "happy", isCurrentPlayer: false, id: 0 },
+                        "8vmin",
+                        { dimmed: isTaken, glow: isMine }
+                      )}
+                      {isTaken && (
+                        <span className="absolute inset-0 flex items-center justify-center text-[2.4vmin] font-black text-white drop-shadow-[0_0.2vmin_0.3vmin_rgba(0,0,0,0.95)]">
+                          ✕
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className={`text-center text-[1vmin] font-black uppercase leading-tight tracking-wide ${isTaken ? "text-gray-600" : isMine ? "text-white" : "text-gray-300"
+                        }`}
+                    >
+                      {name}
+                    </span>
+                    <span
+                      className={`text-[0.85vmin] font-bold uppercase tracking-wider ${isTaken ? "text-red-400/80" : isMine ? "text-emerald-300" : "text-transparent"
+                        }`}
+                    >
+                      {isMine ? "Your colour" : isTaken ? "Taken" : "—"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {colorError && (
+              <p className="mt-[1.8vmin] rounded-[0.8vmin] border-red-500/40 bg-red-500/10 px-[1.2vmin] py-[0.8vmin] text-center text-[1.1vmin] font-bold text-red-300">
+                {colorError}
+              </p>
+            )}
+
+            {/* No "Enter Room" click needed any more: the picker closes by itself
+                the instant the SERVER confirms our colour (needsColorPick flips
+                false). This is a status line, not a dismiss control, so there is
+                no way to walk into the room without a colour chosen. */}
+            <div
+              className={`mt-[2.2vmin] w-full rounded-[1vmin] border-[0.2vmin] px-[2vmin] py-[1.3vmin] text-center text-[1.3vmin] font-black uppercase tracking-wide transition-all ${myColor
+                  ? "border-emerald-400/60 bg-emerald-500/20 text-emerald-100"
+                  : "border-white/15 bg-white/[0.04] text-gray-400"
+                }`}
+            >
+              {myColor ? "✓ Colour set — entering room" : "Pick a colour to continue"}
+            </div>
           </div>
         </div>
       )}
@@ -4070,6 +4591,12 @@ export default function GameBoard() {
               const isTarget = isVoteKickOpen && !player.isBankrupt && !isSelf;
 
               const voters = kickVotes[player.id] || [];
+              // Whether THIS seat's name is locked. Only the local player can edit
+              // their own name, and only until they've entered the room — so the
+              // lock is computed per-seat, not from one global flag.
+              const lockForThisSeat = isSelf
+                ? nameLocked
+                : (identityLocked || !!player.hasEntered);
               const otherEligibleVoters = alivePlayers.filter((p) => p.id !== player.id);
               const totalOthers = otherEligibleVoters.length;
               const votes = voters.length;
@@ -4138,14 +4665,29 @@ export default function GameBoard() {
                             type="text"
                             value={player.name}
                             onChange={(e) => handlePlayerNameChange(player.id, e.target.value)}
+                            onBlur={(e) => {
+                              // One path for renaming: this commits through the
+                              // SAME player:set-name event the lobby picker uses,
+                              // so the server and every other client stay in step.
+                              if (isSelf) commitName(e.target.value);
+                            }}
+                            disabled={lockForThisSeat || !isSelf}
                             placeholder={`Player ${player.id}`}
-                            maxLength={12}
-                            className="w-[16.5vmin] rounded-[0.9vmin] border-[0.25vmin] border-purple-400/50 bg-[#160f26] px-[1.1vmin] py-[0.5vmin] text-[1.75vmin] font-black text-white placeholder:text-gray-400/90 placeholder:font-black placeholder:text-[1.65vmin] shadow-inner shadow-black/60 transition-all focus:border-purple-300 focus:bg-[#231540] focus:shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] focus:outline-none"
-                            title="Click to edit player name"
+                            maxLength={PLAYER_NAME_MAX}
+                            className="w-[16.5vmin] rounded-[0.9vmin] border-[0.25vmin] border-purple-400/50 bg-[#160f26] px-[1.1vmin] py-[0.5vmin] text-[1.75vmin] font-black text-white placeholder:text-gray-400/90 placeholder:font-black placeholder:text-[1.65vmin] shadow-inner shadow-black/60 transition-all focus:border-purple-300 focus:bg-[#231540] focus:shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                            title={nameLocked ? "Your name is locked once you enter the room" : "Click to edit player name"}
                           />
-                          <span className="text-[1.4vmin] text-purple-300 drop-shadow" title="Editable before game start">
-                            ✏️
-                          </span>
+                          {/* The icon reflects THIS seat's own state. A vacant
+                              placeholder seat has no name to edit (so no pencil),
+                              and only a real player who has entered shows a lock. */}
+                          {(player.hasSeat || player.id === myPlayerId) && (
+                            <span
+                              className="text-[1.4vmin] text-purple-300 drop-shadow"
+                              title={!player.hasSeat ? "Vacant seat" : lockForThisSeat ? "Name locked — you've entered the room" : "Editable before game start"}
+                            >
+                              {!player.hasSeat ? "⏳" : lockForThisSeat ? "🔒" : "✏️"}
+                            </span>
+                          )}
                         </div>
                       ) : (
                         <span
@@ -4159,6 +4701,13 @@ export default function GameBoard() {
                           {player.name || `Player ${player.id}`}
                         </span>
                       )}
+
+                      {/* NO colour picker here. A colour is chosen ONCE on the
+                          "Pick your colour" screen and is permanent for the
+                          session (the server refuses any later player:set-color
+                          with COLOR_ALREADY_SET). The only way to change it is to
+                          leave the room and rejoin, which lands back on the
+                          picker — so deliberately no edit affordance in-room. */}
 
                       {player.isBankrupt ? (
                         <span className="text-[0.9vmin] text-red-400">BANKRUPT</span>
@@ -4306,7 +4855,7 @@ export default function GameBoard() {
                       setShowBankruptModal(true);
                     }
                   }}
-                  disabled={!currentPlayer || currentPlayer.isBankrupt || alivePlayers.length <= 1}
+                  disabled={!currentPlayer || currentPlayer.isBankrupt}
                   className="flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-red-600 to-rose-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                   title="Whoever clicks this gets out (surrender/bankrupt)"
                 >
@@ -4451,19 +5000,20 @@ export default function GameBoard() {
                   </span>
                 </div>
 
-                {/* Setting: Number of Players (2 to 6) */}
+                {/* Setting: MAX players (2 to 6). A ceiling, not a headcount —
+                    the game starts with however many have joined (2+), up to this. */}
                 <div className="flex flex-col gap-[0.8vmin]">
                   <div className="flex items-center justify-between">
                     <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
-                      Number of Players
+                      Max Players
                     </span>
                     <span className="text-[1.4vmin] font-semibold text-slate-100">
-                      {players.length}
+                      {players.filter((p) => p.hasSeat).length} / {maxPlayers}
                     </span>
                   </div>
                   <div className="grid grid-cols-5 gap-[0.6vmin]">
                     {[2, 3, 4, 5, 6].map((count) => {
-                      const isActive = players.length === count;
+                      const isActive = maxPlayers === count;
                       return (
                         <button
                           key={count}
@@ -4472,13 +5022,16 @@ export default function GameBoard() {
                               ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                               : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                             }`}
-                          title={`Set player count to ${count}`}
+                          title={`Allow up to ${count} players`}
                         >
                           {count}P
                         </button>
                       );
                     })}
                   </div>
+                  <span className="text-[0.95vmin] font-semibold text-gray-500">
+                    Start with any number from 2 up to {maxPlayers}.
+                  </span>
                 </div>
 
                 {/* Setting 1: Starting Cash */}

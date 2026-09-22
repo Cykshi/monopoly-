@@ -59,6 +59,20 @@ class GameRoom {
     // refreshing their own tab can still rejoin. Cleared on any return or when
     // the room is torn down. Kept here so teardown has one place to clear it.
     this.emptyTimer = null;
+    // Set the first time anyone actually rolls. The lobby is only a lobby until
+    // then, so this is what freezes name/colour editing — the server's own view
+    // of "has the game begun", not a client flag. Persisted so a restart mid-game
+    // doesn't silently reopen the roster for editing.
+    this.isGameStarted = false;
+    // The room's player CEILING (2..6). Deliberately a maximum rather than a
+    // required headcount: the game may start with any count from 2 up to this,
+    // and room:join refuses once this many real seats exist.
+    this.maxPlayers = MAX_PLAYERS_DEFAULT;
+    // Set when the game is over and who won. `isGameOver` is the single flag the
+    // turn clock checks, so a finished game can never keep ticking.
+    this.winnerId = null;
+    this.winnerReason = null;
+    this.isGameOver = false;
     this.createdAt = Date.now();
   }
 
@@ -145,7 +159,14 @@ class GameRoom {
   // identified player (so we don't start ticking before anyone is in a game).
   // Idempotent: re-arming while a turn is already on the clock is a no-op, so
   // it's safe to call from identify / rejoin without resetting a live turn.
+  //
+  // Gated on the game ACTUALLY having started: in the lobby/pre-game state there
+  // is nothing to time out, and after a game-over there is nobody left to time
+  // out either. Without these two guards a player merely identifying in the
+  // lobby would arm a clock that eliminates them before the game even began.
   ensureTurnClock(io) {
+    if (this.isGameOver) return;
+    if (this.isGameStarted !== true) return;
     if (this.currentTurnPlayerId === null) return;
     if (this.turnTimer) return;
     this.startTurnTimer((room) => handleTurnTimeout(room, io));
@@ -201,6 +222,10 @@ class GameRoom {
   // the room doesn't hold).
   startTurnTimer(onTimeout) {
     this.clearTurnTimer();
+    // Never arm for a finished game or one that hasn't begun: either way there is
+    // no live turn to expire, and arming would eliminate someone spuriously.
+    if (this.isGameOver) return;
+    if (this.isGameStarted !== true) return;
     if (this.currentTurnPlayerId === null) return; // no one to time out
     const myToken = this.turnToken;
     this.turnDeadline = Date.now() + TURN_TIME_LIMIT_MS;
@@ -218,6 +243,8 @@ class GameRoom {
   // the timeout handler, so both paths produce identical state + broadcast. The
   // caller decides whether the outgoing player also goes bankrupt (timeout does).
   beginTurn(io) {
+    // A finished game has no next turn to begin — bail before touching the clock.
+    if (this.isGameOver) return;
     const nextId = this.advanceTurn();
     this.startTurnTimer((room) => handleTurnTimeout(room, io));
     // A turn transition is a meaningful state change: persist here so BOTH a
@@ -234,14 +261,16 @@ class GameRoom {
 // Global rooms map: roomCode -> GameRoom
 const rooms = new Map();
 
-// How long an emptied room lingers before it's torn down. Long enough to cover
-// a page refresh or a brief network blip, short enough not to hoard memory.
-const EMPTY_ROOM_TTL_MS = Number(process.env.EMPTY_ROOM_TTL_MS) || 90 * 1000; // 90s default
+// NOTE: there is deliberately NO empty-room grace period any more. When the last
+// player leaves a room, its session is ended immediately and every token for it is
+// invalidated (see leaveRoom/teardownRoom), so the next visit always starts from
+// scratch: lobby -> name -> colour -> a brand-new room code. The only remaining
+// TTL is the longer one below, which applies solely to rooms restored from disk
+// at boot (those have no players connected yet by definition).
 // How long a room RESTORED FROM DISK (at boot) waits for someone to come back
-// before it too is reaped. Longer than the normal empty-room TTL because players
-// need time to notice the server restarted and reconnect — but it is ALWAYS
-// armed, so a restored room nobody ever rejoins can't leak its file or its
-// in-memory entry forever.
+// before it too is reaped. Longer than a live room because players need time to
+// notice the server restarted and reconnect — but it is ALWAYS armed, so a
+// restored room nobody ever rejoins can't leak its file or its in-memory entry.
 const RESTORED_ROOM_TTL_MS = Number(process.env.RESTORED_ROOM_TTL_MS) || 15 * 60 * 1000; // 15 min default
 // How long a player has to take their turn before the SERVER forces it forward.
 // Mirrors the client's TURN_TIME_LIMIT (120s). Env-overridable so tests can use
@@ -274,6 +303,16 @@ function handleTurnTimeout(room, io) {
 
   // Tell everyone about the elimination, then advance via the shared path.
   io.to(room.roomId).emit('player:bankrupt', { playerId: player.id, reason: 'timeout' });
+
+  // LAST PLAYER STANDING: if that elimination left exactly one player, the game
+  // is over — declare it now and do NOT advance the turn (there is nobody to
+  // take it, and a finished game must not keep its clock running).
+  const survivor = findSoleSurvivor(room);
+  if (survivor) {
+    declareWinner(room, io, survivor, 'last-player-standing');
+    return;
+  }
+
   room.beginTurn(io);
 }
 // Tear a room down completely: stop every timer it owns, invalidate its session
@@ -326,6 +365,13 @@ function rehydrateRoom(data) {
   room.activeAuction = data.activeAuction || null;
   room.currentTurnPlayerId = data.currentTurnPlayerId ?? null;
   room.turnSeeded = !!data.turnSeeded;
+  room.isGameStarted = !!data.isGameStarted;
+  room.maxPlayers = Number.isInteger(data.maxPlayers)
+    ? Math.min(MAX_PLAYERS_LIMIT, Math.max(MIN_PLAYERS, data.maxPlayers))
+    : MAX_PLAYERS_DEFAULT;
+  room.isGameOver = !!data.isGameOver;
+  room.winnerId = data.winnerId ?? null;
+  room.winnerReason = data.winnerReason ?? null;
   room.createdAt = data.createdAt || Date.now();
 
   // Repopulate the durable identity lookups so a pre-restart session token still
@@ -374,17 +420,93 @@ function restorePersistedRooms() {
 const sessions = new Map();
 const socketToken = new Map();
 
+// ================= PLAYER NAME / COLOR =================
+// The one fixed palette a player may pick from. This MUST stay in lockstep with
+// PLAYER_COLOR_PALETTE in frontend/app/page.tsx: the client renders these exact
+// swatches and the server is the authority on which are already taken. A colour
+// outside this list is refused, so a hostile client can't invent a hue that
+// collides visually with someone else's token.
+const PLAYER_COLOR_PALETTE = [
+  '#F4A6C0', // Baby Pink
+  '#E32636', // Crimson Red
+  '#00A86B', // Emerald Green
+  '#8E44AD', // Wildberry Purple
+  '#2196F3', // Deep Sky Blue
+  '#FFEB3B', // Yellow
+  '#FF9800', // Orange
+  '#00BCD4', // Cyan (turquoise-leaning)
+  '#CDDC39', // Lime (yellow-green)
+];
+
+const PLAYER_NAME_MAX = 20;
+
+// Player-count bounds for a room. MIN is what a game needs to be playable at
+// all; MAX is the absolute ceiling any room may configure.
+const MAX_PLAYERS_DEFAULT = 6;
+const MAX_PLAYERS_LIMIT = 6;
+const MIN_PLAYERS = 2;
+
+// A "seat" is a player the server has actually created a record for. The seeded
+// template players a client renders don't exist here, which is what makes this
+// the honest measure of how full a room really is.
+function seatedCount(room) {
+  return room.players.filter(p => p.sessionToken).length;
+}
+
+// Normalize an incoming name to its canonical stored form, or return null when
+// it isn't usable. Callers decide whether null is fatal (set-name rejects) or
+// merely means "fall back to the default" (create/join).
+function normalizePlayerName(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  // Cap length AFTER trimming so trailing spaces can't eat the budget.
+  return trimmed.slice(0, PLAYER_NAME_MAX);
+}
+
+// Case-insensitive because the client may echo back '#8B5CF6'; the stored form is
+// always the palette's lowercase canonical value.
+function normalizePlayerColor(raw) {
+  if (typeof raw !== 'string') return null;
+  const wanted = raw.trim().toLowerCase();
+  return PLAYER_COLOR_PALETTE.find(c => c.toLowerCase() === wanted) || null;
+}
+
+// Who, if anyone, in this room already holds `color`? A null/undefined colour is
+// "not chosen yet" and never counts as a conflict, so the seeded default players
+// don't block the first real pick. `exceptPlayerId` lets a player re-pick the
+// colour they already hold without tripping their own conflict check.
+function colorHolder(room, color, exceptPlayerId = null) {
+  if (!color) return null;
+  const wanted = color.toLowerCase();
+  return room.players.find(
+    p => p.id !== exceptPlayerId &&
+      typeof p.color === 'string' &&
+      p.color.toLowerCase() === wanted
+  ) || null;
+}
+
 // Issue a token AND seed the player record it identifies, so a later rejoin can
 // find the player by token. The record starts as a minimal stub; the client
 // fills in name/color/etc. as the game runs. Rejoin is about IDENTITY, not yet
 // about restoring the full game state.
 function createSessionToken(room, playerId, { name, color } = {}) {
+  // Colour arrives pre-validated (see the create/join handlers). We re-check
+  // here anyway so the invariant "a stored colour is always from the palette"
+  // holds no matter which call path seeded the record.
+  const safeColor = normalizePlayerColor(color);
   const token = crypto.randomUUID();
   const player = {
     id: playerId,
     sessionToken: token,
-    name: name || `Player ${playerId}`,
-    color: color || null,
+    name: normalizePlayerName(name) || `Player ${playerId}`,
+    color: safeColor,
+    // Set once the player has finished the lobby step (name + colour) and is
+    // actually in the room. From that moment their NAME is fixed for good — a
+    // stricter lock than the game-start one, because the name is the identity
+    // everyone reads in the log/roster and shouldn't mutate mid-lobby.
+    // Colour stays editable until the game starts.
+    hasEntered: false,
     money: 0,
     position: 0,
     isCurrentPlayer: playerId === 1,
@@ -415,6 +537,39 @@ function resolveSession(token, roomId) {
   const player = room.players.find(p => p.sessionToken === token) || null;
   if (!player) return null;
   return { room, player, playerId: session.playerId };
+}
+
+// ===== WIN CONDITION =====
+// Last player standing. Called after ANY elimination. If exactly one non-bankrupt
+// player remains, they have won and the game is over — we don't wait for any
+// further condition. Returns the winner (or null).
+//
+// There is deliberately ONE win path: this reads the same `isBankrupt` flags the
+// existing elimination logic already maintains, and reuses the room's existing
+// turn-clock teardown. No parallel win-detection system.
+function findSoleSurvivor(room) {
+  const alive = room.players.filter(p => !p.isBankrupt);
+  return alive.length === 1 ? alive[0] : null;
+}
+
+// Declare a winner: stamp the room, stop every clock, persist, and broadcast the
+// SAME `game:over` event the client's existing win overlay listens for.
+function declareWinner(room, io, winner, reason) {
+  if (room.winnerId !== null && room.winnerId !== undefined) return null; // already over
+  room.winnerId = winner.id;
+  room.winnerReason = reason;
+  room.isGameOver = true;
+  // Reuse the existing turn-clock teardown — never a second mechanism.
+  room.clearTurnTimer();
+  room.clearAuctionTimer();
+  persistRoom(room);
+  io.to(room.roomId).emit('game:over', {
+    winnerId: winner.id,
+    winnerName: winner.name,
+    reason,
+  });
+  console.log(`🏆 Room ${room.roomId}: GAME OVER — ${winner.name} (Player ${winner.id}) wins by ${reason}`);
+  return winner;
 }
 
 // Room codes are 6 chars from an unambiguous alphabet (no 0/O/1/I) so they're
@@ -451,18 +606,46 @@ function getOrCreateRoom(roomId, hostSocketId = null) {
   return rooms.get(roomId);
 }
 
+// Player records carry `sessionToken`, which is the durable credential that owns
+// the seat — anyone holding it can player:rejoin as that player. It must NEVER
+// reach another client, so every roster we put on the wire goes through here.
+// `hasSeat` replaces it with the only thing clients legitimately need to know:
+// whether this is a real, server-created seat (as opposed to a client-side
+// placeholder for a player who hasn't joined yet).
+function publicPlayer(player) {
+  const { sessionToken, ...rest } = player;
+  // `hasEntered` is exposed so the client can lock its own name input to match
+  // the server's NAME_LOCKED rule — never as a substitute for it.
+  return { ...rest, hasSeat: !!sessionToken };
+}
+
+function publicPlayers(room) {
+  return room.players.map(publicPlayer);
+}
+
 // Snapshot of everything a client needs to render the room on first join.
 function serializeRoomState(room) {
   return {
     roomId: room.roomId,
     hostId: room.hostId,
     connectedCount: room.sockets.size,
-    players: room.players,
+    players: publicPlayers(room),
     propertyOwnership: room.propertyOwnership,
     propertyHouses: room.propertyHouses,
     // The authoritative turn, so a client can render whose turn it is from the
     // server's truth rather than inferring it from a stale local flag.
     currentTurnPlayerId: room.currentTurnPlayerId,
+    // So a (re)joining client knows whether the roster is still editable — the
+    // picker renders read-only once the game has begun.
+    isGameStarted: room.isGameStarted === true,
+    // Game-over state, so a rejoining client repaints the win overlay instead of
+    // sitting on a frozen board with no explanation.
+    isGameOver: room.isGameOver === true,
+    winnerId: room.winnerId ?? null,
+    winnerReason: room.winnerReason ?? null,
+    // The room's player ceiling, so the client renders "N / max" and can tell
+    // when the room is full without guessing.
+    maxPlayers: room.maxPlayers ?? MAX_PLAYERS_DEFAULT,
     // When the current turn times out (epoch ms), so the UI countdown is driven
     // by the server's clock rather than a client-side guess.
     turnDeadline: room.turnDeadline,
@@ -500,8 +683,8 @@ function serializePlayerState(room, player) {
   ) ? room.activeAuction : null;
 
   return {
-    me: player,
-    players: room.players,
+    me: publicPlayer(player),
+    players: publicPlayers(room),
     ownedProperties,
     ownedPropertyIds: ownedProperties.map(p => p.tileId),
     propertyOwnership: room.propertyOwnership,
@@ -538,14 +721,24 @@ function leaveRoom(socket) {
   if (room.isEmpty()) {
     // Nobody is here to take a turn, so the turn clock must not keep ticking:
     // disarm it now rather than let it fire an elimination for an empty room.
-    // A rejoin re-arms it (ensureTurnClock), so a returning player is still
-    // timed as expected. Teardown also clears it, as a second line of defence.
     room.clearTurnTimer();
-    // Don't tear down immediately: the common case is ONE player who refreshed
-    // their own tab, and they can't rejoin a room that no longer exists. Arm a
-    // grace timer instead — a player:rejoin inside the window cancels it.
-    armEmptyRoomTimer(room, EMPTY_ROOM_TTL_MS);
-    console.log(`⏳ Room ${roomId} emptied — ${EMPTY_ROOM_TTL_MS / 1000}s grace period before teardown`);
+
+    // LAST PLAYER GONE -> END THE SESSION NOW.
+    // Every session in this room is finished, so we reap it immediately instead
+    // of waiting out a grace window. Two things must die together:
+    //   1. the room itself (in memory + on disk), and
+    //   2. every session token, so a stale localStorage token in any browser
+    //      cannot resolve back to a seat and drag someone into this dead room.
+    // teardownRoom() already does both (it deletes each token from `sessions`,
+    // drops the room, and removes the persisted file), so we reuse it rather than
+    // adding a second mechanism. The result: the next visit starts from the very
+    // beginning — lobby, name, colour picker, brand-new room code.
+    //
+    // NOTE: this is deliberately NOT the old grace-period behaviour. A refresh
+    // used to be able to rejoin inside 90s; now an empty room is gone at once, so
+    // a player who wants their seat back must not fully disconnect.
+    teardownRoom(room);
+    console.log(`🧹 Room ${roomId} was left by its last player — session ended`);
   }
 }
 
@@ -643,8 +836,10 @@ io.on('connection', (socket) => {
     socket.join(roomId);
 
     // Issue a durable session token for the host and remember who the host is
-    // by token (not socket id), so the role survives a reconnect.
-    const token = createSessionToken(room, 1);
+    // by token (not socket id), so the role survives a reconnect. The name the
+    // host typed on the lobby screen is bound here, in the SAME identity path —
+    // there is no separate name-registration step to keep in sync.
+    const token = createSessionToken(room, 1, { name: payload && payload.name });
     room.hostToken = token;
     socketToken.set(socket.id, token);
 
@@ -678,6 +873,22 @@ io.on('connection', (socket) => {
     // Already in this room (e.g. a reconnect): just re-sync, don't double-add.
     if (socket.data.roomId && socket.data.roomId !== requested) leaveRoom(socket);
 
+    // CAPACITY CHECK. A room is full when it already holds as many real seats as
+    // its configured ceiling. Checked here (server-side) because a client could
+    // otherwise keep joining past the cap. Note the ceiling is a MAXIMUM, not a
+    // required headcount: joining fewer than max is always fine.
+    const alreadyInThisRoom = socket.data.roomId === requested;
+    if (!alreadyInThisRoom && seatedCount(room) >= room.maxPlayers) {
+      const err = {
+        ok: false,
+        code: 'ROOM_FULL',
+        error: `Room ${requested} is full (${room.maxPlayers} player${room.maxPlayers === 1 ? '' : 's'} max).`
+      };
+      socket.emit('room:error', err);
+      if (typeof ack === 'function') ack(err);
+      return;
+    }
+
     // Someone's back before the grace period expired — keep the room alive.
     room.clearEmptyTimer();
 
@@ -686,8 +897,9 @@ io.on('connection', (socket) => {
     socket.join(requested);
 
     // Issue a fresh session token for this guest. playerId is provisional here
-    // (the client assigns real player slots) — the token is what matters.
-    const token = createSessionToken(room, room.tokens.size + 1);
+    // (the client assigns real player slots) — the token is what matters. The
+    // typed name rides along on the same call so the record is born with it.
+    const token = createSessionToken(room, room.tokens.size + 1, { name: payload && payload.name });
     socketToken.set(socket.id, token);
 
     // A new player seat + token is durable identity — write it through.
@@ -750,8 +962,57 @@ io.on('connection', (socket) => {
   // ---------- LOBBY: LEAVE ----------
   socket.on('room:leave', () => {
     const roomId = socket.data.roomId;
+    const room = roomId ? rooms.get(roomId) : null;
+    const leaverId = actingPlayerId();
+    // Capture BEFORE leaveRoom() drops the socket, so we still know who left.
+    const wasInGame = !!(room && room.isGameStarted && !room.isGameOver);
+
     leaveRoom(socket);
     socket.emit('room:left', { roomId });
+
+    // A player leaving a LIVE game is an elimination: they're gone for good
+    // (leaving drops their session token, so they cannot rejoin this seat).
+    // Mark them bankrupt so the survivor logic below and the board agree.
+    // Done AFTER leaveRoom so the departing socket isn't counted.
+    if (wasInGame && room && leaverId !== null) {
+      const leaver = room.players.find(p => p.id === leaverId);
+      if (leaver && !leaver.isBankrupt) {
+        leaver.isBankrupt = true;
+        leaver.money = 0;
+        for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
+          if (ownerId === leaver.id) {
+            delete room.propertyOwnership[tileId];
+            delete room.propertyHouses[tileId];
+          }
+        }
+        io.to(room.roomId).emit('player:bankrupt', { playerId: leaver.id, reason: 'left' });
+        persistRoom(room);
+
+        // Nobody left to play: the game is over with no winner. Tearing the
+        // clocks down here reuses the same teardown path as a real win.
+        const stillSeated = room.players.filter(
+          p => !p.isBankrupt && room.tokens.has(p.sessionToken || '')
+        );
+        if (stillSeated.length === 0) {
+          room.isGameOver = true;
+          room.winnerId = null;
+          room.winnerReason = 'abandoned';
+          room.clearTurnTimer();
+          room.clearAuctionTimer();
+          persistRoom(room);
+          io.to(room.roomId).emit('game:over', {
+            winnerId: null,
+            winnerName: null,
+            reason: 'abandoned'
+          });
+          console.log(`🏳️ Room ${room.roomId}: every player left — game over (abandoned)`);
+        } else {
+          // Otherwise the normal last-player-standing rule may now be satisfied.
+          const survivor = findSoleSurvivor(room);
+          if (survivor) declareWinner(room, io, survivor, 'last-player-standing');
+        }
+      }
+    }
   });
 
   // Client requests manual state synchronization for ITS room only.
@@ -771,7 +1032,7 @@ io.on('connection', (socket) => {
   // asks for must be free (not already bound to a different token). The server
   // then records socket.data.playerId, which every turn-gated validation trusts.
   //
-  // Payload: { roomId, playerId?, token? }
+  // Payload: { roomId, playerId?, token?, name? }
   //   - token    : the durable session token issued on create/join/rejoin. If
   //                omitted we fall back to the token already bound to this socket
   //                (so a rebound rejoin socket needn't resend it).
@@ -779,6 +1040,9 @@ io.on('connection', (socket) => {
   //                the server uses the seat already bound to the token. Either
   //                way the token is the anchor: a client cannot identify as a seat
   //                that a different token already holds.
+  //   - name     : OPTIONAL initial display name. Applied on the SAME identity
+  //                binding below so "who am I" and "what am I called" are set in
+  //                one server round-trip rather than two racing paths.
   socket.on('player:identify', (payload, ack) => {
     const requested = normalizeRoomCode(payload && payload.roomId);
     const token = (payload && payload.token) || socket.data.sessionToken || socketToken.get(socket.id);
@@ -836,6 +1100,14 @@ io.on('connection', (socket) => {
     socket.data.roomId = room.roomId;
     socketToken.set(socket.id, token);
 
+    // Apply an initial name if one was supplied. Only overwrite when the incoming
+    // name is actually usable, so a re-identify with no name can't wipe a name
+    // the player already chose. Colours are deliberately NOT set here — they go
+    // through player:set-color, which is the only place that can enforce
+    // "nobody else holds this colour" atomically.
+    const identifiedName = normalizePlayerName(payload && payload.name);
+    if (identifiedName) player.name = identifiedName;
+
     // An identified player is a real game participant — make sure the turn
     // clock is ticking. Idempotent, so a second identify won't reset a live turn.
     room.ensureTurnClock(io);
@@ -849,6 +1121,8 @@ io.on('connection', (socket) => {
         ok: true,
         roomId: room.roomId,
         playerId: claimedId,
+        name: player.name,
+        color: player.color,
         currentTurnPlayerId: room.currentTurnPlayerId,
         turnDeadline: room.turnDeadline
       });
@@ -956,6 +1230,137 @@ io.on('connection', (socket) => {
     }
     handler(room, room.roomId, data, ack);
   };
+
+  // ---------- LOBBY: PICK A NAME / COLOUR ----------
+  // These two live OUTSIDE withRoom() on purpose. withRoom() bails with a bare
+  // {ok:false,error} when the socket isn't in a room yet, but the name/colour
+  // step is the first thing a player does after joining — and it should give the
+  // same explicit `code` shape as every other rejection. So we resolve the room
+  // ourselves and use reject() throughout for one consistent ack contract.
+  const lobbyPlayer = () => {
+    const room = currentRoom();
+    if (!room) return { error: reject(null, 'NOT_IN_ROOM', 'You are not in a room.') };
+    const pid = actingPlayerId();
+    if (pid === null) return { error: reject(null, 'NOT_IDENTIFIED', 'Identify yourself with player:identify first.') };
+    const player = findPlayer(room, pid);
+    if (!player) return { error: reject(null, 'UNKNOWN_PLAYER', `No player ${pid} in this room.`) };
+    return { room, player };
+  };
+
+  // Once the game is running the roster is frozen: names and colours are locked
+  // everywhere (lobby picker AND the in-game settings panel), because they're now
+  // baked into tokens, ownership tints and the turn log. Same lock as the other
+  // pre-start settings.
+  const lobbyEditLocked = (room) => room.isGameStarted === true;
+
+  socket.on('player:set-name', (data, ack) => {
+    const { room, player, error } = lobbyPlayer();
+    if (error) { if (typeof ack === 'function') ack(error); return; }
+
+    if (lobbyEditLocked(room)) {
+      return reject(ack, 'GAME_STARTED', 'Names are locked once the game has started.');
+    }
+
+    // STRICTER than the game-start lock: once this player has entered the room
+    // (completed the lobby name+colour step), their name is permanent. The name
+    // is the identity every other player reads in the roster and the action log,
+    // so it must not drift once they've joined the table. Enforced here rather
+    // than only hiding the input, so a client can't bypass it over the socket.
+    if (player.hasEntered) {
+      return reject(ack, 'NAME_LOCKED', 'Your name is locked once you enter the room.');
+    }
+
+    const name = normalizePlayerName(data && data.name);
+    if (!name) {
+      return reject(ack, 'BAD_NAME', 'Name must be a non-empty string.');
+    }
+
+    player.name = name;
+    persistRoom(room);
+    // Broadcast the FULL roster, not just this player: every client's settings
+    // panel renders all names, so one payload keeps every panel in step.
+    io.to(room.roomId).emit('room:players', serializeRoomState(room));
+    console.log(`📝 Room ${room.roomId}: Player ${player.id} named "${name}"`);
+    if (typeof ack === 'function') ack({ ok: true, name });
+  });
+
+  // The room's player ceiling. Only the host may set it, and only before the
+  // game starts — changing capacity mid-game would let a late joiner into a
+  // running match. Lowering the cap below the current headcount is allowed
+  // (it just blocks any FURTHER joins); it never kicks anyone already inside.
+  socket.on('player:set-max-players', (data, ack) => {
+    const { room, player, error } = lobbyPlayer();
+    if (error) { if (typeof ack === 'function') ack(error); return; }
+
+    if (lobbyEditLocked(room)) {
+      return reject(ack, 'GAME_STARTED', 'Max players is locked once the game has started.');
+    }
+    const hostToken = room.hostToken;
+    const token = socketToken.get(socket.id) || socket.data.sessionToken;
+    if (!hostToken || token !== hostToken) {
+      return reject(ack, 'NOT_HOST', 'Only the host can change max players.');
+    }
+
+    const wanted = Number(data && data.maxPlayers);
+    if (!Number.isInteger(wanted) || wanted < MIN_PLAYERS || wanted > MAX_PLAYERS_LIMIT) {
+      return reject(ack, 'BAD_MAX_PLAYERS', `Max players must be ${MIN_PLAYERS}-${MAX_PLAYERS_LIMIT}.`);
+    }
+
+    room.maxPlayers = wanted;
+    persistRoom(room);
+    io.to(room.roomId).emit('room:players', serializeRoomState(room));
+    console.log(`👥 Room ${room.roomId}: max players set to ${wanted} (${seatedCount(room)} seated)`);
+    if (typeof ack === 'function') ack({ ok: true, maxPlayers: wanted });
+  });
+
+  socket.on('player:set-color', (data, ack) => {
+    const { room, player, error } = lobbyPlayer();
+    if (error) { if (typeof ack === 'function') ack(error); return; }
+
+    if (lobbyEditLocked(room)) {
+      return reject(ack, 'GAME_STARTED', 'Colours are locked once the game has started.');
+    }
+
+    // ===== PERMANENT LOCK =====
+    // A colour, once chosen, is fixed for the rest of this player's session in
+    // the room. There is deliberately NO re-pick path: the only way to get a
+    // different colour is to leave the room entirely (which drops the session
+    // token) and rejoin, landing back on the picker as a fresh player. Enforced
+    // here, not by hiding the UI — a client can still call this event directly.
+    if (player.color !== null && player.color !== undefined) {
+      console.log(`🔒 Room ${room.roomId}: Player ${player.id} already holds ${player.color} — re-pick refused`);
+      return reject(ack, 'COLOR_ALREADY_SET', 'Your colour is already set and cannot be changed.');
+    }
+
+    // Must be one of the fixed palette entries — no custom hex.
+    const color = normalizePlayerColor(data && data.color);
+    if (!color) {
+      return reject(ack, 'BAD_COLOR', 'That colour is not part of the available palette.');
+    }
+
+    // The exclusivity rule. The check and the write below run synchronously with
+    // no await between them, so two handlers racing for the same free colour
+    // cannot interleave — exactly one wins and the other gets COLOR_TAKEN. This
+    // scans ALL current players, so a colour held by anyone still in the room
+    // (including someone temporarily disconnected inside the grace window, since
+    // their record is still in room.players) is never handed to a second player.
+    if (colorHolder(room, color, player.id)) {
+      console.log(`🎨 Room ${room.roomId}: colour ${color} refused for Player ${player.id} (taken)`);
+      return reject(ack, 'COLOR_TAKEN', `${color} is already taken by another player.`);
+    }
+
+    player.color = color;
+    // Picking a colour is what completes the lobby entry step, so from here the
+    // player's NAME is also locked (see player:set-name). Unlike before, the
+    // COLOUR is now locked too — see the COLOR_ALREADY_SET check above.
+    player.hasEntered = true;
+    persistRoom(room);
+    // Everyone gets the update so their pickers grey this swatch out live —
+    // including the player who just took it, which is how their own UI settles.
+    io.to(room.roomId).emit('room:players', serializeRoomState(room));
+    console.log(`🎨 Room ${room.roomId}: Player ${player.id} took colour ${color}`);
+    if (typeof ack === 'function') ack({ ok: true, color });
+  });
 
   // Player Movement & Roll Events
   // player:moved is the canonical position/money update. Rules enforced:
@@ -1109,6 +1514,27 @@ io.on('connection', (socket) => {
     // subsequent player:moved can be range-checked against it if needed.
     room.lastRoll = { playerId: actingPlayerId(), total, at: Date.now() };
 
+    // The first roll is the moment the game actually begins (the client flips
+    // its own isGameStarted on the same press). Stamping it server-side is what
+    // makes the name/colour lock authoritative: player:set-name / player:set-color
+    // check this flag, so a client can't keep editing the roster mid-game just by
+    // leaving its own local flag false.
+    if (!room.isGameStarted) {
+      // A game needs at least MIN_PLAYERS real seats. The client gates its own
+      // Start/roll on this, but the first roll is what actually opens the game,
+      // so enforce it here too — otherwise a lone client could start solo just
+      // by rolling (or by leaving its local flag false).
+      if (seatedCount(room) < MIN_PLAYERS) {
+        return reject(ack, 'NOT_ENOUGH_PLAYERS', `A game needs at least ${MIN_PLAYERS} players (only ${seatedCount(room)} seated).`);
+      }
+      room.isGameStarted = true;
+      persistRoom(room);
+      console.log(`🎮 Room ${roomId}: game started — name/colour editing locked`);
+      // The turn clock is gated on isGameStarted, so THIS is where it starts
+      // running for real. The roll that opened the game is the first turn.
+      room.ensureTurnClock(io);
+    }
+
     socket.to(roomId).emit('player:rolled', { ...data, total });
     if (typeof ack === 'function') ack({ ok: true, total });
   }));
@@ -1229,6 +1655,7 @@ io.on('connection', (socket) => {
     }
 
     p.isBankrupt = true;
+    p.money = 0;
     // Clear owned properties
     for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
       if (ownerId === data.playerId) {
@@ -1239,6 +1666,12 @@ io.on('connection', (socket) => {
     // An elimination changes the roster + board permanently — persist it.
     persistRoom(room);
     socket.to(roomId).emit('player:bankrupt', data);
+
+    // LAST PLAYER STANDING: reuses the SAME win path as the timeout elimination,
+    // so a game can end by either route through one implementation.
+    const survivor = findSoleSurvivor(room);
+    if (survivor) declareWinner(room, io, survivor, 'last-player-standing');
+
     if (typeof ack === 'function') ack({ ok: true });
   }));
 

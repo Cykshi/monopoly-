@@ -60,6 +60,9 @@ export interface PlayerRestoreState {
   // the correct current player and countdown from server truth.
   currentTurnPlayerId?: number | null;
   turnDeadline?: number | null;
+  // Whether the server considers the game started. Durable server fact, used to
+  // lock name/colour editing; absent on older payloads, hence optional.
+  isGameStarted?: boolean;
 }
 
 // The subset of client state a rejoin should overwrite, plus the log line and
@@ -84,7 +87,7 @@ export interface ComputedRestoredState<
   // leave the caller's current values untouched).
   currentTurnPlayerId: number | null;
   turnDeadline: number | null;
-  isGameStarted: true;
+  isGameStarted: boolean;
   logMessage: string;
 }
 
@@ -114,7 +117,9 @@ export function computeRestoredState<
     myPlayerId: typeof p.me?.id === "number" ? p.me.id : null,
     currentTurnPlayerId: typeof p.currentTurnPlayerId === "number" ? p.currentTurnPlayerId : null,
     turnDeadline: typeof p.turnDeadline === "number" ? p.turnDeadline : null,
-    isGameStarted: true,
+    // A restored payload IS by definition a started game (that's why there was
+    // state to restore), so default to true when the server didn't say.
+    isGameStarted: p.isGameStarted ?? true,
     logMessage: `♻️ Reconnected — restored ${ownedCount} propert${ownedCount === 1 ? "y" : "ies"}, $${money.toLocaleString()} on hand.`
   };
 }

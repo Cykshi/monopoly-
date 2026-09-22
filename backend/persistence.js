@@ -44,6 +44,15 @@ function serializeRoom(room) {
     propertyHouses: room.propertyHouses,
     currentTurnPlayerId: room.currentTurnPlayerId,
     turnSeeded: room.turnSeeded,
+    // Whether the game has begun. Durable because it gates name/colour editing:
+    // losing it on restart would let a mid-game client rename itself.
+    isGameStarted: room.isGameStarted === true,
+    // The player ceiling. Durable so a restart keeps a room's capacity cap.
+    maxPlayers: room.maxPlayers ?? MAX_PLAYERS_DEFAULT,
+    // Game-over outcome, so a restart can't resurrect a finished game as live.
+    isGameOver: room.isGameOver === true,
+    winnerId: room.winnerId ?? null,
+    winnerReason: room.winnerReason ?? null,
     trades: room.trades,
     activeAuction: room.activeAuction,
     createdAt: room.createdAt,
