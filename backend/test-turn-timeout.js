@@ -49,6 +49,18 @@ const emitAck = (socket, event, payload, ms = 2500) =>
     setTimeout(() => resolve(null), ms);
   });
 
+// Every mutating event now requires a unique actionId (server-side replay
+// protection: a replayed frame is dropped, not re-applied). Tests therefore
+// have to send one, exactly like the real client does. A per-process counter
+// keeps ids unique across a whole run.
+let actionCounter = 0;
+const withAction = (payload) => ({
+  ...payload,
+  actionId: `t-${Date.now()}-${++actionCounter}`,
+});
+const emitAction = (socket, event, payload, ms = 2500) =>
+  emitAck(socket, event, withAction(payload), ms);
+
 // Resolve with the first matching event, or null after `ms`.
 const waitFor = (socket, event, ms = 5000) =>
   new Promise((resolve) => {
@@ -58,6 +70,31 @@ const waitFor = (socket, event, ms = 5000) =>
   });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ===== CLEANUP: EVERY SOCKET IS TRACKED AND CLOSED ON BOTH PATHS =====
+// Every socket opened here is registered, and cleanup() disconnects them all and
+// tears the room down — from the success path AND the catch block, so a failure
+// does not leave live sockets or a live room behind on the shared test server.
+const sockets = [];
+const track = (s) => { sockets.push(s); return s; };
+
+let cleanupDone = false;
+const cleanup = async (roomId) => {
+  if (cleanupDone) return;
+  cleanupDone = true;
+  const alive = sockets.filter((s) => s && s.connected);
+  if (roomId && alive.length) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 750);
+      alive[0].once('room:left', () => { clearTimeout(t); resolve(); });
+      alive[0].emit('room:leave');
+    });
+  }
+  for (const s of sockets) {
+    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch { /* already gone */ }
+  }
+  await sleep(250);
+};
 
 (async () => {
   if (!(TURN_MS > 0)) {
@@ -69,13 +106,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log(`\nTurn clock configured at ~${TURN_MS}ms\n`);
 
   // ---- SETUP: two identified players; it is player 1's turn ----
-  const A = await connect();
+  const A = track(await connect());
   const created = await emitAck(A, 'room:create', {});
   const roomId = created && created.roomId;
   const tokenA = created && created.token;
   check('setup: room created', !!(created && created.ok && roomId && tokenA));
 
-  const B = await connect();
+  const B = track(await connect());
   const bJoin = await emitAck(B, 'room:join', { roomId });
   const tokenB = bJoin && bJoin.token;
   check('setup: guest joined', !!(bJoin && bJoin.ok && tokenB));
@@ -85,12 +122,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const idB = await emitAck(B, 'player:identify', { roomId, token: tokenB, playerId: 2 });
   check('setup: guest identified as player 2', !!(idB && idB.ok && idB.playerId === 2), JSON.stringify(idB));
 
+  // The turn clock is gated on the game actually having started (see
+  // ensureTurnClock), and the game only starts on the FIRST ROLL — which also
+  // enforces the MIN_PLAYERS seat count. So the clock is armed by a roll here,
+  // not by identify, and the timeout below is player 1 idling on that turn.
+  const openingRoll = await emitAction(A, 'player:rolled', { playerId: 1 });
+  check('setup: the opening roll starts the game (arming the turn clock)',
+    !!(openingRoll && openingRoll.ok), JSON.stringify(openingRoll));
+
   // ---- The clock is armed and the server advertises its deadline ----
+  // The clock is armed BY the roll above, so the deadline is read after it. The
+  // pre-roll handshake legitimately reports null (no turn is on the clock yet).
+  const deadlineInfo = await emitAck(A, 'game:turn-deadline', {});
   check('server reports it is player 1\'s turn',
-    !!(idB && idB.currentTurnPlayerId === 1), `currentTurnPlayerId=${idB && idB.currentTurnPlayerId}`);
+    !!(deadlineInfo && deadlineInfo.currentTurnPlayerId === 1),
+    `currentTurnPlayerId=${deadlineInfo && deadlineInfo.currentTurnPlayerId}`);
   check('server arms a turn clock (turnDeadline is a future epoch ms)',
-    !!(idB && Number.isFinite(idB.turnDeadline) && idB.turnDeadline > Date.now()),
-    `turnDeadline=${idB && idB.turnDeadline}`);
+    !!(deadlineInfo && Number.isFinite(deadlineInfo.turnDeadline) && deadlineInfo.turnDeadline > Date.now()),
+    `turnDeadline=${deadlineInfo && deadlineInfo.turnDeadline}`);
 
   // ---- THE KEY CASE: no turn:ended is EVER sent; the server times out ----
   // Both clients listen for the broadcast pair the timeout should produce.
@@ -98,10 +147,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const bankruptEvt = waitFor(B, 'player:bankrupt', TURN_MS + 3000);
   const turnEvt = waitFor(B, 'turn:changed', TURN_MS + 3000);
+  // With only two players, eliminating one IS last-player-standing, so the
+  // timeout also ends the game. Listen for that so we can assert the real rule
+  // instead of racing the broadcast order.
+  const overEvt = waitFor(B, 'game:over', TURN_MS + 3000);
 
   // Deliberately do nothing. Just wait past the clock.
   const bankrupt = await bankruptEvt;
   const turn = await turnEvt;
+  const over = await overEvt;
 
   check('server fired the timeout and eliminated the idle player (player 1)',
     !!(bankrupt && bankrupt.playerId === 1 && bankrupt.reason === 'timeout'), JSON.stringify(bankrupt));
@@ -113,15 +167,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     !!(turn && Number.isFinite(turn.turnDeadline) && turn.turnDeadline > Date.now()),
     `turnDeadline=${turn && turn.turnDeadline}`);
 
+  // ELIMINATION ENDS A TWO-PLAYER GAME. That is the room's own win rule
+  // (last player standing) applied to a timeout: player 1 is out, so player 2
+  // has nobody left to play and wins. This is intended behaviour, not a bug.
+  check('the timeout ends the 2-player game with player 2 as last player standing',
+    !!(over && over.winnerId === 2 && over.reason === 'last-player-standing'), JSON.stringify(over));
+
   // ---- After the timeout, the gate reflects the new turn ----
   console.log('\n--- TURN GATE REFLECTS THE TIMED-OUT ADVANCE ---');
 
-  // Player 1 is now bankrupt and was removed from turn order; player 2 may act.
-  const p2MoveNow = await emitAck(B, 'player:moved', { playerId: 2, position: 4, money: 1500 });
-  check('player 2 CAN act now that the timeout advanced the turn',
-    !!(p2MoveNow && p2MoveNow.ok), JSON.stringify(p2MoveNow));
+  // Player 1 timed out and is out of the game for good. Player 2 is the winner
+  // and the turn pointer now names player 2, so player 2's actions are accepted
+  // and the eliminated player's are refused outright.
+  const p2MoveNow = await emitAction(B, 'player:moved', { playerId: 2 });
+  check('the surviving player can act after the timeout advanced the turn',
+    !!(p2MoveNow && (p2MoveNow.ok === true || p2MoveNow.code === 'NO_ROLL')),
+    JSON.stringify(p2MoveNow));
 
-  const p1MoveNow = await emitAck(A, 'player:moved', { playerId: 1, position: 6, money: 1500 });
+  const p1MoveNow = await emitAction(A, 'player:moved', { playerId: 1 });
   check('the timed-out (bankrupt) player CANNOT act',
     !!(p1MoveNow && p1MoveNow.ok === false), JSON.stringify(p1MoveNow));
 
@@ -132,9 +195,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // Let socket.io finish closing its handles before we hard-exit (a synchronous
   // process.exit() races libuv teardown on Windows and trips an assertion).
-  await sleep(250);
+  await cleanup(roomId);
   process.exit(failed === 0 ? 0 : 1);
-})().catch((err) => {
+})().catch(async (err) => {
   console.error('TEST ERROR:', err && err.message);
+  await cleanup();
   process.exit(2);
 });

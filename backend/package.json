@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node run-tests.js",
+    "test:offline": "node run-tests.js --offline"
   },
   "keywords": [],
   "author": "",

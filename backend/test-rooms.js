@@ -40,11 +40,37 @@ const waitFor = (socket, event, ms = 2500) =>
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ===== CLEANUP: EVERY SOCKET IS TRACKED AND CLOSED ON BOTH PATHS =====
+// Four sockets are opened here. If the suite throws before the disconnect block
+// at the end, they stay connected to the shared test server and leak into the
+// next suite. Registering them up front lets cleanup() close them from the catch
+// block too, so success and failure tear down identically.
+const sockets = [];
+const track = (s) => { sockets.push(s); return s; };
+
+let cleanupDone = false;
+const cleanup = async (roomId) => {
+  if (cleanupDone) return;
+  cleanupDone = true;
+  const alive = sockets.filter((s) => s && s.connected);
+  if (roomId && alive.length) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 750);
+      alive[0].once('room:left', () => { clearTimeout(t); resolve(); });
+      alive[0].emit('room:leave');
+    });
+  }
+  for (const s of sockets) {
+    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch { /* already gone */ }
+  }
+  await sleep(250);
+};
+
 (async () => {
-  const A = await connect();
-  const B = await connect();
-  const C = await connect();
-  const D = await connect();
+  const A = track(await connect());
+  const B = track(await connect());
+  const C = track(await connect());
+  const D = track(await connect());
   console.log(`\nConnected 4 clients to ${URL}\n`);
 
   // ---- A creates a room ----
@@ -85,13 +111,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // ---- D stays in the lobby; C is still roomless ----
   await sleep(150);
 
-  // ---- Isolation: A emits a move; only B should hear it ----
+  // ---- Isolation: A rolls and moves; only B should hear either event ----
+  // The roll must happen first now: a move with no authoritative roll is refused
+  // and never broadcast, so without this the isolation check would pass
+  // vacuously (nothing to isolate).
   const got = { B: false, C: false, D: false };
   B.on('player:moved', () => { got.B = true; });
   C.on('player:moved', () => { got.C = true; });
   D.on('player:moved', () => { got.D = true; });
 
-  A.emit('player:moved', { playerId: 1, position: 7, money: 1500 });
+  await new Promise((resolve) => {
+    A.emit('player:rolled', { playerId: 1 }, resolve);
+    setTimeout(() => resolve(null), 2500);
+  });
+  A.emit('player:moved', { playerId: 1, actionId: 'rooms-move-1' });
   await sleep(600);
 
   check('B (same room) RECEIVED the move', got.B === true, `got.B=${got.B}`);
@@ -102,7 +135,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const gotRoomless = { A: false, B: false };
   A.on('player:moved', () => { gotRoomless.A = true; });
   B.on('player:moved', () => { gotRoomless.B = true; });
-  D.emit('player:moved', { playerId: 1, position: 99, money: 1 });
+  D.emit('player:moved', { playerId: 1, actionId: 'rooms-move-roomless' });
   await sleep(600);
   check('roomless D\'s event reaches nobody', gotRoomless.A === false && gotRoomless.B === false,
     `A=${gotRoomless.A} B=${gotRoomless.B}`);
@@ -119,8 +152,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   [A, B, C, D].forEach((s) => s.disconnect());
 
   console.log(`\n${results.length - failed}/${results.length} checks passed`);
+  await cleanup(codeA);
   process.exit(failed === 0 ? 0 : 1);
-})().catch((err) => {
+})().catch(async (err) => {
   console.error('TEST ERROR:', err && err.message);
+  await cleanup();
   process.exit(2);
 });

@@ -4,13 +4,22 @@ import { Canvas } from "@react-three/fiber";
 import { Physics, useBox, usePlane } from "@react-three/cannon";
 import { RoundedBox } from "@react-three/drei";
 import { useEffect, useRef } from "react";
+import type { Mesh, Object3D } from "three";
+
+// @react-three/cannon hands back a ref typed against its OWN internal body
+// object, which is not the same type as the three.js object the element renders
+// (a <mesh> takes a Mesh ref, a <group> takes an Object3D ref). The runtime
+// values are compatible — cannon attaches the three object to the body — so the
+// ref is asserted to the element's real type rather than to `any`, which keeps
+// the rest of the component type-checked.
+type CannonRef<T extends Object3D> = React.RefObject<T>;
 
 function Floor() {
   const [ref] = usePlane(() => ({
     rotation: [-Math.PI / 2, 0, 0],
     position: [0, -0.5, 0],
   }));
-  return <mesh ref={ref as any} />;
+  return <mesh ref={ref as unknown as CannonRef<Mesh>} />;
 }
 
 function Wall({
@@ -28,7 +37,7 @@ function Wall({
     rotation,
     args: size,
   }));
-  return <mesh ref={ref as any} />;
+  return <mesh ref={ref as unknown as CannonRef<Mesh>} />;
 }
 
 function createPips(number: number) {
@@ -183,10 +192,16 @@ function Die({
         settleRafRef.current = null;
       }
     };
+    // Deliberately keyed ONLY on the roll trigger and the value being rolled to.
+    // The `api` physics handles and `startPos` are recreated by cannon on
+    // re-render but are NOT signals to throw the dice again: including them would
+    // re-launch the die on every parent render, restarting the animation and
+    // resetting the roll that is already in flight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rollTrigger, finalValue]);
 
   return (
-    <group ref={ref as any}>
+    <group ref={ref as unknown as CannonRef<Object3D>}>
       <RoundedBox args={[1.15, 1.15, 1.15]} radius={0.14} smoothness={6} castShadow>
         <meshStandardMaterial color="#f8fafc" metalness={0.08} roughness={0.32} />
       </RoundedBox>

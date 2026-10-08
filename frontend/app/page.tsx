@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import Flag from "react-world-flags";
 import DiceScene from "@/app/dice";
@@ -46,6 +46,8 @@ interface PlayerMovedEvent {
   playerId: number;
   position: number;
   money: number;
+  inJail?: boolean;
+  jailTurns?: number;
 }
 
 interface RentPaidEvent {
@@ -63,6 +65,38 @@ interface PlayersSwappedEvent {
   targetPosition: number;
 }
 
+interface CardDrawnEvent {
+  ok: boolean;
+  playerId: number;
+  kind: "treasure" | "surprise";
+  roll: number;
+  card: {
+    id: string;
+    title: string;
+    description: string;
+    money: number;
+    grantSkillCard: boolean;
+    movementType: string;
+  };
+  fromPosition: number;
+  position: number;
+  money: number;
+  cardMoneyDelta: number;
+  passedGo: boolean;
+  salary: number;
+  grantSkillCard: boolean;
+  swap?: {
+    targetId: number;
+    targetName?: string;
+    targetPosition: number;
+    targetOldPosition: number;
+  } | null;
+  inJail?: boolean;
+  jailTurns?: number;
+  code?: string;
+  error?: string;
+}
+
 interface PropertyBoughtEvent {
   tileId: number;
   playerId: number;
@@ -77,6 +111,23 @@ interface HouseUpgradedEvent {
   // Who built, and what it cost, so remote clients can mirror the deduction.
   playerId?: number;
   cost?: number;
+}
+
+interface PropertySaleEvent {
+  tileId: number;
+  playerId: number;
+  houses: number;
+  money: number;
+  refund: number;
+  ownerId?: null;
+}
+
+interface JailBailPaidEvent {
+  playerId: number;
+  bail: number;
+  money: number;
+  inJail: boolean;
+  jailTurns: number;
 }
 
 interface TradeProposal {
@@ -114,16 +165,18 @@ interface AuctionState {
 // client state both live in @/lib/restore-state so they can be unit-tested
 // without React — see computeRestoredState there.
 
-const COUNTRY_FLAG_EMOJIS: Record<string, string> = {
-  BD: "🇧🇩",
-  FR: "🇫🇷",
-  IN: "🇮🇳",
-  CN: "🇨🇳",
-  US: "🇺🇸",
-  GB: "🇬🇧",
-  PK: "🇵🇰",
-  JP: "🇯🇵",
-};
+// Country flags are rendered by react-world-flags from the tile's countryCode;
+// there is deliberately no emoji table here. (One used to exist as
+// COUNTRY_FLAG_EMOJIS but nothing ever read it — the flag component handles
+// every country code, including ones no emoji would have covered.)
+
+// Dice/card randomness. These read Math.random(), which is impure, so they live
+// at module scope rather than inside the component: a function DEFINED during
+// render that calls an impure API makes the component impure to the lint rules,
+// even when the function is only ever invoked from an event handler. Callers
+// here are all handlers (a roll, a card draw), never render.
+const rollD6 = () => Math.floor(Math.random() * 6) + 1;
+const pickRandom = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
 
 const renderTileIconOrFlag = (tile: Tile, sizeClass = "w-[2.2vmin] h-[1.5vmin]") => {
   if (tile.countryCode) {
@@ -179,15 +232,24 @@ const BOARD_TILES: Tile[] = [
   { id: 39, name: "Beijing", type: "china", countryCode: "CN", price: "$500", rent: 200, rents: [200, 600, 1400, 3000, 3500, 4000], houseCost: 300, hotelCost: 300 },
 ];
 
-const STARTING_MONEY = 1500;
+// Placeholder roster shown before the server's roster arrives. These are
+// client-side TEMPLATES for the six seats, not authoritative players: the money
+// here is only what the board renders during the brief pre-connect moment.
+//
+// It is deliberately seeded with the SAME value the server uses so the first
+// paint doesn't show $0 and then jump, but the server's figure overwrites it as
+// soon as the roster is broadcast (room:joined / room:players / game:sync), and
+// the client never REPORTS this number back. Money is server-owned; this is a
+// display default only.
+const DISPLAY_STARTING_MONEY = 1500;
 
 const DEFAULT_PLAYERS: Player[] = [
-  { id: 1, name: "", color: "#8b5cf6", money: STARTING_MONEY, position: 0, isCurrentPlayer: true, mood: "happy" },
-  { id: 2, name: "", color: "#22c55e", money: STARTING_MONEY, position: 0, mood: "happy" },
-  { id: 3, name: "", color: "#ef4444", money: STARTING_MONEY, position: 0, mood: "happy" },
-  { id: 4, name: "", color: "#f59e0b", money: STARTING_MONEY, position: 0, mood: "happy" },
-  { id: 5, name: "", color: "#06b6d4", money: STARTING_MONEY, position: 0, mood: "happy" },
-  { id: 6, name: "", color: "#ec4899", money: STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 1, name: "", color: "#8b5cf6", money: DISPLAY_STARTING_MONEY, position: 0, isCurrentPlayer: true, mood: "happy" },
+  { id: 2, name: "", color: "#22c55e", money: DISPLAY_STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 3, name: "", color: "#ef4444", money: DISPLAY_STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 4, name: "", color: "#f59e0b", money: DISPLAY_STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 5, name: "", color: "#06b6d4", money: DISPLAY_STARTING_MONEY, position: 0, mood: "happy" },
+  { id: 6, name: "", color: "#ec4899", money: DISPLAY_STARTING_MONEY, position: 0, mood: "happy" },
 ];
 
 // The fixed colour palette a player may pick from, in picker order. This MUST
@@ -243,7 +305,11 @@ const UTILITY_RENT_TABLE: Record<string, number[]> = {
 const BOARD_SIZE = BOARD_TILES.length;
 const PASS_START_BONUS = 200;
 const LAND_START_BONUS = 300;
-const TURN_TIME_LIMIT = 120; // 120 seconds per turn
+// NOTE: there is deliberately NO client-side turn duration here. The server owns
+// the clock (TURN_TIME_LIMIT_MS in backend/server.js) and publishes a
+// `turnDeadline`; the client only RENDERS the time remaining against it. A local
+// 120s constant used to live here, which meant the label could disagree with the
+// server and implied the browser had a say in when a turn expires. It does not.
 
 const formatTurnTime = (seconds: number) => {
   const m = Math.floor(seconds / 60);
@@ -353,12 +419,91 @@ const isBalanceRelevant = (msg: string, playerName: string) => {
   return false;
 };
 
+// Build a unique id for one mutating action. Lives at module scope because it
+// reads Date.now() and Math.random(), which are impure: defining it inside the
+// component would make the component's render impure to the lint rules. The
+// counter is passed in so each component instance keeps its own sequence.
+const makeActionId = (seqRef: { current: number }) => {
+  seqRef.current += 1;
+  return `a${seqRef.current}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+};
+
+// One bid-increment button in the auction modal.
+//
+// Extracted into its own component for a concrete reason: it owns the socket
+// access for placing a bid. Reading `socketRef.current` from inside the auction
+// modal's render body (where the buttons are produced by a `.map`) is a
+// render-time ref access, which React forbids — the value is not needed to
+// render. Here the read happens in this component's own click handler, which is
+// exactly where a ref is meant to be used.
+function BidButton({
+  increment,
+  currentBid,
+  money,
+  hasCurrentPassed,
+  isCurrentHighest,
+  onBid,
+}: {
+  increment: number;
+  currentBid: number;
+  money: number;
+  hasCurrentPassed: boolean;
+  isCurrentHighest: boolean;
+  // Returns the updated auction on success, or null when the bid was refused
+  // (already logged by the caller). The emit is the parent's job.
+  onBid: (increment: number) => AuctionState | null;
+}) {
+  const resultingBid = currentBid + increment;
+  const canAfford = money >= resultingBid;
+  const isDisabled = !canAfford || hasCurrentPassed || isCurrentHighest;
+
+  return (
+    <button
+      onClick={() => onBid(increment)}
+      disabled={isDisabled}
+      className={`flex flex-col items-center justify-center rounded-[1.2vmin] border-2 py-[1.4vmin] px-[1vmin] transition-all cursor-pointer ${
+        isCurrentHighest
+          ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300 opacity-60 cursor-not-allowed"
+          : isDisabled
+          ? "border-white/10 bg-white/5 text-gray-500 opacity-40 cursor-not-allowed"
+          : "border-violet-400/80 bg-gradient-to-br from-violet-600 via-indigo-600 to-purple-700 text-white shadow-[0_0_1.6vmin_rgba(139,92,246,0.55)] hover:scale-[1.04] hover:brightness-110 active:scale-95"
+      }`}
+    >
+      <span className="text-[1.8vmin] font-black">+${increment}</span>
+      <span className="mt-[0.2vmin] font-mono text-[1.35vmin] font-bold text-indigo-200">
+        (${resultingBid.toLocaleString()})
+      </span>
+    </button>
+  );
+}
+
+const SOCKET_URL =
+  process.env.NEXT_PUBLIC_SOCKET_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:3001";
+
 export default function GameBoard() {
   const socketRef = useRef<Socket | null>(null);
   const moveTimeoutRef = useRef<number | null>(null);
+
+  // Unique id for ONE mutating action, so the server can tell a retry from a new
+  // action. The server records every id it has applied (GameRoom.claimAction)
+  // and drops any repeat, which is what stops a duplicated or re-sent frame
+  // from moving money or a token twice. The id only has to be unique per action,
+  // so a counter plus a random suffix is enough — it is not a security token, it
+  // is a de-duplication key.
+  //
+  // The generator lives OUTSIDE the component (see makeActionId below) because
+  // it reads Date.now() and Math.random(): those are impure, and calling them
+  // from a function defined during render makes the whole component impure to
+  // the lint rules. It is only ever invoked from event handlers.
+  const actionSeqRef = useRef(0);
+  const newActionId = () => makeActionId(actionSeqRef);
+
   // Periodic game:request-sync interval. Kept in a ref so both the disconnect
   // handler and the effect cleanup can stop it from outside the effect closure.
   const syncIntervalRef = useRef<number | null>(null);
+  const applyServerCardOutcomeRef = useRef<(data: CardDrawnEvent, broadcast?: boolean) => void>(() => {});
 
   const [isConnected, setIsConnected] = useState(false);
   // Mirror of isConnected that the periodic sync interval can read without being
@@ -376,10 +521,12 @@ export default function GameBoard() {
   // be pressed; it rides along on room:create / room:join so the server's player
   // record is BORN with it, and the same value is reused by the settings panel.
   const [entryName, setEntryName] = useState("");
-  // The colour step. `colorPickerOpen` gates the whole game view until the player
-  // has picked — it is deliberately driven by whether WE have a colour yet (not a
-  // separate flag), so a refresh mid-picker naturally reopens it.
-  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  // The colour step. There is deliberately NO `colorPickerOpen` state: whether
+  // the picker is showing is derived from whether WE hold a colour yet, so a
+  // refresh mid-picker naturally reopens it. `setColorPickerOpen` used to be
+  // called from several places but nothing ever READ the flag — the render gates
+  // on `needsColorPick` instead — so it was dead state that could drift out of
+  // step with what was actually displayed.
   // The colour this player currently holds as the SERVER sees it. This is the
   // authority for what's taken — never a local guess.
   const [myColor, setMyColor] = useState<string | null>(null);
@@ -408,6 +555,7 @@ export default function GameBoard() {
   // Mirror of roomId that reconnect handlers can read without being re-created
   // (the socket effect runs once, so a plain state read there would be stale).
   const socketRoomRef = useRef<string | null>(null);
+
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [dice, setDice] = useState<[number, number]>([1, 1]);
   const [rollTrigger, setRollTrigger] = useState(0);
@@ -423,6 +571,19 @@ export default function GameBoard() {
   const [propertyOwnership, setPropertyOwnership] = useState<Record<number, number>>(PROPERTY_OWNERSHIP);
   const [players, setPlayers] = useState<Player[]>(INITIAL_PLAYERS);
   const [actionLog, setActionLog] = useState<string[]>(["Game setup ready. Configure settings below or roll dice to start!"]);
+
+  // Append a line to the action log. Declared immediately after `actionLog` so
+  // it sits ABOVE every handler that calls it: a `const` arrow function is not
+  // hoisted, so defining it further down meant earlier handlers referenced a
+  // binding that did not exist yet.
+  //
+  // useCallback keeps its identity stable — it is a dependency of other
+  // useCallback handlers (handlePlaceBid), and a fresh function each render
+  // would invalidate all of them on every render.
+  const addLog = useCallback((msg: string) => {
+    setActionLog((prev) => [msg, ...prev].slice(0, 60));
+  }, []);
+
   const [gamePhase, setGamePhase] = useState<"YOUR TURN" | "ROLLING..." | "MOVING..." | "ACTION" | "END TURN">("YOUR TURN");
   const [winner, setWinner] = useState<Player | null>(null);
   const [escapingIds, setEscapingIds] = useState<number[]>([]);
@@ -431,11 +592,15 @@ export default function GameBoard() {
 
   // Game Setup & Settings states (editable before game start, locked after)
   const [isGameStarted, setIsGameStarted] = useState(false);
-  const [startingCash, setStartingCash] = useState(STARTING_MONEY);
+  const [startingCash, setStartingCash] = useState(DISPLAY_STARTING_MONEY);
   const [passStartBonus, setPassStartBonus] = useState(PASS_START_BONUS);
   const [landStartBonus, setLandStartBonus] = useState(LAND_START_BONUS);
   const [fastMode, setFastMode] = useState(false);
-  const [enableRestHousePot, setEnableRestHousePot] = useState(true);
+  // Whether landing on REST HOUSE feeds the shared pot. Read by
+  // collectToRestHouse() and the landing logic; there is no UI control that
+  // flips it yet, so it is declared const-style (the setter is intentionally not
+  // destructured — the value is part of the rules, not a user preference).
+  const enableRestHousePot = true;
   // Rest House mode: "pot" = classic pot that pays out to whoever lands on it,
   // "rest" = no money at all, landing just makes the player skip one turn.
   const [restHouseMode, setRestHouseMode] = useState<"pot" | "rest">("pot");
@@ -447,8 +612,9 @@ export default function GameBoard() {
   const [jailCollectsRent, setJailCollectsRent] = useState(false);
   const [enableAuction, setEnableAuction] = useState(true);
   const [activeAuction, setActiveAuction] = useState<AuctionState | null>(null);
-  const activeAuctionRef = useRef<AuctionState | null>(null);
-  activeAuctionRef.current = activeAuction;
+  // NOTE: an `activeAuctionRef` used to mirror this state, but nothing ever READ
+  // it — every consumer uses the state directly. A ref that is only ever written
+  // is dead weight that can silently diverge, so it is gone.
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
   // The room's player CEILING (2..6). This is a maximum, not a target: the game
   // can start with any count from 2 up to this, and once this many players have
@@ -457,10 +623,13 @@ export default function GameBoard() {
   // Turn Timer state. The AUTHORITATIVE clock lives on the server now: the
   // client only renders a countdown derived from the deadline the server sends
   // (in room:joined / turn:changed). turnTimeLeft is a display value; the client
-  // never eliminates anyone on its own clock anymore.
-  const [turnTimeLeft, setTurnTimeLeft] = useState(TURN_TIME_LIMIT);
+  // never eliminates anyone on its own clock. It starts at 0 rather than at some
+  // local duration: until the server's first deadline arrives there is nothing
+  // authoritative to show.
   const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
-  const isTurnTimedOutRef = useRef(false);
+  // A ticking clock used ONLY to re-render the derived countdown once a second.
+  // It is never compared against a duration and never decides anything.
+  const [clockNow, setClockNow] = useState(() => Date.now());
 
   // Vote Kick & Voluntary Bankrupt states
   const [isVoteKickOpen, setIsVoteKickOpen] = useState(false);
@@ -478,7 +647,6 @@ export default function GameBoard() {
   const [tradeDraftOfferedPropIds, setTradeDraftOfferedPropIds] = useState<number[]>([]);
   const [tradeDraftRequestedPropIds, setTradeDraftRequestedPropIds] = useState<number[]>([]);
   const [negotiatingTradeId, setNegotiatingTradeId] = useState<string | null>(null);
-  const [isTradesExpanded, setIsTradesExpanded] = useState<boolean>(true);
 
   // Chat system states
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -487,11 +655,19 @@ export default function GameBoard() {
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const isChatOpenRef = useRef(isChatOpen);
-  isChatOpenRef.current = isChatOpen;
+  // Same reasoning as activeAuctionRef: sync the mirror after commit, not during
+  // render, so a discarded render can't leave the ref ahead of the real state.
+  useEffect(() => {
+    isChatOpenRef.current = isChatOpen;
+  }, [isChatOpen]);
 
+  // Clear the unread badge when the chat opens. The badge is reset in the click
+  // handler that OPENS the chat (see the toggle), so this effect only needs to
+  // do the scroll — which is a DOM side effect, not a state write. Removing the
+  // setState from here is what stops the effect from scheduling a second render
+  // on every open.
   useEffect(() => {
     if (isChatOpen) {
-      setUnreadChatCount(0);
       chatMessagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [isChatOpen, chatMessages]);
@@ -522,8 +698,7 @@ export default function GameBoard() {
     addLog(`⚙️ Max players set to ${count}.`);
   };
 
-  const handlePlayerNameChange = (playerId: number, newName: string) => {
-    if (isGameStarted) return;
+  const handlePlayerNameChange = (playerId: number, newName: string) => {    if (isGameStarted) return;
     setPlayers((prev) =>
       prev.map((p) => (p.id === playerId ? { ...p, name: newName } : p))
     );
@@ -566,8 +741,10 @@ export default function GameBoard() {
     }
     setPlayers((prev) => normalizePlayerNames(prev));
     setIsGameStarted(true);
-    setTurnTimeLeft(TURN_TIME_LIMIT);
-    isTurnTimedOutRef.current = false;
+    // Clear the displayed clock. The server arms the real one on the first roll
+    // and publishes a `turnDeadline`, which the interval below renders — the
+    // client has no duration of its own to seed it with.
+    setTurnDeadline(null);
     addLog(`🎮 Game started with ${seated} players! Settings are now locked in.`);
   };
 
@@ -631,6 +808,16 @@ export default function GameBoard() {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
 
+  // ---- Session token persistence (keyed by room code) --------------------
+  // The room code is also persisted so a full page reload knows WHICH room to
+  // attempt a rejoin against (state alone is wiped on reload).
+  //
+  // Declared HERE, above the effects that read them: these are `const` bindings,
+  // not hoisted, so an effect running on mount would otherwise close over keys
+  // that did not exist yet.
+  const SESSION_STORAGE_PREFIX = "monopoly:session:";
+  const LAST_ROOM_KEY = "monopoly:last-room";
+
   // On first mount, remember the last room code so the socket effect below can
   // ATTEMPT a player:rejoin as soon as it connects. We deliberately do NOT set
   // roomId here: being "in a room" is only true once the server accepts us, and
@@ -643,14 +830,11 @@ export default function GameBoard() {
     } catch {
       // ignore
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ---- Session token persistence (keyed by room code) --------------------
-  // The room code is also persisted so a full page reload knows WHICH room to
-  // attempt a rejoin against (state alone is wiped on reload).
-  const SESSION_STORAGE_PREFIX = "monopoly:session:";
-  const LAST_ROOM_KEY = "monopoly:last-room";
+    // Runs ONCE on mount by design: this only restores the room code the socket
+    // effect should attempt a rejoin against. LAST_ROOM_KEY is a module-level
+    // constant, so listing it is stable and satisfies exhaustive-deps without a
+    // suppression comment.
+  }, [LAST_ROOM_KEY]);
 
   const rememberLastRoom = (room: string) => {
     try {
@@ -709,8 +893,8 @@ export default function GameBoard() {
         money: local.money,
         position: local.position,
         mood: local.mood ?? next.mood,
-        inJail: local.inJail ?? next.inJail,
-        jailTurns: local.jailTurns ?? next.jailTurns,
+        inJail: typeof next.inJail === "boolean" ? next.inJail : (local.inJail ?? false),
+        jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : (local.jailTurns ?? 0),
         isBankrupt: local.isBankrupt ?? next.isBankrupt,
         isResting: local.isResting ?? next.isResting,
       };
@@ -733,7 +917,9 @@ export default function GameBoard() {
       // never clobber a live balance (see mergeServerRoster).
       const merged = mergeServerRoster(next.players, playersRef.current);
       setPlayers(merged);
-      playersRef.current = merged;
+      // NOTE: no manual `playersRef.current = merged` here. The ref is kept in
+      // sync by a single effect watching `players` (see below), so writing it
+      // from a handler as well was redundant and a way for the two to drift.
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
@@ -741,6 +927,7 @@ export default function GameBoard() {
     if (next.chatMessages) setChatMessages(next.chatMessages);
     setActiveAuction(next.activeAuction as AuctionState | null);
     if (next.myPlayerId !== null) setMyPlayerId(next.myPlayerId);
+    if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
     // Adopt the server's turn clock so the rejoin repaints the correct turn and
     // countdown immediately, rather than waiting for the next turn:changed.
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
@@ -785,12 +972,13 @@ export default function GameBoard() {
       // server's money stub.
       const merged = mergeServerRoster(next.players, playersRef.current);
       setPlayers(merged);
-      playersRef.current = merged;
+      // Ref synced by the `players` effect, as above.
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
     if (next.trades) setTrades(next.trades);
     if (next.chatMessages) setChatMessages(next.chatMessages);
+    if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
     setActiveAuction(next.activeAuction as AuctionState | null);
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
     if (next.currentTurnPlayerId !== null) {
@@ -804,8 +992,48 @@ export default function GameBoard() {
     if (restored.isGameStarted === true) setServerGameStarted(true);
   };
 
+  // Wipe EVERY trace of the previous session so a new one genuinely starts from
+  // the beginning. Used when a rejoin is refused (the room was ended because its
+  // last player left, or the token expired) — the server has no record of us any
+  // more, so leaving any of this state behind would leak the old game into the
+  // new room (stale players, a colour we no longer own, a started-game flag).
+  //
+  // Declared HERE, above the socket effect below, because that effect calls it
+  // when a rejoin is refused. A `const` arrow function is not hoisted, so
+  // defining it after the effect left the effect closing over a binding that did
+  // not exist yet when its callback ran.
+  const resetToFreshSession = () => {
+    socketRoomRef.current = null;
+    // Identity + room membership.
+    setRoomId(null);
+    setRoomRole(null);
+    setPeerCount(1);
+    setMyPlayerId(null);
+    setSessionToken(null);
+    sessionTokenRef.current = null;
+    // Identity choices, so the picker starts clean.
+    setMyColor(null);
+    setEntryName("");
+    setColorError(null);
+    // Game state, so the board is not carrying a finished/other game.
+    setPlayers(INITIAL_PLAYERS);
+    setPropertyOwnership({});
+    setPropertyHouses({});
+    setActiveAuction(null);
+    setWinner(null);
+    setIsGameStarted(false);
+    setServerGameStarted(false);
+    setIsRolling(false);
+    setIsMoving(false);
+    setGamePhase("YOUR TURN");
+  };
+
   useEffect(() => {
-    const newSocket = io("http://localhost:3001", { reconnectionAttempts: 8, timeout: 4000 });
+    const newSocket = io(SOCKET_URL, {
+      transports: ["websocket", "polling"],
+      reconnectionAttempts: 8,
+      timeout: 4000,
+    });
     socketRef.current = newSocket;
 
     const handleConnect = () => {
@@ -877,7 +1105,18 @@ export default function GameBoard() {
     };
 
     newSocket.on("player:moved", (data: PlayerMovedEvent) => {
-      setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, position: data.position, money: data.money } : p)));
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === data.playerId
+            ? {
+                ...p,
+                position: data.position,
+                money: data.money,
+                ...(typeof data.inJail === "boolean" ? { inJail: data.inJail, jailTurns: data.jailTurns ?? p.jailTurns } : {}),
+              }
+            : p
+        )
+      );
     });
     // Server-authoritative two-player rent settlement. The server applied both
     // balances itself (the acting client can't broadcast the owner's seat), so we
@@ -902,6 +1141,72 @@ export default function GameBoard() {
         })
       );
     });
+    // Server-authoritative card outcome. When a peer draws a card,
+    // apply their authoritative position, money, and resulting state.
+    newSocket.on("card:drawn", (data: CardDrawnEvent) => {
+      if (!data || !data.ok) return;
+      applyServerCardOutcomeRef.current(data, false);
+    });
+    // Server-authoritative bail payment. When a peer pays bail, update their
+    // money, clear their inJail status, and trigger the jailbreak animation.
+    newSocket.on("jail:bail-paid", (data: JailBailPaidEvent) => {
+      if (!data || typeof data.playerId !== "number") return;
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === data.playerId
+            ? { ...p, inJail: false, jailTurns: 0, money: data.money }
+            : p
+        )
+      );
+      collectToRestHouse(data.bail || 100);
+      triggerJailBreak(data.playerId);
+      const peer = playersRef.current.find((p) => p.id === data.playerId);
+      addLog(`${peer?.name || `Player ${data.playerId}`} paid -$${data.bail} bail and was released from JAIL.`);
+    });
+    newSocket.on("club:paid", (data: { playerId: number; fee: number; paid?: number; cardCount?: number; houseCount?: number; pot: number; money: number; isBankrupt?: boolean }) => {
+      if (!data || typeof data.playerId !== "number") return;
+      if (typeof data.pot === "number") setRestHousePot(data.pot);
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === data.playerId ? { ...p, money: data.money, mood: "flat", isBankrupt: data.isBankrupt ?? p.isBankrupt } : p
+        )
+      );
+      const peer = playersRef.current.find((p) => p.id === data.playerId);
+      const name = peer?.name || `Player ${data.playerId}`;
+      if (data.fee <= 0) {
+        addLog(`${name} visited CLUB — no fee.`);
+      } else {
+        addLog(`${name} paid -$${data.paid ?? data.fee} at CLUB (${data.cardCount ?? 0} card + ${data.houseCount ?? 0} houses).`);
+      }
+    });
+    newSocket.on("rest-house:resolved", (data: { playerId: number; fee: number; payout: number; pot: number; money: number; isResting?: boolean }) => {
+      if (!data || typeof data.playerId !== "number") return;
+      if (typeof data.pot === "number") setRestHousePot(data.pot);
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === data.playerId ? { ...p, money: data.money, mood: "happy", isResting: data.isResting ?? true } : p
+        )
+      );
+      const peer = playersRef.current.find((p) => p.id === data.playerId);
+      const name = peer?.name || `Player ${data.playerId}`;
+      if (data.payout > 0) {
+        addLog(`${name} landed on REST HOUSE and collected +$${data.payout}.`);
+      } else {
+        addLog(`${name} landed on REST HOUSE and rests for one turn.`);
+      }
+    });
+    newSocket.on("tax:paid", (data: { playerId: number; tileId?: number; amount: number; paid?: number; pot: number; money: number; isBankrupt?: boolean }) => {
+      if (!data || typeof data.playerId !== "number") return;
+      if (typeof data.pot === "number") setRestHousePot(data.pot);
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === data.playerId ? { ...p, money: data.money, mood: "flat", isBankrupt: data.isBankrupt ?? p.isBankrupt } : p
+        )
+      );
+      const peer = playersRef.current.find((p) => p.id === data.playerId);
+      const name = peer?.name || `Player ${data.playerId}`;
+      addLog(`${name} paid -$${data.paid ?? data.amount} tax.`);
+    });
     // Drift-correction safety net. The server replies to game:request-sync with
     // serializeRoomState(room), which is structurally compatible with the same
     // restore mapping a rejoin uses. We deliberately do NOT route this through
@@ -911,15 +1216,18 @@ export default function GameBoard() {
     newSocket.on("game:sync", (data: PlayerRestoreState) => {
       applySyncState(data);
     });
-    // A peer rolled. Replay the dice animation for everyone, then let the shared
-    // DiceScene onSettled (handleDiceSettled) walk that player across the board
-    // and resolve their landing — identical to the local roll path. The server
-    // rebroadcasts with socket.to(roomId), which EXCLUDES the sender, so the
-    // roller never receives their own event; the playerId guard below is a second
-    // line of defence against ever double-playing a roll.
-    newSocket.on("player:rolled", (data: { playerId?: number; dice?: [number, number]; total?: number }) => {
+    // A roll happened. The server generates the dice and broadcasts the result to
+    // EVERYONE, including the roller — so this handler must distinguish "this is
+    // my own roll, I already started the animation from the ack" from "a peer
+    // rolled, animate it for me".
+    //
+    // The `dice`/`total` in this payload are the SERVER's values; they are the
+    // only dice the client ever sees now (rollDice no longer rolls locally).
+    newSocket.on("player:rolled", (data: { playerId?: number; dice?: [number, number]; total?: number; seq?: number }) => {
       if (!data || !Array.isArray(data.dice) || data.dice.length !== 2) return;
-      if (data.playerId === myPlayerIdRef.current) return; // our own roll — already played
+      // Our own roll: the ack already set the dice and triggered the animation,
+      // so applying this echo would restart it. Ignore it.
+      if (data.playerId === myPlayerIdRef.current) return;
       pendingRollPlayerIdRef.current = data.playerId ?? null;
       pendingRollRemoteRef.current = true;
       setDice([data.dice[0], data.dice[1]]);
@@ -1008,6 +1316,20 @@ export default function GameBoard() {
       if (typeof data.playerId === "number" && typeof data.cost === "number") {
         setPlayers((prev) => prev.map((p) => (p.id === data.playerId ? { ...p, money: p.money - data.cost! } : p)));
       }
+    });
+
+    newSocket.on("property:sold", (data: PropertySaleEvent) => {
+      setPropertyOwnership((prev) => {
+        const next = { ...prev };
+        delete next[data.tileId];
+        return next;
+      });
+      setPropertyHouses((prev) => ({ ...prev, [data.tileId]: data.houses }));
+      setPlayers((prev) => prev.map((p) => p.id === data.playerId ? { ...p, money: data.money } : p));
+    });
+    newSocket.on("house:sold", (data: PropertySaleEvent) => {
+      setPropertyHouses((prev) => ({ ...prev, [data.tileId]: data.houses }));
+      setPlayers((prev) => prev.map((p) => p.id === data.playerId ? { ...p, money: data.money } : p));
     });
 
     newSocket.on("trade:created", (trade: TradeProposal) => {
@@ -1133,6 +1455,8 @@ export default function GameBoard() {
               color: next.color,
               hasSeat: next.hasSeat ?? p.hasSeat,
               hasEntered: next.hasEntered ?? p.hasEntered,
+              inJail: typeof next.inJail === "boolean" ? next.inJail : p.inJail,
+              jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : p.jailTurns,
             };
           })
         );
@@ -1200,6 +1524,8 @@ export default function GameBoard() {
               color: next.color,
               hasSeat: next.hasSeat ?? p.hasSeat,
               hasEntered: next.hasEntered ?? p.hasEntered,
+              inJail: typeof next.inJail === "boolean" ? next.inJail : p.inJail,
+              jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : p.jailTurns,
             };
           });
         });
@@ -1249,6 +1575,14 @@ export default function GameBoard() {
       newSocket.disconnect();
       socketRef.current = null;
     };
+    // Intentionally runs ONCE for the life of the page: this effect owns the
+    // socket connection itself. Re-running it whenever `addLog` or the restore
+    // helpers change identity would tear down and rebuild the connection
+    // mid-game, dropping the room and any in-flight state. The helpers are read
+    // through stable useCallback identities, and the handlers that call them
+    // close over the socket instance created here — so a re-run is never needed
+    // and would only be harmful.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1307,10 +1641,6 @@ export default function GameBoard() {
     }
   };
 
-  const addLog = (msg: string) => {
-    setActionLog((prev) => [msg, ...prev].slice(0, 60));
-  };
-
   const handleCreateRoom = () => {
     const s = socketRef.current;
     if (!s) {
@@ -1334,8 +1664,8 @@ export default function GameBoard() {
         return;
       }
       if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
-      // Straight into the colour step — no colour is held yet.
-      setColorPickerOpen(true);
+      // Straight into the colour step — no colour is held yet. The picker is
+      // shown because our own colour is still null, not because of a flag.
     });
   };
 
@@ -1366,7 +1696,6 @@ export default function GameBoard() {
       }
       if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
       setJoinCode("");
-      setColorPickerOpen(true);
     });
   };
 
@@ -1444,47 +1773,21 @@ export default function GameBoard() {
   const mySeat = players.find((p) => p.id === myPlayerId);
   const needsColorPick = !!roomId && !!mySeat && mySeat.hasSeat === true && !mySeat.color;
 
-  // Keep the picker in step with that derived truth. Opening happens here (not
-  // inside each network handler) so every path — create, join, rejoin, refresh,
-  // and a live roster broadcast — reaches the same conclusion from the same data.
-  // It also CLOSES the picker the moment the server confirms our colour, so a
-  // stale open state can't leave us staring at an un-pickable grid.
-  useEffect(() => {
-    if (needsColorPick) setColorPickerOpen(true);
-  }, [needsColorPick]);
+  // The picker is DERIVED, not stored: `needsColorPick` is computed from our own
+  // colour being null, so every path — create, join, rejoin, refresh, and a live
+  // roster broadcast — reaches the same conclusion from the same data. There is
+  // no effect to keep it in step and no flag that can go stale.
 
   // Wipe EVERY trace of the previous session so a new one genuinely starts from
   // the beginning. Used when a rejoin is refused (the room was ended because its
   // last player left, or the token expired) — the server has no record of us any
   // more, so leaving any of this state behind would leak the old game into the
   // new room (stale players, a colour we no longer own, a started-game flag).
-  const resetToFreshSession = () => {
-    socketRoomRef.current = null;
-    // Identity + room membership.
-    setRoomId(null);
-    setRoomRole(null);
-    setPeerCount(1);
-    setMyPlayerId(null);
-    setSessionToken(null);
-    sessionTokenRef.current = null;
-    // Identity choices, so the picker starts clean.
-    setMyColor(null);
-    setEntryName("");
-    setColorPickerOpen(false);
-    setColorError(null);
-    // Game state, so the board is not carrying a finished/other game.
-    setPlayers(INITIAL_PLAYERS);
-    playersRef.current = INITIAL_PLAYERS;
-    setPropertyOwnership({});
-    setPropertyHouses({});
-    setActiveAuction(null);
-    setWinner(null);
-    setIsGameStarted(false);
-    setServerGameStarted(false);
-    setIsRolling(false);
-    setIsMoving(false);
-    setGamePhase("YOUR TURN");
-  };
+  //
+  // Declared ABOVE the socket effect (see earlier in this component), because
+  // that effect calls it when a rejoin is refused. A `const` arrow function is
+  // not hoisted, so defining it after the effect left the effect closing over a
+  // binding that did not exist yet when the callback ran.
 
   const handleCopyRoomCode = async () => {
     if (!roomId) return;
@@ -1553,6 +1856,15 @@ export default function GameBoard() {
   // the local current player, but accepts an explicit playerId so a REMOTE roll
   // (arriving over player:rolled) animates the player who actually rolled, not
   // whoever this tab happens to think is on turn.
+  //
+  // ===== THE CLIENT NO LONGER TELLS THE SERVER WHERE TO MOVE =====
+  // This walk is now a purely VISUAL animation of a move the server has already
+  // decided. The server computed the destination from its own authoritative roll
+  // and the player's own recorded position, so we animate the same number of
+  // steps and then simply ASK the server to apply the move. The `position` is no
+  // longer sent at all — the server derives it — and the ack tells us where the
+  // player actually ended up, which we adopt as truth in case our local
+  // arithmetic drifted.
   const animateMovement = (steps: number, playerId?: number, broadcast = true) => {
     const player = playerId !== undefined
       ? playersRef.current.find((p) => p.id === playerId)
@@ -1565,24 +1877,39 @@ export default function GameBoard() {
 
     let remaining = steps;
     let currentPos = player.position;
-    // Accumulate the START/pass-START bonuses applied during the walk so the
-    // single post-move broadcast carries the player's FINAL money (the server
-    // applies whatever we send).
-    let moneyDelta = 0;
 
     const step = () => {
       if (remaining <= 0) {
         setIsMoving(false);
         setGamePhase("ACTION");
-        // Movement is complete: emit ONE authoritative post-move state (never per
-        // step). Mirrors player:rolled's broadcast flag — false when replaying a
-        // remote player's roll, so we don't echo their own move back at them.
+        // Movement is complete: ASK the server to apply it. No position is sent
+        // — the server derives the destination from the roll it issued. Mirrors
+        // player:rolled's broadcast flag: false when replaying a remote player's
+        // roll, so we don't echo their own move back at them.
         if (broadcast) {
-          socketRef.current?.emit("player:moved", {
-            playerId: player.id,
-            position: currentPos,
-            money: player.money + moneyDelta,
-          });
+          socketRef.current?.emit(
+            "player:moved",
+            { playerId: player.id, actionId: newActionId() },
+            (res: { ok: boolean; position?: number; from?: number; passedGo?: boolean; code?: string; error?: string; inJail?: boolean; jailTurns?: number } | null) => {
+              // Adopt the server's computed destination. The local walk is only
+              // an animation; this is where the token actually is.
+              if (res && res.ok && typeof res.position === "number") {
+                setPlayers((prev) =>
+                  prev.map((p) =>
+                    p.id === player.id
+                      ? {
+                          ...p,
+                          position: res.position as number,
+                          ...(typeof res.inJail === "boolean" ? { inJail: res.inJail, jailTurns: res.jailTurns ?? p.jailTurns } : {}),
+                        }
+                      : p
+                  )
+                );
+              } else if (res && res.ok === false) {
+                addLog(`⚠️ Move refused: ${res.error || res.code || "unknown reason"}`);
+              }
+            }
+          );
         }
         handleLanding(BOARD_TILES[currentPos], player.id, broadcast);
         return;
@@ -1591,21 +1918,20 @@ export default function GameBoard() {
       currentPos = (currentPos + 1) % BOARD_SIZE;
       remaining--;
 
+      // NOTE: START bonuses are still rendered here for the animation, but the
+      // authoritative balance comes from the server (it stamps `money` onto the
+      // player:moved broadcast). The local `moneyDelta` accumulation was removed
+      // because it was never sent anywhere — the server ignores a client `money`
+      // field on player:moved by design.
       const landsOnStart = currentPos === 0 && remaining <= 0;
-      const startBonus = currentPos === 0 ? (landsOnStart ? landStartBonus : passStartBonus) : 0;
-      moneyDelta += startBonus;
 
       if (currentPos === 0) {
         setHasSkillCard(true);
-        addLog(`${player.name} ${landsOnStart ? "landed on" : "passed"} START (+$${startBonus})`);
+        addLog(`${player.name} ${landsOnStart ? "landed on" : "passed"} START`);
       }
 
       setPlayers((prev) =>
-        prev.map((p) =>
-          p.id === player.id
-            ? { ...p, position: currentPos, money: p.money + startBonus }
-            : p
-        )
+        prev.map((p) => (p.id === player.id ? { ...p, position: currentPos } : p))
       );
       moveTimeoutRef.current = window.setTimeout(step, fastMode ? 130 : 260);
     };
@@ -1716,7 +2042,7 @@ export default function GameBoard() {
     if (!player || player.isBankrupt) return;
 
     addLog(`🏳️ ${player.name} surrendered and declared bankruptcy.`);
-    socketRef.current?.emit("player:bankrupt", { playerId });
+    socketRef.current?.emit("player:bankrupt", { playerId, actionId: newActionId() });
     setShowBankruptModal(false);
     declareBankruptcy(playerId);
   };
@@ -1762,63 +2088,126 @@ export default function GameBoard() {
     });
   };
 
-  // Instantly moves a player to a target tile (for card-driven jumps rather
-  // than a dice roll), crediting the pass-START bonus if the jump wraps
-  // around, then resolves whatever they land on exactly like a normal move.
+  // Moves a player to a target tile (for card-driven jumps rather than a dice
+  // roll), then resolves whatever they land on exactly like a normal move.
+  //
+  // ===== THIS IS A VISUAL JUMP ONLY =====
+  // The server derives every position from its own roll state, so a card jump
+  // cannot be pushed at it as a position. We animate the jump locally and DO NOT
+  // emit player:moved — the server never learned about this jump, so telling it
+  // "I am on tile 39 now" is exactly the teleport we removed. Card jumps are
+  // therefore local presentation; the authoritative board advances only through
+  // a server-issued roll plus a player:moved request.
   const teleportAndLand = (playerId: number, targetIndex: number, broadcast = true) => {
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
 
-    const wrapped = targetIndex < player.position;
-    const landsOnStart = targetIndex === 0;
-    const startBonus = landsOnStart ? landStartBonus : wrapped ? passStartBonus : 0;
-    const nextMoney = player.money + startBonus;
-
     setPlayers((prev) =>
-      prev.map((p) =>
-        p.id === playerId
-          ? { ...p, position: targetIndex, money: p.money + startBonus }
-          : p
-      )
+      prev.map((p) => (p.id === playerId ? { ...p, position: targetIndex } : p))
     );
-    // Broadcast the new position (+ any START bonus money) so remote clients
-    // follow the jump. Gated like the roll path: only for the local player's
-    // own card draw, never when replaying someone else's.
-    if (broadcast) {
-      socketRef.current?.emit("player:moved", {
-        playerId,
-        position: targetIndex,
-        money: nextMoney,
-      });
-    }
-    if (startBonus > 0) {
-      addLog(`${player.name} ${landsOnStart ? "landed on" : "passed"} START (+$${startBonus})`);
-    }
+    addLog(`${player.name} advanced to ${BOARD_TILES[targetIndex]?.name || `tile ${targetIndex}`}.`);
 
     moveTimeoutRef.current = window.setTimeout(() => handleLanding(BOARD_TILES[targetIndex], playerId, broadcast), 300);
   };
 
+  const applyServerCardOutcome = (data: CardDrawnEvent, broadcast = true) => {
+    const player = playersRef.current.find((p) => p.id === data.playerId);
+    const pName = player?.name || `Player ${data.playerId}`;
+
+    if (data.kind === "treasure") {
+      if (data.roll <= 2) {
+        addLog(`${pName} drew Treasure (${data.roll}): +$100 from the bank.`);
+      } else if (data.roll <= 4) {
+        addLog(`${pName} drew Treasure (${data.roll}): +$200 and a free Movement Card.`);
+      } else if (data.roll === 5) {
+        addLog(`${pName} drew Treasure (${data.roll}): advances to the nearest Airport.`);
+      } else {
+        addLog(`${pName} drew Treasure (${data.roll}): pays -$150 luxury tax.`);
+      }
+    } else {
+      if (data.roll <= 2) {
+        addLog(`${pName} drew Surprise (${data.roll}): sent straight to JAIL.`);
+      } else if (data.roll <= 4) {
+        addLog(`${pName} drew Surprise (${data.roll}): jumps forward 8 spaces.`);
+      } else if (data.roll === 5) {
+        addLog(`${pName} drew Surprise (${data.roll}): receives a $250 dividend.`);
+      } else {
+        if (data.swap) {
+          const target = playersRef.current.find((p) => p.id === data.swap?.targetId);
+          addLog(`${pName} drew Surprise (${data.roll}): swapped places with ${target?.name || `Player ${data.swap.targetId}`}.`);
+        } else {
+          addLog(`${pName} drew Surprise (${data.roll}): no one else to swap with.`);
+        }
+      }
+    }
+
+    if (data.grantSkillCard && data.playerId === myPlayerIdRef.current) {
+      setHasSkillCard(true);
+    }
+
+    setPlayers((prev) =>
+      prev.map((p) => {
+        if (p.id === data.playerId) {
+          const isJail = typeof data.inJail === "boolean" ? data.inJail : data.card?.movementType === "jail";
+          const jailTurns = typeof data.jailTurns === "number" ? data.jailTurns : 0;
+          return {
+            ...p,
+            position: data.position,
+            money: data.money,
+            mood: (data.card?.money && data.card.money < 0) ? "flat" : "happy",
+            ...(isJail ? { inJail: true, jailTurns } : {}),
+          };
+        }
+        if (data.swap && p.id === data.swap.targetId) {
+          return { ...p, position: data.swap.targetPosition };
+        }
+        return p;
+      })
+    );
+
+    if (data.card?.movementType === "nearest_airport" || data.card?.movementType === "forward_8") {
+      addLog(`${pName} advanced to ${BOARD_TILES[data.position]?.name || `tile ${data.position}`}.`);
+      moveTimeoutRef.current = window.setTimeout(
+        () => handleLanding(BOARD_TILES[data.position], data.playerId, broadcast),
+        300
+      );
+    }
+  };
+
+  applyServerCardOutcomeRef.current = applyServerCardOutcome;
+
   // Rolls and applies a Treasure/Surprise outcome. The odds and effects
   // match exactly what the rules modal for these tiles already promises.
+  // In networked play, the SERVER authoritatively determines the card,
+  // computes rewards/penalties, validates and executes movement, and broadcasts the state.
   const resolveCard = (kind: "treasure" | "surprise", playerId: number, broadcast = true) => {
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
 
-    const roll = Math.floor(Math.random() * 6) + 1;
+    if (broadcast && socketRef.current?.connected) {
+      socketRef.current.emit(
+        "card:draw",
+        { playerId, actionId: newActionId() },
+        (res: CardDrawnEvent | null) => {
+          if (res && res.ok) {
+            applyServerCardOutcome(res, true);
+          } else if (res && res.ok === false) {
+            addLog(`⚠️ Card draw refused: ${res.error || res.code || "unknown reason"}`);
+          }
+        }
+      );
+      return;
+    }
+
+    const roll = rollD6();
 
     if (kind === "treasure") {
       if (roll <= 2) {
         setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 100, mood: "happy" } : p)));
-        if (broadcast) {
-          socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + 100 });
-        }
         addLog(`${player.name} drew Treasure (${roll}): +$100 from the bank.`);
       } else if (roll <= 4) {
         setHasSkillCard(true);
         setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 200, mood: "happy" } : p)));
-        if (broadcast) {
-          socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + 200 });
-        }
         addLog(`${player.name} drew Treasure (${roll}): +$200 and a free Movement Card.`);
       } else if (roll === 5) {
         const targetIdx = findNearestTileIndex(player.position, "airport");
@@ -1831,9 +2220,6 @@ export default function GameBoard() {
         } else {
           setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money - amount, mood: "flat" } : p)));
           collectToRestHouse(amount);
-          if (broadcast) {
-            socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money - amount });
-          }
           addLog(`${player.name} drew Treasure (${roll}): pays -$150 luxury tax.`);
         }
       }
@@ -1844,13 +2230,10 @@ export default function GameBoard() {
       setPlayers((prev) =>
         prev.map((p) => (p.id === playerId ? { ...p, position: 10, inJail: true, jailTurns: 0, mood: "flat" } : p))
       );
-      // KNOWN GAP: player:moved carries no inJail flag, so the position syncs to
-      // tile 10 but the jail state does NOT reach remote clients. Fixing this
-      // needs a follow-up event or a payload extension (server-authoritative
-      // vs. broadcast-everything decision) — out of scope here.
-      if (broadcast) {
-        socketRef.current?.emit("player:moved", { playerId, position: 10, money: player.money });
-      }
+      // KNOWN GAP: the server has no jail field, so the position syncs to tile 10
+      // but the jail state does NOT reach remote clients (and the server does not
+      // enforce it). Fixing this needs a follow-up event or a server-side jail
+      // model — out of scope here.
       addLog(`${player.name} drew Surprise (${roll}): sent straight to JAIL.`);
     } else if (roll <= 4) {
       const targetIdx = (player.position + 8) % BOARD_SIZE;
@@ -1858,9 +2241,6 @@ export default function GameBoard() {
       teleportAndLand(playerId, targetIdx, broadcast);
     } else if (roll === 5) {
       setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, money: p.money + 250, mood: "happy" } : p)));
-      if (broadcast) {
-        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + 250 });
-      }
       addLog(`${player.name} drew Surprise (${roll}): receives a $250 dividend.`);
     } else {
       const others = playersRef.current.filter((p) => p.id !== playerId && !p.isBankrupt);
@@ -1868,7 +2248,7 @@ export default function GameBoard() {
         addLog(`${player.name} drew Surprise (${roll}): no one else to swap with.`);
         return;
       }
-      const target = others[Math.floor(Math.random() * others.length)];
+      const target = pickRandom(others);
       setPlayers((prev) =>
         prev.map((p) => {
           if (p.id === playerId) return { ...p, position: target.position };
@@ -1880,7 +2260,7 @@ export default function GameBoard() {
       // non-acting partner, so the server-authoritative players:swapped event
       // performs and broadcasts both position changes instead.
       if (broadcast) {
-        socketRef.current?.emit("players:swapped", { playerId, targetId: target.id });
+        socketRef.current?.emit("players:swapped", { playerId, targetId: target.id, actionId: newActionId() });
       }
       addLog(`${player.name} drew Surprise (${roll}): swapped places with ${target.name}.`);
     }
@@ -1891,6 +2271,32 @@ export default function GameBoard() {
     if (!player) return;
 
     if (tile.id === 20) {
+      if (broadcast && socketRef.current?.connected) {
+        socketRef.current.emit(
+          "rest-house:resolve",
+          { playerId, actionId: newActionId() },
+          (res: { ok: boolean; fee?: number; payout?: number; pot?: number; money?: number; isResting?: boolean; error?: string } | null) => {
+            if (res && res.ok) {
+              if (typeof res.pot === "number") setRestHousePot(res.pot);
+              if (typeof res.money === "number") {
+                setPlayers((prev) =>
+                  prev.map((p) =>
+                    p.id === playerId ? { ...p, money: res.money!, mood: "happy", isResting: true } : p
+                  )
+                );
+              }
+              if ((res.payout || 0) > 0) {
+                addLog(`${player.name} landed on REST HOUSE and collected +$${res.payout}.`);
+              } else {
+                addLog(`${player.name} landed on REST HOUSE and rests for one turn.`);
+              }
+            }
+          }
+        );
+        return;
+      }
+      if (!broadcast) return;
+
       // "rest" mode: no money system at rest house — just skip one turn.
       if (restHouseMode === "rest" || !enableRestHousePot) {
         addLog(`${player.name} landed on REST HOUSE and rests for one turn (no money).`);
@@ -1903,9 +2309,6 @@ export default function GameBoard() {
           p.id === playerId ? { ...p, money: p.money + potPayout, mood: "happy", isResting: true } : p
         )
       );
-      if (broadcast) {
-        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: player.money + potPayout });
-      }
       setRestHousePot(0);
       if (potPayout > 0) {
         addLog(`${player.name} landed on REST HOUSE and collected +$${potPayout}.`);
@@ -1917,6 +2320,34 @@ export default function GameBoard() {
     }
 
     if (tile.id === 30) {
+      if (broadcast && socketRef.current?.connected) {
+        socketRef.current.emit(
+          "club:pay",
+          { playerId, actionId: newActionId() },
+          (res: { ok: boolean; fee?: number; paid?: number; cardCount?: number; houseCount?: number; pot?: number; money?: number; isBankrupt?: boolean; error?: string } | null) => {
+            if (res && res.ok) {
+              if (typeof res.pot === "number") setRestHousePot(res.pot);
+              if (typeof res.money === "number") {
+                setPlayers((prev) =>
+                  prev.map((p) =>
+                    p.id === playerId ? { ...p, money: res.money!, mood: "flat", isBankrupt: res.isBankrupt ?? p.isBankrupt } : p
+                  )
+                );
+              }
+              if (res.isBankrupt) {
+                declareBankruptcy(playerId);
+              } else if ((res.fee || 0) <= 0) {
+                addLog(`${player.name} visited CLUB — no fee.`);
+              } else {
+                addLog(`${player.name} paid -$${res.paid ?? res.fee} at CLUB (${res.cardCount ?? 0} card + ${res.houseCount ?? 0} houses).`);
+              }
+            }
+          }
+        );
+        return;
+      }
+      if (!broadcast) return;
+
       const cardCount = hasSkillCard ? 1 : 0;
       const houseCount = getPlayerHouseCount(playerId);
       const clubFee = cardCount * 50 + houseCount * 100;
@@ -1936,15 +2367,39 @@ export default function GameBoard() {
           p.id === playerId ? { ...p, money: Math.max(0, p.money - clubFee), mood: "flat" } : p
         )
       );
-      if (broadcast) {
-        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: Math.max(0, player.money - clubFee) });
-      }
       collectToRestHouse(clubFee);
       addLog(`${player.name} paid -$${clubFee} at CLUB (${cardCount} card + ${houseCount} houses).`);
       return;
     }
 
     if (tile.type === "tax") {
+      if (broadcast && socketRef.current?.connected) {
+        socketRef.current.emit(
+          "tax:pay",
+          { playerId, tileId: tile.id, actionId: newActionId() },
+          (res: { ok: boolean; amount?: number; paid?: number; pot?: number; money?: number; isBankrupt?: boolean; error?: string } | null) => {
+            if (res && res.ok) {
+              if (typeof res.pot === "number") setRestHousePot(res.pot);
+              if (typeof res.money === "number") {
+                setPlayers((prev) =>
+                  prev.map((p) =>
+                    p.id === playerId ? { ...p, money: res.money!, mood: "flat", isBankrupt: res.isBankrupt ?? p.isBankrupt } : p
+                  )
+                );
+              }
+              if (res.isBankrupt) {
+                declareBankruptcy(playerId);
+              } else {
+                addLog(`${player.name} paid -$${res.paid ?? res.amount} tax.`);
+              }
+            }
+          }
+        );
+        return;
+      }
+      if (!broadcast) return;
+
+      // Offline fallback
       const amount = Math.abs(parsePrice(tile.price) || 0);
       if (player.money < amount) {
         declareBankruptcy(playerId);
@@ -1955,9 +2410,6 @@ export default function GameBoard() {
           p.id === playerId ? { ...p, money: Math.max(0, p.money - amount), mood: "flat" } : p
         )
       );
-      if (broadcast) {
-        socketRef.current?.emit("player:moved", { playerId, position: player.position, money: Math.max(0, player.money - amount) });
-      }
       collectToRestHouse(amount);
       addLog(`${player.name} paid -$${amount} tax.`);
       return;
@@ -1996,7 +2448,7 @@ export default function GameBoard() {
         // event, which applies and broadcasts both balances (the backend also
         // verifies ownerId really owns tileId before applying).
         if (broadcast) {
-          socketRef.current?.emit("rent:paid", { payerId: playerId, ownerId, tileId: tile.id, amount: rent });
+          socketRef.current?.emit("rent:paid", { payerId: playerId, ownerId, tileId: tile.id, actionId: newActionId() });
         }
         addLog(`${player.name} paid -$${rent} rent to ${owner?.name} (+$${rent}) on ${tile.name}.`);
       } else {
@@ -2011,11 +2463,9 @@ export default function GameBoard() {
       return;
     }
 
-    if (tile.id === 10 && !player.inJail) {
-      setPlayers((prev) =>
-        prev.map((p) => (p.id === playerId ? { ...p, inJail: true, jailTurns: 0, mood: "flat" } : p))
-      );
-      addLog(`${player.name} landed on JAIL and got locked up!`);
+    if (tile.id === 10) {
+      addLog(`${player.name} is Just Visiting JAIL.`);
+      setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
       return;
     }
 
@@ -2040,37 +2490,61 @@ export default function GameBoard() {
     if (!isGameStarted) {
       setPlayers((prev) => normalizePlayerNames(prev));
       setIsGameStarted(true);
-      setTurnTimeLeft(TURN_TIME_LIMIT);
-      isTurnTimedOutRef.current = false;
+      setTurnDeadline(null);
       addLog(`🎲 Game started! Settings are now locked.`);
     }
 
-    const result: [number, number] = [
-      Math.floor(Math.random() * 6) + 1,
-      Math.floor(Math.random() * 6) + 1,
-    ];
+    // ===== THE SERVER ROLLS THE DICE =====
+    // We do NOT generate dice locally any more. We ask the server to roll, and
+    // it answers with the authoritative result. The animation is started from
+    // that answer, so the number shown on screen is always the number the server
+    // will move the player by — a client cannot "roll" a 12 any more than it can
+    // move itself. The optimistic local roll that used to sit here was the hole
+    // this closes.
+    const roller = currentPlayer;
+    if (!roller) return;
 
-    setDice(result);
-    setRollTrigger((value) => value + 1);
     setIsRolling(true);
     setGamePhase("ROLLING...");
-    pendingRollPlayerIdRef.current = currentPlayer?.id ?? null;
+    pendingRollPlayerIdRef.current = roller.id;
     pendingRollRemoteRef.current = false;
+
+    socketRef.current?.emit(
+      "player:rolled",
+      { playerId: roller.id },
+      (res: { ok: boolean; dice?: [number, number]; total?: number; code?: string; error?: string } | null) => {
+        if (!res || !res.ok || !Array.isArray(res.dice)) {
+          // The server refused the roll (not our turn, already rolled, etc.).
+          // Unwind the optimistic UI so the player is not stuck in "Rolling...".
+          setIsRolling(false);
+          setGamePhase("YOUR TURN");
+          pendingRollPlayerIdRef.current = null;
+          addLog(`⚠️ Roll refused: ${res?.error || res?.code || "no response"}`);
+          return;
+        }
+        // Animate the SERVER's dice.
+        setDice([res.dice[0], res.dice[1]]);
+        setRollTrigger((value) => value + 1);
+      }
+    );
   };
 
   // Applies a settled roll for a given player: jail handling, the walk across the
   // board, then the landing effect. Extracted from handleDiceSettled so a REMOTE
   // roll arriving over player:rolled replays exactly the same logic for the player
-  // who actually rolled. `broadcast` is true only for the local player's own roll
-  // (the socket.to(roomId) rebroadcast never loops back to the sender, so a remote
-  // roll must not be re-emitted here).
+  // who actually rolled.
+  //
+  // NOTE: this no longer emits player:rolled. The roll already happened on the
+  // server (rollDice asked for it and got the dice back in the ack); re-emitting
+  // it here would request a SECOND roll and invalidate the one being animated.
+  // `broadcast` now only controls whether the resulting player:moved request is
+  // sent, which is what distinguishes the local player's own move from the
+  // animation of a peer's.
   const applyRollResult = (playerId: number, first: number, second: number, broadcast: boolean) => {
     const total = first + second;
     const isDoubles = first === second;
     const player = playersRef.current.find((p) => p.id === playerId);
     if (!player) return;
-
-    if (broadcast) socketRef.current?.emit("player:rolled", { dice: [first, second], total });
 
     if (player.inJail) {
       if (isDoubles) {
@@ -2126,6 +2600,31 @@ export default function GameBoard() {
       addLog(`${currentPlayer.name} can't afford the $${bail} bail.`);
       return;
     }
+
+    if (socketRef.current?.connected) {
+      socketRef.current.emit(
+        "jail:pay-bail",
+        { playerId: currentPlayer.id, actionId: newActionId() },
+        (res: { ok: boolean; bail?: number; money?: number; inJail?: boolean; jailTurns?: number; code?: string; error?: string } | null) => {
+          if (res && res.ok) {
+            setPlayers((prev) =>
+              prev.map((p) =>
+                p.id === currentPlayer.id
+                  ? { ...p, inJail: false, jailTurns: 0, money: typeof res.money === "number" ? res.money : p.money - bail }
+                  : p
+              )
+            );
+            collectToRestHouse(res.bail || bail);
+            triggerJailBreak(currentPlayer.id);
+            addLog(`${currentPlayer.name} paid -$${res.bail || bail} bail and was released from JAIL.`);
+          } else if (res && res.ok === false) {
+            addLog(`⚠️ Bail refused: ${res.error || res.code || "unknown reason"}`);
+          }
+        }
+      );
+      return;
+    }
+
     setPlayers((prev) =>
       prev.map((p) => (p.id === currentPlayer.id ? { ...p, inJail: false, jailTurns: 0, money: p.money - bail } : p))
     );
@@ -2158,6 +2657,9 @@ export default function GameBoard() {
     setHasSkillCard(false);
     setShowCardSelector(false);
     addLog(`Used Movement Card → ${selectedCardValue} spaces`);
+    // The server records the card as the authoritative roll for this player; the
+    // move itself is then derived server-side by player:moved (see
+    // animateMovement), exactly like a dice roll.
     socketRef.current?.emit("player:skill-card", { movement: selectedCardValue });
     animateMovement(selectedCardValue);
   };
@@ -2197,17 +2699,19 @@ export default function GameBoard() {
 
     setGamePhase("YOUR TURN");
     addLog("Turn ended.");
-    setTurnTimeLeft(TURN_TIME_LIMIT);
-    isTurnTimedOutRef.current = false;
+    // Leave the clock to the server: it will broadcast the next turnDeadline on
+    // turn:changed. Resetting to a local 120s here would briefly show a number
+    // the server never agreed to.
   };
 
   // Snap the displayed clock back to the full limit whenever the active player
   // changes or the game starts, so the label doesn't briefly show a stale value
   // before the server's deadline arrives (the interval below then takes over).
-  useEffect(() => {
-    setTurnTimeLeft(TURN_TIME_LIMIT);
-    isTurnTimedOutRef.current = false;
-  }, [currentPlayer?.id, isGameStarted]);
+  // The countdown is DERIVED, not stored. `turnDeadline` is the server's
+  // authoritative epoch ms; the ticking `clockNow` is the only local state, and
+  // it exists purely to re-render once a second. Blanking the label when the turn
+  // changes therefore needs no effect at all — a new deadline simply produces a
+  // new value on the next render.
 
   // Turn timer display. The server owns the clock: it sends a `turnDeadline`
   // (epoch ms) whenever the turn changes, and it — not the client — eliminates
@@ -2215,20 +2719,18 @@ export default function GameBoard() {
   // from that deadline, so every client shows the same countdown.
   useEffect(() => {
     if (!isGameStarted || winner) return;
-
-    const interval = window.setInterval(() => {
-      if (turnDeadline === null) {
-        // No server deadline yet (e.g. pre-game) — fall back to a local tick so
-        // the label still counts down rather than sitting frozen.
-        setTurnTimeLeft((prev) => (prev <= 1 ? 0 : prev - 1));
-        return;
-      }
-      const remaining = Math.max(0, Math.round((turnDeadline - Date.now()) / 1000));
-      setTurnTimeLeft(remaining);
-    }, 1000);
-
+    // Re-render once a second so the derived label advances. This interval makes
+    // NO decision of its own: it does not end a turn, and it cannot extend one.
+    const interval = window.setInterval(() => setClockNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
-  }, [isGameStarted, winner, currentPlayer?.id, turnDeadline]);
+  }, [isGameStarted, winner]);
+
+  // The displayed seconds. Derived on every render from the server's deadline and
+  // the local clock — never stored, so it cannot drift from the deadline it is
+  // supposed to represent. `null` means "no authoritative deadline yet", which
+  // the label renders as a placeholder rather than inventing a countdown.
+  const turnTimeLeft =
+    turnDeadline === null ? null : Math.max(0, Math.round((turnDeadline - clockNow) / 1000));
 
   // NOTE: there is deliberately NO client-side timeout handler anymore. Expiry
   // is enforced server-side; the server eliminates the idle player and sends
@@ -2247,9 +2749,10 @@ export default function GameBoard() {
     );
     setPropertyOwnership((prev) => ({ ...prev, [tile.id]: currentPlayer.id }));
     addLog(`${currentPlayer.name} bought ${tile.name} for -${tile.price}`);
-    // Send the real price so the server can enforce affordability (anti-cheat)
-    // instead of trusting an absent value as zero cost.
-    socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: currentPlayer.id, price: cost });
+    // The server does NOT read this price — it charges its own authoritative
+    // price from backend/game/board.js. It is sent only so the broadcast payload
+    // carries the display value for peers.
+    socketRef.current?.emit("property:bought", { tileId: tile.id, playerId: currentPlayer.id, actionId: newActionId() });
     setActiveModal(null);
   };
 
@@ -2387,7 +2890,7 @@ export default function GameBoard() {
 
     const acceptedTrade: TradeProposal = { ...trade, status: "accepted" };
     setTrades((prev) => prev.map((t) => (t.id === tradeId ? acceptedTrade : t)));
-    socketRef.current?.emit("trade:accepted", { trade: acceptedTrade });
+    socketRef.current?.emit("trade:accepted", { trade: acceptedTrade, actionId: newActionId() });
     addLog(`🎉 Trade completed between ${p1.name} and ${p2.name}!`);
     setActiveTradeModal(null);
   };
@@ -2477,32 +2980,50 @@ export default function GameBoard() {
     addLog(`🔨 AUCTION STARTED for ${tile.name}! Bidding starts at $2.`);
   };
 
-  const handlePlaceBid = (increment: number) => {
-    if (!activeAuction || !currentPlayer) return;
+  // Wrapped in useCallback so its identity is stable across renders.
+  //
+  // NOTE: this handler deliberately does NOT touch `socketRef`. It RETURNS the
+  // updated auction for the caller to emit, so the ref read stays in the click
+  // path (the BidButton's own handler) rather than in anything the render body
+  // closes over.
+  //
+  // Dependencies are the individual VALUES the body reads, not the `activeAuction`
+  // / `currentPlayer` objects: those are rebuilt by useMemo on every roster or
+  // auction update, so depending on the objects would rebuild this callback
+  // constantly.
+  const handlePlaceBid = useCallback(
+    (increment: number): AuctionState | null => {
+      if (!activeAuction || !currentPlayer) return null;
+      const { currentBid, highestBidderId, tileId } = activeAuction;
+      const { id: bidderId, name: bidderName, money } = currentPlayer;
 
-    const newBidAmount = activeAuction.currentBid + increment;
+      const newBidAmount = currentBid + increment;
 
-    if (currentPlayer.money < newBidAmount) {
-      addLog(`⚠️ You don't have $${newBidAmount.toLocaleString()} to bid.`);
-      return;
-    }
+      if (money < newBidAmount) {
+        addLog(`⚠️ You don't have $${newBidAmount.toLocaleString()} to bid.`);
+        return null;
+      }
 
-    if (activeAuction.highestBidderId === currentPlayer.id) {
-      addLog("⚠️ You are already the highest bidder!");
-      return;
-    }
+      if (highestBidderId === bidderId) {
+        addLog("⚠️ You are already the highest bidder!");
+        return null;
+      }
 
     const updatedAuction: AuctionState = {
       ...activeAuction,
       currentBid: newBidAmount,
-      highestBidderId: currentPlayer.id,
+      highestBidderId: bidderId,
       timeLeft: 15, // Reset timer to 15s on new bid
     };
 
-    setActiveAuction(updatedAuction);
-    socketRef.current?.emit("auction:bid", { auction: updatedAuction });
-    addLog(`🔨 ${currentPlayer.name} bid $${newBidAmount} on ${BOARD_TILES.find((t) => t.id === activeAuction.tileId)?.name || "property"}!`);
-  };
+      setActiveAuction(updatedAuction);
+      addLog(`🔨 ${bidderName} bid $${newBidAmount} on ${BOARD_TILES.find((t) => t.id === tileId)?.name || "property"}!`);
+      // Hand the updated auction back so the CALLER emits it. Keeping the socket
+      // out of this function is what keeps it safe to reference from render.
+      return updatedAuction;
+    },
+    [activeAuction, currentPlayer, addLog]
+  );
 
   const handlePassAuction = () => {
     if (!activeAuction || !currentPlayer) return;
@@ -2526,6 +3047,18 @@ export default function GameBoard() {
       handleEndAuction(updatedAuction);
     }
   };
+
+  // Place a bid and tell the server. Defined with useCallback (not inline in the
+  // JSX) so the ref read happens in a stable handler rather than in a closure
+  // created during render — React forbids reading a ref while rendering.
+  const handleBidClick = useCallback(
+    (increment: number) => {
+      const updated = handlePlaceBid(increment);
+      if (updated) socketRef.current?.emit("auction:bid", { auction: updated });
+      return updated;
+    },
+    [handlePlaceBid]
+  );
 
   // A client can end an auction ONLY in the sane short-circuit case where the
   // last rival passed (see handlePassAuction). It just asks the server to end it;
@@ -2563,51 +3096,30 @@ export default function GameBoard() {
     );
     setPropertyHouses((prev) => ({ ...prev, [tileId]: currentHouses + 1 }));
     addLog(`${currentPlayer.name} built on ${tile.name} (-$${cost})`);
-    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1, playerId: currentPlayer.id, cost });
+    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1, playerId: currentPlayer.id, actionId: newActionId() });
   };
 
-  // Sells the WHOLE tile (property or utility) back to the bank for half its
-  // original purchase price - distinct from downgradeHouse, which only sells
-  // a single house/hotel level off a property that stays owned.
+  // Requests only: the server calculates the refund and broadcasts the resulting
+  // balance, ownership and house count. No optimistic local economy changes.
   const sellPropertyEntirely = (tileId: number) => {
-    if (!currentPlayer) return;
+    if (!currentPlayer || propertyOwnership[tileId] !== currentPlayer.id) return;
     const tile = BOARD_TILES.find((t) => t.id === tileId);
-    if (!tile || propertyOwnership[tileId] !== currentPlayer.id) return;
-
-    const price = Math.abs(parsePrice(tile.price) || 0);
-    const refund = Math.floor(price / 2);
-
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === currentPlayer.id ? { ...p, money: p.money + refund } : p))
-    );
-    setPropertyOwnership((prev) => {
-      const next = { ...prev };
-      delete next[tileId];
-      return next;
-    });
-    setPropertyHouses((prev) => ({ ...prev, [tileId]: 0 }));
-    addLog(`${currentPlayer.name} sold ${tile.name} back to the bank (+$${refund})`);
-    setActiveModal(null);
+    socketRef.current?.emit("property:sold", { tileId, playerId: currentPlayer.id, actionId: newActionId() },
+      (res: { ok: boolean; refund?: number; error?: string }) => {
+        if (!res?.ok) { addLog(res?.error || "Could not sell property."); return; }
+        addLog(`${currentPlayer.name} sold ${tile?.name || "property"} back to the bank (+$${res.refund})`);
+        setActiveModal(null);
+      });
   };
 
   const downgradeHouse = (tileId: number) => {
-    if (!currentPlayer) return;
+    if (!currentPlayer || propertyOwnership[tileId] !== currentPlayer.id || !(propertyHouses[tileId] > 0)) return;
     const tile = BOARD_TILES.find((t) => t.id === tileId);
-    if (!tile || propertyOwnership[tileId] !== currentPlayer.id) return;
-
-    const currentHouses = propertyHouses[tileId] || 0;
-    if (currentHouses <= 0) return;
-
-    // Refund 50% of whatever it actually cost to build the level being
-    // removed - a hotel (level 5) was built with hotelCost, everything
-    // below that with houseCost.
-    const costOfCurrentLevel = currentHouses === 5 ? tile.hotelCost || 200 : tile.houseCost || 100;
-    const refund = Math.floor(costOfCurrentLevel / 2);
-    setPropertyHouses((prev) => ({ ...prev, [tileId]: currentHouses - 1 }));
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === currentPlayer.id ? { ...p, money: p.money + refund } : p))
-    );
-    addLog(`${currentPlayer.name} sold a house on ${tile.name} (+$${refund})`);
+    socketRef.current?.emit("house:sold", { tileId, playerId: currentPlayer.id, actionId: newActionId() },
+      (res: { ok: boolean; refund?: number; error?: string }) => {
+        if (!res?.ok) { addLog(res?.error || "Could not sell house."); return; }
+        addLog(`${currentPlayer.name} sold a house on ${tile?.name || "property"} (+$${res.refund})`);
+      });
   };
 
   const getTilePosition = (index: number) => {
@@ -2787,7 +3299,7 @@ export default function GameBoard() {
           without it every game event would be dropped. */}
       {!roomId && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#050508]/95 backdrop-blur-sm">
-          <div className="w-[46vmin] max-w-[92vw] rounded-[1.8vmin] border-white/12 bg-[#0f0c16] p-[3vmin] shadow-[0_0_6vmin_rgba(139,92,246,0.25)]">
+          <div className="w-[46vmin] max-w-[92vw] rounded-[1.8vmin] border border-purple-400/25 bg-[#0f0c16] p-[3vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.55),0_0_12vmin_rgba(139,92,246,0.3)]">
             <h1 className="text-center text-[3vmin] font-black uppercase tracking-widest text-white">
               Monopoly
             </h1>
@@ -2799,8 +3311,8 @@ export default function GameBoard() {
             <div className="mt-[2vmin] flex items-center justify-center gap-[0.7vmin]">
               <div
                 className={`h-[1vmin] w-[1vmin] rounded-full ${isConnected
-                    ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
-                    : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
+                    ? "animate-pulse bg-emerald-400 shadow-[0_0_1.6vmin_rgba(52,211,153,1),0_0_3.4vmin_rgba(52,211,153,0.7)]"
+                    : "bg-red-500 shadow-[0_0_1.6vmin_rgba(239,68,68,1),0_0_3.4vmin_rgba(239,68,68,0.7)]"
                   }`}
               />
               <span className="text-[1.15vmin] font-bold text-gray-300">{connectionLabel}</span>
@@ -2828,7 +3340,7 @@ export default function GameBoard() {
                 placeholder="YOUR NAME"
                 maxLength={PLAYER_NAME_MAX}
                 autoComplete="off"
-                className="w-full rounded-[1vmin] border-[0.2vmin] border-purple-400/50 bg-black/50 px-[1.4vmin] py-[1.2vmin] text-center text-[1.5vmin] font-black text-white placeholder:text-[1.2vmin] placeholder:font-bold placeholder:tracking-normal placeholder:text-gray-600 focus:border-purple-300/80 focus:outline-none"
+                className="w-full rounded-[1vmin] border-[0.2vmin] border-purple-400/50 bg-black/50 px-[1.4vmin] py-[1.2vmin] text-center text-[1.5vmin] font-black text-white shadow-[0_0_2.2vmin_rgba(168,85,247,0.45)] placeholder:text-[1.2vmin] placeholder:font-bold placeholder:tracking-normal placeholder:text-gray-600 focus:border-purple-300/80 focus:shadow-[0_0_3.4vmin_rgba(168,85,247,0.8)] focus:outline-none"
               />
               {!entryName.trim() && (
                 <span className="text-center text-[1vmin] font-bold uppercase tracking-wider text-amber-300/80">
@@ -2840,7 +3352,7 @@ export default function GameBoard() {
             <button
               onClick={handleCreateRoom}
               disabled={!isConnected || lobbyBusy || !entryName.trim()}
-              className="mt-[2vmin] w-full rounded-[1vmin] border-[0.2vmin] border-emerald-400/60 bg-gradient-to-r from-emerald-500/30 to-teal-500/20 px-[2vmin] py-[1.3vmin] text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.8vmin_rgba(16,185,129,0.4)] transition-all hover:scale-[1.02] hover:from-emerald-500/50 hover:to-teal-500/40 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+              className="mt-[2vmin] w-full rounded-[1vmin] border-[0.2vmin] border-emerald-400/60 bg-gradient-to-r from-emerald-500/30 to-teal-500/20 px-[2vmin] py-[1.3vmin] text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2.4vmin_rgba(16,185,129,0.75),0_0_6vmin_rgba(16,185,129,0.4)] transition-all hover:scale-[1.02] hover:from-emerald-500/50 hover:to-teal-500/40 hover:shadow-[0_0_3.2vmin_rgba(16,185,129,0.95),0_0_9vmin_rgba(16,185,129,0.55)] disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
             >
               Create a Room
             </button>
@@ -2862,7 +3374,7 @@ export default function GameBoard() {
               <button
                 type="submit"
                 disabled={!isConnected || lobbyBusy || !joinCode.trim() || !entryName.trim()}
-                className="shrink-0 rounded-[1vmin] border-[0.2vmin] border-cyan-400/60 bg-cyan-500/20 px-[2vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wide text-cyan-100 transition-all hover:scale-[1.02] hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                className="shrink-0 rounded-[1vmin] border-[0.2vmin] border-cyan-400/60 bg-cyan-500/20 px-[2vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wide text-cyan-100 shadow-[0_0_2.2vmin_rgba(34,211,238,0.7),0_0_5.5vmin_rgba(34,211,238,0.35)] transition-all hover:scale-[1.02] hover:bg-cyan-500/35 hover:shadow-[0_0_3vmin_rgba(34,211,238,0.9),0_0_8vmin_rgba(34,211,238,0.5)] disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
               >
                 Join
               </button>
@@ -3010,7 +3522,7 @@ export default function GameBoard() {
             if (myProperties.length === 0) {
               return (
                 <p className="mt-[1vmin] px-[0.3vmin] text-[1vmin] leading-snug text-gray-500">
-                  You don't own any properties yet. Buy one when you land on it!
+                  You don&apos;t own any properties yet. Buy one when you land on it!
                 </p>
               );
             }
@@ -3466,14 +3978,18 @@ export default function GameBoard() {
                 }
               >
                 <span
-                  className={`pointer-events-auto font-mono text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft <= 10
+                  className={`pointer-events-auto font-mono text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
                       ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
-                      : isGameStarted && turnTimeLeft <= 30
+                      : isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 30
                         ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
                         : "text-yellow-400 drop-shadow-[0_0_1.4vmin_rgba(250,204,21,0.6)]"
                     }`}
                 >
-                  {formatTurnTime(turnTimeLeft)}
+                  {/* A null deadline means the server has not armed a clock yet
+                      (pre-game). Show a dash rather than a number: any figure we
+                      invented here would be a countdown the server never agreed
+                      to. */}
+                  {turnTimeLeft === null ? "--:--" : formatTurnTime(turnTimeLeft)}
                 </span>
               </div>
 
@@ -3694,14 +4210,15 @@ export default function GameBoard() {
                     {getTileOwner(activeModal.id)?.id === currentPlayer?.id &&
                       (() => {
                         const isUpgradable = PROPERTY_TYPES.has(activeModal.type);
-                        const sellRefund = Math.floor(Math.abs(parsePrice(activeModal.price) || 0) / 2);
                         const currentHouses = propertyHouses[activeModal.id] || 0;
+                        const sellRefund = Math.floor(Math.abs(parsePrice(activeModal.price) || 0) / 2) +
+                          (PROPERTY_TYPES.has(activeModal.type)
+                            ? (currentHouses === 5 ? Math.floor((activeModal.hotelCost ?? 200) / 2) : 0) +
+                              Math.min(currentHouses, 4) * Math.floor((activeModal.houseCost ?? 100) / 2)
+                            : 0);
                         const maxedOut = currentHouses >= 5;
                         const upgradeCost = currentHouses === 4 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
-                        // Degrading always refunds 50% of the SAME cost that was
-                        // paid to build the level currently being removed - e.g.
-                        // upgrade to a hotel for $100, degrade it and get $50
-                        // back (downgradeHouse already implements this refund).
+                        // Display estimate only; the server determines the actual refund.
                         const degradeCost = currentHouses === 5 ? activeModal.hotelCost ?? 200 : activeModal.houseCost ?? 100;
                         const degradeRefund = Math.floor(degradeCost / 2);
                         const canDegrade = currentHouses > 0;
@@ -4135,7 +4652,7 @@ export default function GameBoard() {
                               <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
                                 <span className="text-[2.4vmin] opacity-70">🏚️</span>
                                 <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
-                                <span className="text-[1.1vmin] text-gray-400">You don't own any properties to give in this trade</span>
+                                <span className="text-[1.1vmin] text-gray-400">You don&apos;t own any properties to give in this trade</span>
                               </div>
                             ) : (
                               initiatorProps.map((tile) => {
@@ -4231,7 +4748,7 @@ export default function GameBoard() {
                                   <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
                                     <span className="text-[2.4vmin] opacity-70">🏚️</span>
                                     <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
-                                    <span className="text-[1.1vmin] text-gray-400">{targetPlayer.name} doesn't own any properties to give</span>
+                                    <span className="text-[1.1vmin] text-gray-400">{targetPlayer.name} doesn&apos;t own any properties to give</span>
                                   </div>
                                 ) : (
                                   targetProps.map((tile) => {
@@ -4661,6 +5178,10 @@ export default function GameBoard() {
                           className="flex items-center gap-[0.6vmin]"
                           onClick={(e) => e.stopPropagation()}
                         >
+                          {/* Plain white name text — no input chrome. The seat is
+                              still editable before the game starts (same
+                              player:set-name commit on blur), it just doesn't
+                              advertise itself with a purple box or a lock badge. */}
                           <input
                             type="text"
                             value={player.name}
@@ -4674,29 +5195,13 @@ export default function GameBoard() {
                             disabled={lockForThisSeat || !isSelf}
                             placeholder={`Player ${player.id}`}
                             maxLength={PLAYER_NAME_MAX}
-                            className="w-[16.5vmin] rounded-[0.9vmin] border-[0.25vmin] border-purple-400/50 bg-[#160f26] px-[1.1vmin] py-[0.5vmin] text-[1.75vmin] font-black text-white placeholder:text-gray-400/90 placeholder:font-black placeholder:text-[1.65vmin] shadow-inner shadow-black/60 transition-all focus:border-purple-300 focus:bg-[#231540] focus:shadow-[0_0_1.4vmin_rgba(168,85,247,0.6)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                            className="w-[16.5vmin] cursor-pointer rounded-[0.4vmin] border-0 bg-transparent p-0 text-[1.75vmin] font-black text-white placeholder:font-black placeholder:text-[1.65vmin] placeholder:text-gray-400/90 focus:outline-none disabled:cursor-default"
                             title={nameLocked ? "Your name is locked once you enter the room" : "Click to edit player name"}
                           />
-                          {/* The icon reflects THIS seat's own state. A vacant
-                              placeholder seat has no name to edit (so no pencil),
-                              and only a real player who has entered shows a lock. */}
-                          {(player.hasSeat || player.id === myPlayerId) && (
-                            <span
-                              className="text-[1.4vmin] text-purple-300 drop-shadow"
-                              title={!player.hasSeat ? "Vacant seat" : lockForThisSeat ? "Name locked — you've entered the room" : "Editable before game start"}
-                            >
-                              {!player.hasSeat ? "⏳" : lockForThisSeat ? "🔒" : "✏️"}
-                            </span>
-                          )}
                         </div>
                       ) : (
                         <span
-                          className={`text-[1.8vmin] font-black tracking-wide drop-shadow-[0_0.2vmin_0.4vmin_rgba(0,0,0,0.9)] ${isVoteKickOpen && isSelf
-                              ? "text-gray-400"
-                              : player.isCurrentPlayer
-                                ? "text-white"
-                                : "text-gray-100"
-                            }`}
+                          className={`text-[1.8vmin] font-black tracking-wide text-white drop-shadow-[0_0.2vmin_0.4vmin_rgba(0,0,0,0.9)] ${isVoteKickOpen && isSelf ? "text-gray-400" : ""}`}
                         >
                           {player.name || `Player ${player.id}`}
                         </span>
@@ -5610,31 +6115,17 @@ export default function GameBoard() {
                           Place a Bid (Shows Resulting Total Bid):
                         </span>
                         <div className="grid grid-cols-3 gap-[1vmin]">
-                          {[2, 10, 100].map((inc) => {
-                            const resultingBid = activeAuction.currentBid + inc;
-                            const canAfford = currentPlayer && (currentPlayer.money ?? 0) >= resultingBid;
-                            const isDisabled = !currentPlayer || !canAfford || hasCurrentPassed || isCurrentHighest;
-
-                            return (
-                              <button
-                                key={inc}
-                                onClick={() => handlePlaceBid(inc)}
-                                disabled={isDisabled}
-                                className={`flex flex-col items-center justify-center rounded-[1.2vmin] border-2 py-[1.4vmin] px-[1vmin] transition-all cursor-pointer ${
-                                  isCurrentHighest
-                                    ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300 opacity-60 cursor-not-allowed"
-                                    : isDisabled
-                                    ? "border-white/10 bg-white/5 text-gray-500 opacity-40 cursor-not-allowed"
-                                    : "border-violet-400/80 bg-gradient-to-br from-violet-600 via-indigo-600 to-purple-700 text-white shadow-[0_0_1.6vmin_rgba(139,92,246,0.55)] hover:scale-[1.04] hover:brightness-110 active:scale-95"
-                                }`}
-                              >
-                                <span className="text-[1.8vmin] font-black">+${inc}</span>
-                                <span className="mt-[0.2vmin] font-mono text-[1.35vmin] font-bold text-indigo-200">
-                                  (${resultingBid.toLocaleString()})
-                                </span>
-                              </button>
-                            );
-                          })}
+                          {[2, 10, 100].map((inc) => (
+                            <BidButton
+                              key={inc}
+                              increment={inc}
+                              currentBid={activeAuction.currentBid}
+                              money={currentPlayer?.money ?? 0}
+                              hasCurrentPassed={Boolean(hasCurrentPassed)}
+                              isCurrentHighest={Boolean(isCurrentHighest)}
+                              onBid={handleBidClick}
+                            />
+                          ))}
                         </div>
                       </div>
 

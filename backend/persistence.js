@@ -17,6 +17,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const MAX_PLAYERS_DEFAULT = 6;
+
 // Where room files live. Overridable so tests can point at a throwaway dir.
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 
@@ -44,6 +46,12 @@ function serializeRoom(room) {
     propertyHouses: room.propertyHouses,
     currentTurnPlayerId: room.currentTurnPlayerId,
     turnSeeded: room.turnSeeded,
+    // The turn clock, so a restart can resume the SAME turn rather than silently
+    // granting a fresh full window (which would let a restart reset the timeout).
+    // A deadline already in the past on load is treated as expired by the
+    // rehydrate path, which forces the turn forward instead of stalling.
+    turnStartedAt: room.turnStartedAt ?? null,
+    turnDeadline: room.turnDeadline ?? null,
     // Whether the game has begun. Durable because it gates name/colour editing:
     // losing it on restart would let a mid-game client rename itself.
     isGameStarted: room.isGameStarted === true,
@@ -55,6 +63,8 @@ function serializeRoom(room) {
     winnerReason: room.winnerReason ?? null,
     trades: room.trades,
     activeAuction: room.activeAuction,
+    pot: room.pot ?? 0,
+    restHousePot: room.pot ?? 0,
     createdAt: room.createdAt,
     // Bumped on every write. Useful for tests/debugging to prove a write landed.
     savedAt: Date.now()

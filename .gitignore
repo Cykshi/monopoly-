@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env*.example
+
+# Build & output artifacts
+.next/
+out/
+build/
+dist/
+coverage/
+
+# Logs
+*.log
+*.err
+*.err.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Project-specific scratch & test data
+backend/.test-data/
+_tmp*
+dbg*
+qa-*
+backend/tmp-*
+perm-test.mjs
+probe.mjs
+reload-test.mjs
+reload2.mjs
+end-session-test.mjs
+_audit_tree.txt
+
+# OS & Editor temporary files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+.idea/
+*.sublime-project
+*.sublime-workspace

@@ -60,6 +60,9 @@ export interface PlayerRestoreState {
   // the correct current player and countdown from server truth.
   currentTurnPlayerId?: number | null;
   turnDeadline?: number | null;
+  // Authoritative pot value stored on the server.
+  pot?: number;
+  restHousePot?: number;
   // Whether the server considers the game started. Durable server fact, used to
   // lock name/colour editing; absent on older payloads, hence optional.
   isGameStarted?: boolean;
@@ -87,6 +90,8 @@ export interface ComputedRestoredState<
   // leave the caller's current values untouched).
   currentTurnPlayerId: number | null;
   turnDeadline: number | null;
+  pot: number | null;
+  restHousePot: number | null;
   isGameStarted: boolean;
   logMessage: string;
 }
@@ -117,6 +122,8 @@ export function computeRestoredState<
     myPlayerId: typeof p.me?.id === "number" ? p.me.id : null,
     currentTurnPlayerId: typeof p.currentTurnPlayerId === "number" ? p.currentTurnPlayerId : null,
     turnDeadline: typeof p.turnDeadline === "number" ? p.turnDeadline : null,
+    pot: typeof p.pot === "number" ? p.pot : (typeof p.restHousePot === "number" ? p.restHousePot : null),
+    restHousePot: typeof p.restHousePot === "number" ? p.restHousePot : (typeof p.pot === "number" ? p.pot : null),
     // A restored payload IS by definition a started game (that's why there was
     // state to restore), so default to true when the server didn't say.
     isGameStarted: p.isGameStarted ?? true,

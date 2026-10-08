@@ -44,10 +44,61 @@ const emitAck = (socket, event, payload, ms = 2500) =>
     setTimeout(() => resolve(null), ms);
   });
 
+// Every mutating event now requires a unique actionId (server-side replay
+// protection: a replayed frame is dropped, not re-applied). Tests therefore
+// have to send one, exactly like the real client does.
+let actionCounter = 0;
+const withAction = (payload) => ({
+  ...payload,
+  actionId: `t-${Date.now()}-${++actionCounter}`,
+});
+const emitAction = (socket, event, payload, ms = 2500) =>
+  emitAck(socket, event, withAction(payload), ms);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ===== CLEANUP: EVERY SOCKET IS TRACKED AND CLOSED ON BOTH PATHS =====
+// This suite opens a lot of sockets (rejoin stand-ins, grace-period clients) and
+// several of them are deliberately disconnected mid-test. Any socket still open
+// when the suite throws would linger on the shared test server and leak into the
+// next suite. Registering each one lets cleanup() close the survivors from the
+// catch block as well as from the success path.
+const sockets = [];
+const track = (s) => { sockets.push(s); return s; };
+
+let cleanupDone = false;
+const cleanup = async (roomId) => {
+  if (cleanupDone) return;
+  cleanupDone = true;
+  const alive = sockets.filter((s) => s && s.connected);
+  if (roomId && alive.length) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 750);
+      alive[0].once('room:left', () => { clearTimeout(t); resolve(); });
+      alive[0].emit('room:leave');
+    });
+  }
+  for (const s of sockets) {
+    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch { /* already gone */ }
+  }
+  await sleep(250);
+};
+
+// The server's own room snapshot, via a sync round trip. Movement is now
+// server-derived, so a test that needs a player's position must ASK for it —
+// the move request no longer carries one.
+const syncNow = (socket) =>
+  new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), 1500);
+    socket.once('game:sync', (s) => {
+      clearTimeout(t);
+      resolve(s);
+    });
+    socket.emit('game:request-sync', {});
+  });
+
 (async () => {
-  const A = await connect();
+  const A = track(await connect());
   console.log(`\nConnected client A to ${URL}\n`);
 
   // ---- A creates a room; expect a token ----
@@ -64,7 +115,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('room:joined marks host via token', !!(joinedA && joinedA.data && joinedA.data.isHost === true));
 
   // ---- A second socket joins as guest; expect its OWN token ----
-  const B = await connect();
+  const B = track(await connect());
   const joinedBPromise = waitFor(B, 'room:joined');
   const ackB = await emitAck(B, 'room:join', { roomId: codeA });
   const tokenB = ackB && ackB.token;
@@ -74,7 +125,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('guest room:joined carries its token', !!(joinedB && joinedB.data && joinedB.data.token === tokenB));
 
   // ---- C reconnects with A's token (simulates a page refresh) ----
-  const C = await connect();
+  const C = track(await connect());
   // Register the listener BEFORE emitting, or we race the event.
   const rejoinedEvent = waitFor(C, 'room:joined');
   const rejoinC = await emitAck(C, 'player:rejoin', { roomId: codeA, token: tokenA });
@@ -86,38 +137,127 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // ---- STATE RESTORE: mutate the room via A, then rejoin as a fresh socket
   //      with A's token and confirm the payload reflects the live state. ----
-  // A buys tile 1 and tile 3, builds 2 houses on tile 3, moves + banks up.
-  // Now that the server validates purchases, A must be STANDING on each tile it
-  // buys: move onto the tile, then buy it.
-  await emitAck(A, 'player:moved', { playerId: 1, position: 1, money: 1750 });
-  await emitAck(A, 'property:bought', { tileId: 1, playerId: 1, price: 0 });
-  await emitAck(A, 'player:moved', { playerId: 1, position: 3, money: 1750 });
-  await emitAck(A, 'property:bought', { tileId: 3, playerId: 1, price: 0 });
-  await emitAck(A, 'house:upgraded', { tileId: 3, houses: 2, playerId: 1 });
-  A.emit('player:moved', { playerId: 1, position: 12, money: 1750 });
+  // A buys two ownable tiles, builds 3 houses on the second, moves
+  // and banks up. Now that the server validates purchases, A must be STANDING on
+  // each tile it buys: move onto the tile, then buy it.
+  // Tile ids here are REAL purchasable properties. Tile 3 is TREASURE and tile 1
+  // is Dhaka: the old code allowed buying ANY square 0..39 (it had no board
+  // table), so this setup used to "own" the TREASURE tile. The server now
+  // consults backend/game/board.js, which correctly refuses corners, cards and
+  // taxes, so the fixture buys Dhaka (1) and Bihar (4) — both genuine properties.
+  // ===== MEANINGFUL STATE, PRODUCED THE ONLY LEGAL WAY =====
+  // Movement is server-derived: the client rolls (the server picks the dice) and
+  // then asks to move (the server computes the destination from that roll). The
+  // fixture walks player 1 onto tiles 1 and 4 by rolling, because naming a
+  // position is no longer possible.
+  const rollAndMove = async (socket, playerId) => {
+    await emitAction(socket, 'player:rolled', { playerId });
+    return emitAction(socket, 'player:moved', { playerId });
+  };
+
+  // The server's own position for a player, read via a sync round trip.
+  const serverPos = async (socket, playerId) => {
+    const s = await syncNow(socket);
+    const p = s && s.players && s.players.find((x) => x.id === playerId);
+    return p ? p.position : null;
+  };
+  // Walk player 1 onto `target` by rolling until it lands there — the only way to
+  // move now that the client cannot name a position.
+  //
+  // ===== WHY THIS ENDS THE TURN EACH STEP =====
+  // The test server runs a SHORT turn clock (TURN_TIME_LIMIT_MS=1500) so the
+  // timeout suite is fast. A long walk of 200 rolls would blow through that clock
+  // and the server would correctly ELIMINATE the player mid-walk (PLAYER_OUT).
+  // So each roll+move is followed by a turn:ended, which resets the clock, and the
+  // turn is handed straight back. The walk is therefore many short turns rather
+  // than one long one.
+  const walkToAny = async (socket, playerId, targets, otherSocket, otherId, maxRolls = 400) => {
+    const wanted = Array.isArray(targets) ? targets : [targets];
+    // Make sure it is THIS player's turn before walking. A purchase (or any other
+    // turn action) consumes the turn, so a second walk in the same fixture would
+    // otherwise be refused for every roll.
+    if (otherSocket && otherId !== undefined) {
+      await emitAction(otherSocket, 'turn:ended', { playerId: otherId });
+    }
+    for (let i = 0; i < maxRolls; i++) {
+      const here = await serverPos(socket, playerId);
+      if (wanted.includes(here)) return here;
+      await rollAndMove(socket, playerId);
+      // Re-check AFTER moving: the roll may have landed on the target.
+      const landed = await serverPos(socket, playerId);
+      if (wanted.includes(landed)) return landed;
+      await emitAction(socket, 'turn:ended', { playerId });
+      if (otherSocket && otherId !== undefined) {
+        await emitAction(otherSocket, 'turn:ended', { playerId: otherId });
+      }
+      await sleep(5);
+    }
+    const finalPos = await serverPos(socket, playerId);
+    return wanted.includes(finalPos) ? finalPos : null;
+  };
+
+  // Player 1 must own TWO ownable tiles. Which two is irrelevant to what this
+  // suite proves (state survives a restart), so we buy the first two ownable tiles
+  // we happen to land on rather than hunting fixed ids — a 2-12 step roll on a
+  // 40-tile board makes hitting one specific low tile unreliable, but landing on
+  // ANY ownable tile is quick.
+  // ===== PROPERTIES ONLY =====
+  // Utility tiles (airport/electricity/internet) are OWNABLE but cannot be built
+  // on — the board gives them no houseCost. This fixture builds 3 houses below, so
+  // it must own a genuine PROPERTY or the build is correctly refused with
+  // BAD_BUILD and the restored house count comes back 0.
+  const OWNABLE = [1, 2, 4, 6, 8, 11, 12, 13, 16, 17, 19, 21, 22, 26, 27, 29, 31, 32, 33, 36, 39];
+  const owned = [];
+  for (let i = 0; i < 12 && owned.length < 2; i++) {
+    // Exclude tiles we already own: the walker may still be STANDING on the tile
+    // it just bought, and walkToAny would otherwise return it immediately, so the
+    // loop would never collect a second distinct tile.
+    const candidates = OWNABLE.filter((t) => !owned.includes(t));
+    const tileId = await walkToAny(A, 1, candidates, B, 2);
+    if (tileId === null) break;
+    const res = await emitAction(A, 'property:bought', { tileId, playerId: 1, price: 0 });
+    if (res && res.ok) owned.push(tileId);
+  }
+  check('fixture: player 1 bought two ownable tiles by rolling', owned.length === 2,
+    `owned=${JSON.stringify(owned)} pos=${await serverPos(A, 1)}`);
+  // The build now costs money, so assert it actually applied — otherwise the
+  // restored house-count check below fails with a confusing "houses=0".
+  const buildAck = await emitAction(A, 'house:upgraded', { tileId: owned[1], houses: 3, playerId: 1 });
+  check('fixture: three houses were built on the second owned tile',
+    !!(buildAck && buildAck.ok), `tile=${owned[1]} ack=${JSON.stringify(buildAck)}`);
+
+  // One final move so the persisted position is a real, derived value.
+  await rollAndMove(A, 1);
+
+  // Read the balance the SERVER ended up with rather than assuming it: which
+  // tiles we bought (and therefore what they cost) is not fixed.
+  const expectedPosition = await serverPos(A, 1);
+  const expectedMoney = (await syncNow(A)).players.find((p) => p.id === 1).money;
   await sleep(250);
 
   // G rejoins fresh with A's token -> should get A's state back.
   // Register the room:joined listener BEFORE emitting, or we race the event.
-  const G = await connect();
+  const G = track(await connect());
   const rejoinedGEvent = waitFor(G, 'room:joined');
   const rejoinG = await emitAck(G, 'player:rejoin', { roomId: codeA, token: tokenA });
   check('rejoin ack carries playerState', !!(rejoinG && rejoinG.ok && rejoinG.playerState),
     rejoinG && rejoinG.playerState ? 'present' : 'MISSING');
 
   const ps = rejoinG && rejoinG.playerState;
-  check('restored money matches live state ($1750)', !!(ps && ps.me && ps.me.money === 1750),
-    ps && ps.me ? `money=${ps.me.money}` : 'no me');
-  check('restored position matches live state (12)', !!(ps && ps.me && ps.me.position === 12),
-    ps && ps.me ? `position=${ps.me.position}` : 'no me');
-  check('restored owned tiles = [1, 3]',
+  check(`restored money matches live state ($${expectedMoney})`,
+    !!(ps && ps.me && ps.me.money === expectedMoney),
+    ps && ps.me ? `money=${ps.me.money} expected=${expectedMoney}` : 'no me');
+  check(`restored position matches live state (${expectedPosition})`,
+    !!(ps && ps.me && ps.me.position === expectedPosition),
+    ps && ps.me ? `position=${ps.me.position} expected=${expectedPosition}` : 'no me');
+  check(`restored owned tiles = ${JSON.stringify(owned)}`,
     !!(ps && Array.isArray(ps.ownedPropertyIds) &&
        ps.ownedPropertyIds.length === 2 &&
-       ps.ownedPropertyIds.includes(1) && ps.ownedPropertyIds.includes(3)),
+       owned.every((t) => ps.ownedPropertyIds.includes(t))),
     ps ? JSON.stringify(ps.ownedPropertyIds) : 'no ps');
-  const tile3 = ps && ps.ownedProperties && ps.ownedProperties.find((p) => p.tileId === 3);
-  check('restored house count on tile 3 = 2', !!(tile3 && tile3.houses === 2),
-    tile3 ? `houses=${tile3.houses}` : 'tile 3 not owned');
+  const houseTile = ps && ps.ownedProperties && ps.ownedProperties.find((p) => p.tileId === owned[1]);
+  check(`restored house count on tile ${owned[1]} = 3`, !!(houseTile && houseTile.houses === 3),
+    houseTile ? `houses=${houseTile.houses}` : `tile ${owned[1]} not owned`);
   const gEvent = await rejoinedGEvent; // must await — rejoinedGEvent is a promise
   check('restored room:joined ALSO carries playerState',
     !!(gEvent && gEvent.data && gEvent.data.playerState),
@@ -144,7 +284,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   });
   await sleep(200);
 
-  const H = await connect();
+  const H = track(await connect());
   const rejoinH = await emitAck(H, 'player:rejoin', { roomId: codeA, token: tokenA });
   const psH = rejoinH && rejoinH.playerState;
   check('rejoin returns the trade this player is party to',
@@ -152,7 +292,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     psH ? `${psH.trades.length} trade(s)` : 'no ps');
 
   // The trade's target (Player 2) IS a party, so it SHOULD come back for B...
-  const I = await connect();
+  const I = track(await connect());
   const rejoinI = await emitAck(I, 'player:rejoin', { roomId: codeA, token: tokenB });
   const psI = rejoinI && rejoinI.playerState;
   check('trade TARGET (Player 2) DOES see the trade',
@@ -160,10 +300,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     psI ? `${psI.trades.length} trade(s)` : 'no ps');
 
   // ...but a brand-new, uninvolved player must NOT see it as their own.
-  const J = await connect();
+  const J = track(await connect());
   const ackJ = await emitAck(J, 'room:join', { roomId: codeA });
   const tokenJ = ackJ && ackJ.token;
-  const J2 = await connect();
+  const J2 = track(await connect());
   const rejoinJ = await emitAck(J2, 'player:rejoin', { roomId: codeA, token: tokenJ });
   const psJ = rejoinJ && rejoinJ.playerState;
   check('uninvolved player does NOT get someone else\'s trade',
@@ -176,17 +316,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   [G, H, I].forEach((s) => s.disconnect());
 
   // ---- D submits a bogus token -> must be rejected ----
-  const D = await connect();
+  const D = track(await connect());
   const rejoinD = await emitAck(D, 'player:rejoin', { roomId: codeA, token: 'not-a-real-token' });
   check('bogus token is REJECTED', !!(rejoinD && rejoinD.ok === false), JSON.stringify(rejoinD));
 
   // ---- E submits a valid token but for the WRONG room -> rejected ----
-  const E = await connect();
+  const E = track(await connect());
   const rejoinE = await emitAck(E, 'player:rejoin', { roomId: 'ZZ', token: tokenB });
   check('token for a different room is REJECTED', !!(rejoinE && rejoinE.ok === false), JSON.stringify(rejoinE));
 
   // ---- F: an unknown room code is a clean rejection (falls back to join) ----
-  const F = await connect();
+  const F = track(await connect());
   const rejoinF = await emitAck(F, 'player:rejoin', { roomId: 'ZZ', token: tokenA });
   check('unknown room is REJECTED cleanly', !!(rejoinF && rejoinF.ok === false), JSON.stringify(rejoinF));
 
@@ -200,7 +340,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   if (graceTtlMs > 0) {
     // --- Case 1: lone player refreshes; rejoin INSIDE the window succeeds ---
-    const L = await connect();
+    const L = track(await connect());
     const loneCreate = await emitAck(L, 'room:create', {});
     const loneCode = loneCreate.roomId;
     const loneToken = loneCreate.token;
@@ -209,20 +349,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // The only socket in the room disappears (the classic "refresh my own tab").
     L.disconnect();
     await sleep(300); // well within the window
-    const L2 = await connect();
+    const L2 = track(await connect());
     const rejoinL2 = await emitAck(L2, 'player:rejoin', { roomId: loneCode, token: loneToken });
     check('grace: rejoin SUCCEEDS within the window after last socket left',
       !!(rejoinL2 && rejoinL2.ok && rejoinL2.rejoined), JSON.stringify(rejoinL2));
 
     // And the room is genuinely alive again (a second player can join it).
-    const M = await connect();
+    const M = track(await connect());
     const joinM = await emitAck(M, 'room:join', { roomId: loneCode });
     check('grace: room is alive again (fresh join works)', !!(joinM && joinM.ok), JSON.stringify(joinM));
     L2.disconnect();
     M.disconnect();
 
     // --- Case 2: rejoin AFTER the TTL has expired must fail (fall back to join) ---
-    const N = await connect();
+    const N = track(await connect());
     const expireCreate = await emitAck(N, 'room:create', {});
     const expireCode = expireCreate.roomId;
     const expireToken = expireCreate.token;
@@ -232,7 +372,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // Wait past the TTL so the server tears the room down.
     await sleep(graceTtlMs + 800);
 
-    const N2 = await connect();
+    const N2 = track(await connect());
     const rejoinN2 = await emitAck(N2, 'player:rejoin', { roomId: expireCode, token: expireToken });
     check('grace: rejoin FAILS after the TTL expired (falls back to join)',
       !!(rejoinN2 && rejoinN2.ok === false), JSON.stringify(rejoinN2));
@@ -249,8 +389,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   [A, B, C, D, E, F].forEach((s) => s.disconnect());
 
   console.log(`\n${results.length - failed}/${results.length} checks passed`);
+  await cleanup(codeA);
   process.exit(failed === 0 ? 0 : 1);
-})().catch((err) => {
+})().catch(async (err) => {
   console.error('TEST ERROR:', err && err.message);
+  await cleanup();
   process.exit(2);
 });

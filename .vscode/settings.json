@@ -1,5 +1,6 @@
 {
     "chat.tools.terminal.autoApprove": {
         "npm install": true
-    }
+    },
+    "CodeGPT.apiKey": "CodeGPT Plus Beta"
 }

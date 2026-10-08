@@ -33,6 +33,43 @@ function check(name, pass, detail = '') {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ===== CLEANUP: EVERY SOCKET AND EVERY SPAWNED SERVER IS CLOSED ON BOTH PATHS ====
+// This suite spawns its OWN server (and restarts it), so a thrown error is worse
+// here than elsewhere: it would leave a server process listening on the port and
+// its temp data dir behind. `track()` records every socket and `registerServer()`
+// records the live child, so cleanup() can close both from the catch block as
+// well as from the success path.
+const sockets = [];
+const track = (s) => { sockets.push(s); return s; };
+
+let cleanupDone = false;
+let liveServer = null;
+const registerServer = (s) => { liveServer = s; return s; };
+const cleanup = async (roomId) => {
+  if (cleanupDone) return;
+  cleanupDone = true;
+  const alive = sockets.filter((s) => s && s.connected);
+  if (roomId && alive.length) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 750);
+      alive[0].once('room:left', () => { clearTimeout(t); resolve(); });
+      alive[0].emit('room:leave');
+    });
+  }
+  for (const s of sockets) {
+    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch { /* already gone */ }
+  }
+  await sleep(250);
+};
+
+// Kill any server this suite still owns, so a failure cannot leave a listener
+// (or its temp dir) behind.
+const killServer = async () => {
+  if (!liveServer) return;
+  try { await stopServer(liveServer.child); } catch { /* already down */ }
+  liveServer = null;
+};
+
 const connect = (url) =>
   new Promise((resolve, reject) => {
     const s = io(url, { reconnectionAttempts: 1, timeout: 4000 });
@@ -45,6 +82,17 @@ const emitAck = (socket, event, payload, ms = 2500) =>
     socket.emit(event, payload, resolve);
     setTimeout(() => resolve(null), ms);
   });
+
+// Every mutating event now requires a unique actionId (server-side replay
+// protection: a replayed frame is dropped, not re-applied). Tests therefore
+// have to send one, exactly like the real client does.
+let actionCounter = 0;
+const withAction = (payload) => ({
+  ...payload,
+  actionId: `t-${Date.now()}-${++actionCounter}`,
+});
+const emitAction = (socket, event, payload, ms = 2500) =>
+  emitAck(socket, event, withAction(payload), ms);
 
 const fetchJson = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 
@@ -94,17 +142,17 @@ function stopServer(child) {
   const port = 3061;
   console.log(`\nUsing temp DATA_DIR: ${dataDir}\n`);
 
-  let server = await startServer(port, dataDir);
+  let server = registerServer(await startServer(port, dataDir));
   check('round 1: fresh server boots', !!server.url);
 
   // ---- ROUND 1: create state worth persisting ----
-  const A = await connect(server.url);
+  const A = track(await connect(server.url));
   const created = await emitAck(A, 'room:create', {});
   const roomId = created && created.roomId;
   const tokenA = created && created.token;
   check('round 1: room created', !!(created && created.ok && roomId && tokenA));
 
-  const B = await connect(server.url);
+  const B = track(await connect(server.url));
   const bJoin = await emitAck(B, 'room:join', { roomId });
   const tokenB = bJoin && bJoin.token;
   check('round 1: guest joined', !!(bJoin && bJoin.ok && tokenB));
@@ -113,15 +161,124 @@ function stopServer(child) {
   await emitAck(B, 'player:identify', { roomId, token: tokenB, playerId: 2 });
 
   // Meaningful state: move, buy two tiles, build on one, open a trade.
-  await emitAck(A, 'player:moved', { playerId: 1, position: 2, money: 1750 });
-  await emitAck(A, 'property:bought', { tileId: 2, playerId: 1, price: 0 });
-  await emitAck(A, 'player:moved', { playerId: 1, position: 4, money: 1750 });
-  await emitAck(A, 'property:bought', { tileId: 4, playerId: 1, price: 0 });
-  await emitAck(A, 'house:upgraded', { tileId: 4, houses: 3, playerId: 1 });
-  await emitAck(A, 'player:moved', { playerId: 1, position: 17, money: 1650 });
+  //
+  // MOVEMENT IS SERVER-DERIVED. The client can no longer name a destination, so
+  // a move is produced the only legal way: roll (the server picks the dice), then
+  // ask to move (the server computes the destination from that roll). A `money`
+  // field on player:moved was always ignored by the server, so it is not sent —
+  // the balance asserted in round 2 is whatever the server's own purchases left.
+  const rollAndMove = async (socket, playerId) => {
+    await emitAction(socket, 'player:rolled', { playerId });
+    return emitAction(socket, 'player:moved', { playerId });
+  };
+
+  // The server's own room snapshot, via a sync round trip (used to read the
+  // authoritative balance after the fixture's purchases).
+  const syncNow = (socket) =>
+    new Promise((resolve) => {
+      const t = setTimeout(() => resolve(null), 1500);
+      socket.once('game:sync', (s) => {
+        clearTimeout(t);
+        resolve(s);
+      });
+      socket.emit('game:request-sync', {});
+    });
+
+  // Where is the player, per the SERVER? Asked over the wire (game:sync), which
+  // is the same snapshot a client sees — not read from the persisted file, which
+  // is only written on "meaningful state" changes and so lags a plain move.
+  const serverPosition = (socket, playerId) =>
+    new Promise((resolve) => {
+      const t = setTimeout(() => resolve(null), 1500);
+      socket.once('game:sync', (s) => {
+        clearTimeout(t);
+        const p = ((s && s.players) || []).find((x) => x.id === playerId);
+        resolve(p ? p.position : null);
+      });
+      socket.emit('game:request-sync', {});
+    });
+
+  // Walk player 1 onto `target` by rolling until it lands there — the only way to
+  // move now that the client cannot name a position.
+  //
+  // ===== WHY THIS ENDS THE TURN EACH STEP =====
+  // The test server runs a SHORT turn clock (TURN_TIME_LIMIT_MS=1500) so the
+  // timeout suite is fast. A long walk of 200 rolls would blow through that clock
+  // and the server would correctly ELIMINATE the player mid-walk (PLAYER_OUT).
+  // So each roll+move is followed by a turn:ended, which resets the clock, and the
+  // turn is handed straight back.
+  const walkToAny = async (socket, playerId, targets, otherSocket, otherId, maxRolls = 400) => {
+    const wanted = Array.isArray(targets) ? targets : [targets];
+    // Make sure it is THIS player's turn before walking. A purchase (or any other
+    // turn action) consumes the turn, so a second walk in the same fixture would
+    // otherwise be refused for every roll.
+    if (otherSocket && otherId !== undefined) {
+      await emitAction(otherSocket, 'turn:ended', { playerId: otherId });
+    }
+    for (let i = 0; i < maxRolls; i++) {
+      const here = await serverPosition(socket, playerId);
+      if (wanted.includes(here)) return here;
+      await rollAndMove(socket, playerId);
+      // Re-check AFTER moving: the roll may have landed on the target.
+      const landed = await serverPosition(socket, playerId);
+      if (wanted.includes(landed)) return landed;
+      await emitAction(socket, 'turn:ended', { playerId });
+      if (otherSocket && otherId !== undefined) {
+        await emitAction(otherSocket, 'turn:ended', { playerId: otherId });
+      }
+      await sleep(5);
+    }
+    const finalPos = await serverPosition(socket, playerId);
+    return wanted.includes(finalPos) ? finalPos : null;
+  };
+
+  // Player 1 must own TWO ownable tiles. Which two is irrelevant to what this
+  // suite proves (state survives a restart), so we buy the first two ownable tiles
+  // we happen to land on rather than hunting fixed ids — a 2-12 step roll on a
+  // 40-tile board makes hitting one specific low tile unreliable.
+  // ===== PROPERTIES ONLY =====
+  // OWNABLE includes utility tiles (airport/electricity/internet, ids 5/28/12-ish)
+  // which can be BOUGHT but never built on — the board gives them no houseCost.
+  // This fixture goes on to build 3 houses, so it must own a genuine PROPERTY.
+  // Building on a utility is now correctly refused (BAD_BUILD), which is exactly
+  // what the board table says; picking the right tile is the fixture's job.
+  const OWNABLE = [1, 2, 4, 6, 8, 11, 12, 13, 16, 17, 19, 21, 22, 26, 27, 29, 31, 32, 33, 36, 39];
+  const owned = [];
+  let lastBuyError = null;
+  for (let i = 0; i < 12 && owned.length < 2; i++) {
+    // Exclude tiles we already own: the walker may still be STANDING on the tile
+    // it just bought, and walkToAny would otherwise return it immediately, so the
+    // loop would never collect a second distinct tile.
+    const candidates = OWNABLE.filter((t) => !owned.includes(t));
+    const tileId = await walkToAny(A, 1, candidates, B, 2);
+    if (tileId === null) { lastBuyError = 'walk found no ownable property'; break; }
+    const res = await emitAction(A, 'property:bought', { tileId, playerId: 1, price: 0 });
+    if (res && res.ok) owned.push(tileId);
+    else lastBuyError = JSON.stringify(res);
+  }
+  check('fixture: player 1 bought two ownable tiles by rolling', owned.length === 2,
+    `owned=${JSON.stringify(owned)} pos=${await serverPosition(A, 1)} lastError=${lastBuyError}`);
+  // The walk ends by handing the turn to the peer, so take it back before the
+  // build (which is a turn action and would otherwise be rejected).
+  await emitAction(B, 'turn:ended', { playerId: 2 });
+  // ===== THE BUILD IS ASSERTED, NOT IGNORED =====
+  // Building now DEBITS the board's buildCost. Ignoring the ack hid the case where
+  // the build was refused (wrong tile type, or insufficient funds after buying two
+  // tiles), which then failed much later as a puzzling "restored houses = 0".
+  const buildAck = await emitAction(A, 'house:upgraded', { tileId: owned[1], houses: 3, playerId: 1 });
+  check('fixture: three houses were BUILT on the second owned tile',
+    !!(buildAck && buildAck.ok),
+    `tile=${owned[1]} ack=${JSON.stringify(buildAck)}`);
+
+  // One more move so the persisted position is not simply the last landing spot.
+  await rollAndMove(A, 1);
+  const persistedPosition = await serverPosition(A, 1);
+  // Read the balance the SERVER ended up with rather than assuming it: which tiles
+  // were bought (and therefore what they cost) is not fixed.
+  const expectedMoney = (await syncNow(A)).players.find((p) => p.id === 1).money;
 
   const tradeId = 'persist-trade-1';
-  await emitAck(A, 'trade:created', {
+  await emitAction(A, 'trade:created', {
     id: tradeId, initiatorId: 1, targetId: 2,
     initiatorMoney: 100, targetMoney: 0,
     initiatorPropertyIds: [], targetPropertyIds: [],
@@ -135,7 +292,7 @@ function stopServer(child) {
 
   // A SECOND room that will survive the restart but that NOBODY ever rejoins.
   // This is the orphaned-restored-room case: it must not leak forever.
-  const Z = await connect(server.url);
+  const Z = track(await connect(server.url));
   const abandoned = await emitAck(Z, 'room:create', {});
   const abandonedId = abandoned && abandoned.roomId;
   check('round 1: a second (abandoned) room was created', !!(abandoned && abandoned.ok && abandonedId));
@@ -151,7 +308,7 @@ function stopServer(child) {
   await stopServer(server.child);
   check('restart: server A stopped', true);
 
-  server = await startServer(port, dataDir);
+  server = registerServer(await startServer(port, dataDir));
   check('restart: server B boots and reloads persisted rooms', !!server.url);
 
   // ---- ROUND 2: the room survived, and state comes back on rejoin ----
@@ -166,23 +323,25 @@ function stopServer(child) {
     !!(restAfter && restAfter.propertyCount === 2), JSON.stringify(restAfter));
 
   // Rejoin with the PRE-RESTART token — proves identity survived the bounce.
-  const C = await connect(server.url);
+  const C = track(await connect(server.url));
   const rejoin = await emitAck(C, 'player:rejoin', { roomId, token: tokenA });
   check('round 2: rejoin with a PRE-RESTART token SUCCEEDS',
     !!(rejoin && rejoin.ok && rejoin.rejoined), JSON.stringify(rejoin && rejoin.error));
 
   const ps = rejoin && rejoin.playerState;
-  check('round 2: restored money matches ($1650)',
-    !!(ps && ps.me && ps.me.money === 1650), ps && ps.me ? `money=${ps.me.money}` : 'no me');
-  check('round 2: restored position matches (17)',
-    !!(ps && ps.me && ps.me.position === 17), ps && ps.me ? `position=${ps.me.position}` : 'no me');
-  check('round 2: restored ownership = tiles [2,4]',
+  check(`round 2: restored money matches ($${expectedMoney})`,
+    !!(ps && ps.me && ps.me.money === expectedMoney),
+    ps && ps.me ? `money=${ps.me.money} expected=${expectedMoney}` : 'no me');
+  check(`round 2: restored position matches (${persistedPosition})`,
+    !!(ps && ps.me && ps.me.position === persistedPosition),
+    ps && ps.me ? `position=${ps.me.position} expected=${persistedPosition}` : 'no me');
+  check(`round 2: restored ownership = the two tiles bought in round 1 (${JSON.stringify(owned)})`,
     !!(ps && Array.isArray(ps.ownedPropertyIds) && ps.ownedPropertyIds.length === 2 &&
-       ps.ownedPropertyIds.includes(2) && ps.ownedPropertyIds.includes(4)),
+       owned.every((t) => ps.ownedPropertyIds.includes(t))),
     ps ? JSON.stringify(ps.ownedPropertyIds) : 'no ps');
-  const tile4 = ps && ps.ownedProperties && ps.ownedProperties.find((p) => p.tileId === 4);
-  check('round 2: restored houses on tile 4 = 3',
-    !!(tile4 && tile4.houses === 3), tile4 ? `houses=${tile4.houses}` : 'tile 4 not owned');
+  const houseTile = ps && ps.ownedProperties && ps.ownedProperties.find((p) => p.tileId === owned[1]);
+  check(`round 2: restored houses on the built tile (${owned[1]}) = 3`,
+    !!(houseTile && houseTile.houses === 3), houseTile ? `houses=${houseTile.houses}` : 'tile not owned');
   check('round 2: restored in-flight trade is present',
     !!(ps && Array.isArray(ps.trades) && ps.trades.some((t) => t.id === tradeId)),
     ps ? `${ps.trades.length} trade(s)` : 'no ps');
@@ -219,9 +378,41 @@ function stopServer(child) {
   // ---- RETENTION: a torn-down room's file must actually be deleted ----
   console.log('\n--- RETENTION: teardown deletes the persisted file ---');
 
-  // The room is now empty (C disconnected). The short EMPTY_ROOM_TTL_MS (2s)
-  // should tear it down, which deletes its file. Wait past the TTL.
-  const goneDeadline = Date.now() + 6000;
+  // The room must be EMPTY for teardown to fire. Ask every socket that could still
+  // be attached to leave, and WAIT for the server's `room:left` confirmation on
+  // each one — a bare emit has no delivery guarantee, so firing and hoping is what
+  // made this leg flaky.
+  //
+  // NOTE: this project ends a room's session the instant its LAST socket leaves —
+  // the room, its file and every token are destroyed immediately, with no grace
+  // period (see leaveRoom/teardownRoom in server.js). So the only requirement for
+  // this leg is that nothing is still attached.
+  const leaveConfirmed = (sock) =>
+    new Promise((resolve) => {
+      if (!sock || !sock.connected) return resolve(false);
+      const t = setTimeout(() => resolve(false), 1500);
+      sock.once('room:left', () => { clearTimeout(t); resolve(true); });
+      sock.emit('room:leave');
+    });
+
+  for (const s of [C, A, B, Z]) {
+    await leaveConfirmed(s);
+  }
+  await sleep(500);
+
+  // Diagnostics: if the room still exists, say HOW MANY sockets are attached, so a
+  // failure here points at the socket that was not actually closed rather than
+  // looking like a teardown bug.
+  const beforeLeave = await fetchJson(`${server.url}/api/room/${roomId}`);
+  if (beforeLeave) {
+    console.log(`  (room still live with ${beforeLeave.connectedCount} socket(s) attached)`);
+  }
+
+  for (const s of [C, A, B, Z]) {
+    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch { /* ignore */ }
+  }
+
+  const goneDeadline = Date.now() + 8000;
   let stillThere = fs.existsSync(fileForRoom);
   while (stillThere && Date.now() < goneDeadline) {
     await sleep(300);
@@ -238,20 +429,26 @@ function stopServer(child) {
 
   // ---- A restart AFTER teardown must NOT resurrect the dead room ----
   await stopServer(server.child);
-  server = await startServer(port, dataDir);
+  liveServer = null;
+  server = registerServer(await startServer(port, dataDir));
   const restAfterDelete = await fetchJson(`${server.url}/api/room/${roomId}`);
   check('retention: a restart does NOT resurrect the torn-down room',
     restAfterDelete === null, JSON.stringify(restAfterDelete));
 
   await stopServer(server.child);
+  liveServer = null;
 
   // Clean up the temp dir.
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
   console.log(`\n${results.length - failed}/${results.length} checks passed`);
-  await sleep(250);
+  await cleanup(roomId);
   process.exit(failed === 0 ? 0 : 1);
-})().catch((err) => {
+})().catch(async (err) => {
   console.error('TEST ERROR:', err && err.message);
+  // A thrown error must not leave the spawned server listening or its sockets
+  // open — this suite owns a server, so that leak would outlive the whole run.
+  await cleanup();
+  await killServer();
   process.exit(2);
 });
