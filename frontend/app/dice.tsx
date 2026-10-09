@@ -250,9 +250,8 @@ export default function DiceScene({
 
   return (
     <div
+      className="w-[200px] sm:w-[240px] md:w-[280px] lg:w-[300px] h-[100px] sm:h-[120px] md:h-[140px] lg:h-[150px] max-w-full"
       style={{
-        width: "300px",
-        height: "150px",
         borderRadius: "16px",
         overflow: "hidden",
         background: "rgba(0,0,0,0.4)",

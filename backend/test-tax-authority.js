@@ -77,8 +77,8 @@ check('1. Tile 30 (CLUB) is not a tax tile', !board.isTaxTile(30));
     const found = loaded.find((r) => r.roomId === 'TAXTEST');
     check('8. persistRoom & loadPersistedRooms preserves tax pot on disk', !!found && found.pot === 100 && found.restHousePot === 100);
   } finally {
-    try { persistence.deleteRoomFile('TAXTEST'); } catch {}
-    try { if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir, { recursive: true }); } catch {}
+    try { persistence.deleteRoomFile('TAXTEST'); } catch { }
+    try { if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir, { recursive: true }); } catch { }
   }
 }
 
@@ -128,7 +128,7 @@ const track = (s) => { sockets.push(s); return s; };
 
 const cleanup = async () => {
   for (const s of sockets) {
-    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch {}
+    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch { }
   }
   await sleep(150);
 };

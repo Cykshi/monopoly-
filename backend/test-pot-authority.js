@@ -84,8 +84,8 @@ check('2. Club fee: boolean card count (true = 1 card) with 1 house = $150', boa
     const found = loaded.find((r) => r.roomId === 'POTTEST');
     check('8. persistRoom & loadPersistedRooms preserves pot on disk', !!found && found.pot === 250 && found.restHousePot === 250);
   } finally {
-    try { persistence.deleteRoomFile('POTTEST'); } catch {}
-    try { if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir, { recursive: true }); } catch {}
+    try { persistence.deleteRoomFile('POTTEST'); } catch { }
+    try { if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir, { recursive: true }); } catch { }
   }
 }
 
@@ -135,7 +135,7 @@ const track = (s) => { sockets.push(s); return s; };
 
 const cleanup = async () => {
   for (const s of sockets) {
-    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch {}
+    try { if (s && typeof s.disconnect === 'function') s.disconnect(); } catch { }
   }
   await sleep(150);
 };
