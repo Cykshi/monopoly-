@@ -389,19 +389,19 @@ const renderLogMessage = (msg: string) => {
   return parts.map((part, idx) => {
     if (/^\+\$[0-9,]+$/.test(part)) {
       return (
-        <span key={idx} className="font-black text-emerald-400">
+        <span key={idx} className="font-black text-emerald-400 inline">
           {part}
         </span>
       );
     }
     if (/^-\$[0-9,]+$/.test(part)) {
       return (
-        <span key={idx} className="font-black text-red-400">
+        <span key={idx} className="font-black text-red-400 inline">
           {part}
         </span>
       );
     }
-    return <span key={idx}>{part}</span>;
+    return <span key={idx} className="inline">{part}</span>;
   });
 };
 
@@ -461,7 +461,7 @@ function BidButton({
     <button
       onClick={() => onBid(increment)}
       disabled={isDisabled}
-      className={`flex flex-col items-center justify-center rounded-[1.2vmin] border-2 py-[1.4vmin] px-[1vmin] transition-all cursor-pointer ${
+      className={`flex flex-col items-center justify-center min-h-[48px] rounded-xl md:rounded-[1.2vmin] border-2 py-2 px-1 md:py-[1.4vmin] md:px-[1vmin] transition-all cursor-pointer ${
         isCurrentHighest
           ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300 opacity-60 cursor-not-allowed"
           : isDisabled
@@ -469,8 +469,8 @@ function BidButton({
           : "border-violet-400/80 bg-gradient-to-br from-violet-600 via-indigo-600 to-purple-700 text-white shadow-[0_0_1.6vmin_rgba(139,92,246,0.55)] hover:scale-[1.04] hover:brightness-110 active:scale-95"
       }`}
     >
-      <span className="text-[1.8vmin] font-black">+${increment}</span>
-      <span className="mt-[0.2vmin] font-mono text-[1.35vmin] font-bold text-indigo-200">
+      <span className="text-sm sm:text-base md:text-[1.8vmin] font-black leading-tight">+${increment}</span>
+      <span className="mt-0.5 md:mt-[0.2vmin] font-mono text-xs md:text-[1.35vmin] font-bold text-indigo-200 leading-none">
         (${resultingBid.toLocaleString()})
       </span>
     </button>
@@ -586,6 +586,8 @@ export default function GameBoard() {
 
   const [gamePhase, setGamePhase] = useState<"YOUR TURN" | "ROLLING..." | "MOVING..." | "ACTION" | "END TURN">("YOUR TURN");
   const [winner, setWinner] = useState<Player | null>(null);
+  // Mobile tab view state: "board" | "properties" | "players"
+  const [mobileTab, setMobileTab] = useState<"board" | "properties" | "players">("board");
   const [escapingIds, setEscapingIds] = useState<number[]>([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
   const [restHousePot, setRestHousePot] = useState(0);
@@ -3247,7 +3249,7 @@ export default function GameBoard() {
   );
 
   return (
-    <main className="flex h-screen w-screen items-center justify-start overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-[1vmin] font-sans">
+    <main className="flex min-h-[100dvh] w-full flex-col items-center justify-start overflow-x-hidden overflow-y-auto lg:h-screen lg:flex-row lg:overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-1.5 md:p-[1vmin] font-sans">
       <style jsx global>{`
         @keyframes tokenBounce {
           0%, 100% { transform: translateY(0) scale(1); }
@@ -3298,33 +3300,33 @@ export default function GameBoard() {
           actually puts this socket into a Socket.io room server-side —
           without it every game event would be dropped. */}
       {!roomId && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#050508]/95 backdrop-blur-sm">
-          <div className="w-[46vmin] max-w-[92vw] rounded-[1.8vmin] border border-purple-400/25 bg-[#0f0c16] p-[3vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.55),0_0_12vmin_rgba(139,92,246,0.3)]">
-            <h1 className="text-center text-[3vmin] font-black uppercase tracking-widest text-white">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#050508]/95 p-3 backdrop-blur-sm overflow-y-auto">
+          <div className="w-full max-w-[400px] md:w-[46vmin] max-h-[94dvh] overflow-y-auto my-auto rounded-2xl md:rounded-[1.8vmin] border border-purple-400/25 bg-[#0f0c16] p-5 md:p-[3vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.55),0_0_12vmin_rgba(139,92,246,0.3)]">
+            <h1 className="text-center text-2xl md:text-[3vmin] font-black uppercase tracking-widest text-white">
               Monopoly
             </h1>
-            <p className="mt-[0.6vmin] text-center text-[1.2vmin] font-bold uppercase tracking-widest text-gray-400">
+            <p className="mt-1 md:mt-[0.6vmin] text-center text-xs md:text-[1.2vmin] font-bold uppercase tracking-widest text-gray-400">
               Play with friends in a private room
             </p>
 
             {/* Connection state — you can't create or join until this is on. */}
-            <div className="mt-[2vmin] flex items-center justify-center gap-[0.7vmin]">
+            <div className="mt-3 md:mt-[2vmin] flex items-center justify-center gap-2 md:gap-[0.7vmin]">
               <div
-                className={`h-[1vmin] w-[1vmin] rounded-full ${isConnected
+                className={`h-2.5 w-2.5 md:h-[1vmin] md:w-[1vmin] rounded-full ${isConnected
                     ? "animate-pulse bg-emerald-400 shadow-[0_0_1.6vmin_rgba(52,211,153,1),0_0_3.4vmin_rgba(52,211,153,0.7)]"
                     : "bg-red-500 shadow-[0_0_1.6vmin_rgba(239,68,68,1),0_0_3.4vmin_rgba(239,68,68,0.7)]"
                   }`}
               />
-              <span className="text-[1.15vmin] font-bold text-gray-300">{connectionLabel}</span>
+              <span className="text-xs md:text-[1.15vmin] font-bold text-gray-300">{connectionLabel}</span>
             </div>
 
             {/* The name is REQUIRED before either button works: it's bound to the
                 player record server-side along with the session token, so the
                 server knows who this seat is from the very first event. */}
-            <div className="mt-[2vmin] flex flex-col gap-[0.7vmin]">
+            <div className="mt-3 md:mt-[2vmin] flex flex-col gap-1.5 md:gap-[0.7vmin]">
               <label
                 htmlFor="lobby-name"
-                className="text-[1.05vmin] font-bold uppercase tracking-widest text-gray-400"
+                className="text-[11px] md:text-[1.05vmin] font-bold uppercase tracking-widest text-gray-400"
               >
                 Enter your name
               </label>
@@ -3340,10 +3342,10 @@ export default function GameBoard() {
                 placeholder="YOUR NAME"
                 maxLength={PLAYER_NAME_MAX}
                 autoComplete="off"
-                className="w-full rounded-[1vmin] border-[0.2vmin] border-purple-400/50 bg-black/50 px-[1.4vmin] py-[1.2vmin] text-center text-[1.5vmin] font-black text-white shadow-[0_0_2.2vmin_rgba(168,85,247,0.45)] placeholder:text-[1.2vmin] placeholder:font-bold placeholder:tracking-normal placeholder:text-gray-600 focus:border-purple-300/80 focus:shadow-[0_0_3.4vmin_rgba(168,85,247,0.8)] focus:outline-none"
+                className="w-full rounded-xl md:rounded-[1vmin] border border-purple-400/50 bg-black/50 px-3 py-2.5 md:px-[1.4vmin] md:py-[1.2vmin] text-center text-base md:text-[1.5vmin] font-black text-white shadow-[0_0_2.2vmin_rgba(168,85,247,0.45)] placeholder:text-sm md:placeholder:text-[1.2vmin] placeholder:font-bold placeholder:tracking-normal placeholder:text-gray-600 focus:border-purple-300/80 focus:shadow-[0_0_3.4vmin_rgba(168,85,247,0.8)] focus:outline-none"
               />
               {!entryName.trim() && (
-                <span className="text-center text-[1vmin] font-bold uppercase tracking-wider text-amber-300/80">
+                <span className="text-center text-[10px] md:text-[1vmin] font-bold uppercase tracking-wider text-amber-300/80">
                   Required to create or join
                 </span>
               )}
@@ -3352,36 +3354,36 @@ export default function GameBoard() {
             <button
               onClick={handleCreateRoom}
               disabled={!isConnected || lobbyBusy || !entryName.trim()}
-              className="mt-[2vmin] w-full rounded-[1vmin] border-[0.2vmin] border-emerald-400/60 bg-gradient-to-r from-emerald-500/30 to-teal-500/20 px-[2vmin] py-[1.3vmin] text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2.4vmin_rgba(16,185,129,0.75),0_0_6vmin_rgba(16,185,129,0.4)] transition-all hover:scale-[1.02] hover:from-emerald-500/50 hover:to-teal-500/40 hover:shadow-[0_0_3.2vmin_rgba(16,185,129,0.95),0_0_9vmin_rgba(16,185,129,0.55)] disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+              className="mt-3 md:mt-[2vmin] w-full flex items-center justify-center min-h-[48px] rounded-xl md:rounded-[1vmin] border border-emerald-400/60 bg-gradient-to-r from-emerald-500/30 to-teal-500/20 px-4 py-3 md:px-[2vmin] md:py-[1.3vmin] text-sm md:text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2.4vmin_rgba(16,185,129,0.75),0_0_6vmin_rgba(16,185,129,0.4)] transition-all hover:scale-[1.02] hover:from-emerald-500/50 hover:to-teal-500/40 hover:shadow-[0_0_3.2vmin_rgba(16,185,129,0.95),0_0_9vmin_rgba(16,185,129,0.55)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
             >
               Create a Room
             </button>
 
-            <div className="my-[1.6vmin] flex items-center gap-[1vmin]">
-              <span className="h-[0.1vmin] flex-1 bg-white/12" />
-              <span className="text-[1vmin] font-bold uppercase tracking-widest text-gray-500">or join</span>
-              <span className="h-[0.1vmin] flex-1 bg-white/12" />
+            <div className="my-3 md:my-[1.6vmin] flex items-center gap-2 md:gap-[1vmin]">
+              <span className="h-[1px] md:h-[0.1vmin] flex-1 bg-white/12" />
+              <span className="text-[10px] md:text-[1vmin] font-bold uppercase tracking-widest text-gray-500">or join</span>
+              <span className="h-[1px] md:h-[0.1vmin] flex-1 bg-white/12" />
             </div>
 
-            <form onSubmit={handleJoinRoom} className="flex gap-[0.8vmin]">
+            <form onSubmit={handleJoinRoom} className="flex gap-2 md:gap-[0.8vmin]">
               <input
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 6))}
                 placeholder="ROOM CODE"
                 maxLength={6}
-                className="min-w-0 flex-1 rounded-[1vmin] border-[0.2vmin] border-white/15 bg-black/50 px-[1.4vmin] py-[1.2vmin] text-center font-mono text-[1.7vmin] font-black uppercase tracking-[0.35vmin] text-cyan-200 placeholder:text-[1.2vmin] placeholder:tracking-normal placeholder:text-gray-600 focus:border-cyan-400/70 focus:outline-none"
+                className="min-w-0 flex-1 rounded-xl md:rounded-[1vmin] border border-white/15 bg-black/50 px-3 py-2.5 md:px-[1.4vmin] md:py-[1.2vmin] text-center font-mono text-base md:text-[1.7vmin] font-black uppercase tracking-wider text-cyan-200 placeholder:text-xs md:placeholder:text-[1.2vmin] placeholder:tracking-normal placeholder:text-gray-600 focus:border-cyan-400/70 focus:outline-none"
               />
               <button
                 type="submit"
                 disabled={!isConnected || lobbyBusy || !joinCode.trim() || !entryName.trim()}
-                className="shrink-0 rounded-[1vmin] border-[0.2vmin] border-cyan-400/60 bg-cyan-500/20 px-[2vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wide text-cyan-100 shadow-[0_0_2.2vmin_rgba(34,211,238,0.7),0_0_5.5vmin_rgba(34,211,238,0.35)] transition-all hover:scale-[1.02] hover:bg-cyan-500/35 hover:shadow-[0_0_3vmin_rgba(34,211,238,0.9),0_0_8vmin_rgba(34,211,238,0.5)] disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                className="shrink-0 flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-cyan-400/60 bg-cyan-500/20 px-5 py-2.5 md:px-[2vmin] md:py-[1.2vmin] text-sm md:text-[1.4vmin] font-black uppercase tracking-wide text-cyan-100 shadow-[0_0_2.2vmin_rgba(34,211,238,0.7),0_0_5.5vmin_rgba(34,211,238,0.35)] transition-all hover:scale-[1.02] hover:bg-cyan-500/35 hover:shadow-[0_0_3vmin_rgba(34,211,238,0.9),0_0_8vmin_rgba(34,211,238,0.5)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
               >
                 Join
               </button>
             </form>
 
             {lobbyError && (
-              <p className="mt-[1.2vmin] rounded-[0.8vmin] border-red-500/40 bg-red-500/10 px-[1.2vmin] py-[0.8vmin] text-center text-[1.1vmin] font-bold text-red-300">
+              <p className="mt-2.5 md:mt-[1.2vmin] rounded-lg md:rounded-[0.8vmin] border-red-500/40 bg-red-500/10 px-3 py-2 md:px-[1.2vmin] md:py-[0.8vmin] text-center text-xs md:text-[1.1vmin] font-bold text-red-300">
                 {lobbyError}
               </p>
             )}
@@ -3396,19 +3398,19 @@ export default function GameBoard() {
           are available comes from the SERVER roster (room:players), so a colour
           someone else already holds is disabled the moment they take it. */}
       {needsColorPick && !identityLocked && (
-        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-[#050508]/95 backdrop-blur-sm">
-          <div className="w-[58vmin] max-w-[94vw] rounded-[1.8vmin] border-[0.2vmin] border-white/12 bg-[#0f0c16] p-[3vmin] shadow-[0_0_6vmin_rgba(139,92,246,0.25)]">
-            <h2 className="text-center text-[2.4vmin] font-black uppercase tracking-widest text-white">
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-[#050508]/95 p-3 backdrop-blur-sm overflow-y-auto">
+          <div className="w-full max-w-[480px] md:w-[58vmin] max-h-[94dvh] overflow-y-auto my-auto rounded-2xl md:rounded-[1.8vmin] border border-white/12 bg-[#0f0c16] p-4 sm:p-5 md:p-[3vmin] shadow-[0_0_6vmin_rgba(139,92,246,0.25)]">
+            <h2 className="text-center text-xl md:text-[2.4vmin] font-black uppercase tracking-widest text-white">
               Pick your colour
             </h2>
-            <p className="mt-[0.6vmin] text-center text-[1.15vmin] font-bold uppercase tracking-widest text-gray-400">
+            <p className="mt-1 md:mt-[0.6vmin] text-center text-xs md:text-[1.15vmin] font-bold uppercase tracking-widest text-gray-400">
               {entryName.trim() || "Player"} • Room {roomId}
             </p>
-            <p className="mt-[0.5vmin] text-center text-[1vmin] font-semibold text-gray-500">
+            <p className="mt-0.5 md:mt-[0.5vmin] text-center text-[11px] md:text-[1vmin] font-semibold text-gray-500">
               Greyed-out colours are already taken. Your choice is permanent.
             </p>
 
-            <div className="mt-[2.4vmin] grid grid-cols-3 gap-[1.4vmin]">
+            <div className="mt-4 md:mt-[2.4vmin] grid grid-cols-3 gap-2 sm:gap-3 md:gap-[1.4vmin]">
               {PLAYER_COLOR_PALETTE.map(({ name, hex }) => {
                 const isTaken = takenColors.has(hex.toLowerCase());
                 const isMine = (myColor || "").toLowerCase() === hex.toLowerCase();
@@ -3420,7 +3422,7 @@ export default function GameBoard() {
                     disabled={isTaken || isMine}
                     aria-label={isTaken ? `${name} taken` : isMine ? `Your colour ${name}` : `Choose colour ${name}`}
                     title={isTaken ? "Taken by another player" : isMine ? "Your colour" : `Choose ${name}`}
-                    className={`group relative flex flex-col items-center justify-center gap-[0.5vmin] rounded-[1.4vmin] border-[0.25vmin] p-[1vmin] transition-all ${shaking ? "swatch-shake" : ""} ${isTaken
+                    className={`group relative flex flex-col items-center justify-center gap-1 md:gap-[0.5vmin] min-h-[58px] rounded-xl md:rounded-[1.4vmin] border p-2.5 md:p-[1vmin] transition-all active:scale-95 ${shaking ? "swatch-shake" : ""} ${isTaken
                         ? "cursor-not-allowed border-white/10 bg-white/[0.02]"
                         : isMine
                           ? "cursor-default border-white bg-white/[0.08]"
@@ -3432,23 +3434,23 @@ export default function GameBoard() {
                     <div className={`relative transition-transform ${!isTaken && !isMine ? "group-hover:scale-110" : ""}`}>
                       {renderPlayerFace(
                         { color: hex, mood: "happy", isCurrentPlayer: false, id: 0 },
-                        "8vmin",
+                        "clamp(38px, 8vmin, 56px)",
                         { dimmed: isTaken, glow: isMine }
                       )}
                       {isTaken && (
-                        <span className="absolute inset-0 flex items-center justify-center text-[2.4vmin] font-black text-white drop-shadow-[0_0.2vmin_0.3vmin_rgba(0,0,0,0.95)]">
+                        <span className="absolute inset-0 flex items-center justify-center text-lg md:text-[2.4vmin] font-black text-white drop-shadow-[0_0.2vmin_0.3vmin_rgba(0,0,0,0.95)]">
                           ✕
                         </span>
                       )}
                     </div>
                     <span
-                      className={`text-center text-[1vmin] font-black uppercase leading-tight tracking-wide ${isTaken ? "text-gray-600" : isMine ? "text-white" : "text-gray-300"
+                      className={`text-center text-xs md:text-[1vmin] font-black uppercase leading-tight tracking-wide ${isTaken ? "text-gray-600" : isMine ? "text-white" : "text-gray-300"
                         }`}
                     >
                       {name}
                     </span>
                     <span
-                      className={`text-[0.85vmin] font-bold uppercase tracking-wider ${isTaken ? "text-red-400/80" : isMine ? "text-emerald-300" : "text-transparent"
+                      className={`text-[10px] md:text-[0.85vmin] font-bold uppercase tracking-wider ${isTaken ? "text-red-400/80" : isMine ? "text-emerald-300" : "text-transparent"
                         }`}
                     >
                       {isMine ? "Your colour" : isTaken ? "Taken" : "—"}
@@ -3459,7 +3461,7 @@ export default function GameBoard() {
             </div>
 
             {colorError && (
-              <p className="mt-[1.8vmin] rounded-[0.8vmin] border-red-500/40 bg-red-500/10 px-[1.2vmin] py-[0.8vmin] text-center text-[1.1vmin] font-bold text-red-300">
+              <p className="mt-3 md:mt-[1.8vmin] rounded-lg md:rounded-[0.8vmin] border-red-500/40 bg-red-500/10 px-3 py-2 md:px-[1.2vmin] md:py-[0.8vmin] text-center text-xs md:text-[1.1vmin] font-bold text-red-300">
                 {colorError}
               </p>
             )}
@@ -3469,7 +3471,7 @@ export default function GameBoard() {
                 false). This is a status line, not a dismiss control, so there is
                 no way to walk into the room without a colour chosen. */}
             <div
-              className={`mt-[2.2vmin] w-full rounded-[1vmin] border-[0.2vmin] px-[2vmin] py-[1.3vmin] text-center text-[1.3vmin] font-black uppercase tracking-wide transition-all ${myColor
+              className={`mt-4 md:mt-[2.2vmin] w-full rounded-xl md:rounded-[1vmin] border px-4 py-2.5 md:px-[2vmin] md:py-[1.3vmin] text-center text-xs md:text-[1.3vmin] font-black uppercase tracking-wide transition-all ${myColor
                   ? "border-emerald-400/60 bg-emerald-500/20 text-emerald-100"
                   : "border-white/15 bg-white/[0.04] text-gray-400"
                 }`}
@@ -3480,9 +3482,40 @@ export default function GameBoard() {
         </div>
       )}
 
-      <div className="flex h-[96vmin] w-full items-center gap-[1.6vmin]">
+      {/* Mobile Top Navigation Tabs (under 1024px) */}
+      <div className="flex lg:hidden w-full items-center justify-between gap-1.5 p-1.5 bg-[#0f0c16]/95 border-b border-white/10 shrink-0 sticky top-0 z-[80] backdrop-blur-md">
+        <button
+          onClick={() => setMobileTab("properties")}
+          className={`flex-1 flex items-center justify-center min-h-[44px] py-2 px-1 text-xs sm:text-sm font-black uppercase rounded-xl border transition-all active:scale-95 cursor-pointer ${mobileTab === "properties"
+              ? "border-emerald-400 bg-emerald-500/20 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.4)]"
+              : "border-white/10 bg-white/5 text-gray-300"
+            }`}
+        >
+          🏰 Properties
+        </button>
+        <button
+          onClick={() => setMobileTab("board")}
+          className={`flex-1 flex items-center justify-center min-h-[44px] py-2 px-1 text-xs sm:text-sm font-black uppercase rounded-xl border transition-all active:scale-95 cursor-pointer ${mobileTab === "board"
+              ? "border-indigo-400 bg-indigo-500/20 text-indigo-200 shadow-[0_0_12px_rgba(99,102,241,0.4)]"
+              : "border-white/10 bg-white/5 text-gray-300"
+            }`}
+        >
+          🎲 Board
+        </button>
+        <button
+          onClick={() => setMobileTab("players")}
+          className={`flex-1 flex items-center justify-center min-h-[44px] py-2 px-1 text-xs sm:text-sm font-black uppercase rounded-xl border transition-all active:scale-95 cursor-pointer ${mobileTab === "players"
+              ? "border-cyan-400 bg-cyan-500/20 text-cyan-200 shadow-[0_0_12px_rgba(6,182,212,0.4)]"
+              : "border-white/10 bg-white/5 text-gray-300"
+            }`}
+        >
+          👥 Players & Code
+        </button>
+      </div>
+
+      <div className="flex flex-col lg:flex-row w-full lg:h-[96vmin] items-center justify-center gap-3 lg:gap-[1.6vmin]">
         {/* ================= LEFT SIDEBAR - PROPERTIES YOU OWN ================= */}
-        <div className="flex max-h-[96vmin] w-[32vmin] flex-col self-start rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+        <div className={`w-full max-w-[500px] lg:w-[32vmin] flex max-h-[88vh] lg:max-h-[96vmin] flex-col self-center lg:self-start rounded-2xl lg:rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/95 p-3 lg:p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)] overflow-y-auto ${mobileTab === "properties" ? "flex" : "hidden lg:flex"}`}>
           {/* Balance card - total cash on hand plus the player's own recent
               gains/losses (green for +, red for -), pulled straight out of
               the shared action log so it never drifts out of sync with it.
@@ -3490,10 +3523,10 @@ export default function GameBoard() {
               did themselves (bought/sold/paid tax) AND things other players
               did that affected them directly, like someone else paying them
               rent, so a payment received never fails to show up here. */}
-          <div className="mb-[1vmin] rounded-[1vmin] border border-white/10 bg-white/[0.05] p-[1vmin]">
-            <div className="flex items-center justify-between px-[0.2vmin]">
-              <span className="text-[1.15vmin] font-black uppercase tracking-widest text-gray-300">Balance</span>
-              <span className="text-[1.9vmin] font-black tracking-tight text-emerald-400">
+          <div className="mb-2 md:mb-[1vmin] rounded-xl md:rounded-[1vmin] border border-white/10 bg-white/[0.05] p-2.5 md:p-[1vmin]">
+            <div className="flex items-center justify-between px-1 md:px-[0.2vmin]">
+              <span className="text-xs md:text-[1.15vmin] font-black uppercase tracking-widest text-gray-300">Balance</span>
+              <span className="text-lg md:text-[1.9vmin] font-black tracking-tight text-emerald-400">
                 ${players[0].money.toLocaleString()}
               </span>
             </div>
@@ -3501,9 +3534,9 @@ export default function GameBoard() {
               const myRecent = actionLog.filter((msg) => isBalanceRelevant(msg, players[0].name)).slice(0, 5);
               if (myRecent.length === 0) return null;
               return (
-                <div className="mt-[0.7vmin] flex flex-col gap-[0.35vmin] border-t border-white/10 pt-[0.6vmin]">
+                <div className="mt-1.5 md:mt-[0.7vmin] flex flex-col gap-1 md:gap-[0.35vmin] border-t border-white/10 pt-1.5 md:pt-[0.6vmin]">
                   {myRecent.map((msg, i) => (
-                    <p key={i} className="truncate px-[0.2vmin] text-[1.15vmin] font-semibold leading-snug text-gray-200">
+                    <p key={i} className="truncate px-1 md:px-[0.2vmin] text-xs md:text-[1.15vmin] font-semibold leading-snug text-gray-200">
                       {renderLogMessage(msg)}
                     </p>
                   ))}
@@ -3512,22 +3545,22 @@ export default function GameBoard() {
             })()}
           </div>
 
-          <div className="mb-[0.8vmin] flex items-center gap-[0.5vmin] px-[0.3vmin]">
-            <span className="h-[1vmin] w-[1vmin] rounded-full" style={{ backgroundColor: players[0].color }} />
-            <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">My Properties</h2>
+          <div className="mb-2 md:mb-[0.8vmin] flex items-center gap-1.5 md:gap-[0.5vmin] px-1 md:px-[0.3vmin]">
+            <span className="h-2.5 w-2.5 md:h-[1vmin] md:w-[1vmin] rounded-full" style={{ backgroundColor: players[0].color }} />
+            <h2 className="text-xs md:text-[1.4vmin] font-black uppercase tracking-widest text-white">My Properties</h2>
           </div>
 
           {(() => {
             const myProperties = BOARD_TILES.filter((t) => propertyOwnership[t.id] === players[0].id);
             if (myProperties.length === 0) {
               return (
-                <p className="mt-[1vmin] px-[0.3vmin] text-[1vmin] leading-snug text-gray-500">
+                <p className="mt-2 md:mt-[1vmin] px-1 md:px-[0.3vmin] text-xs md:text-[1vmin] leading-snug text-gray-500">
                   You don&apos;t own any properties yet. Buy one when you land on it!
                 </p>
               );
             }
             return (
-              <div className="flex flex-col gap-[0.8vmin]">
+              <div className="flex flex-col gap-2 md:gap-[0.8vmin]">
                 {myProperties.map((tile) => {
                   const houses = propertyHouses[tile.id] || 0;
                   const isHotel = houses >= 5;
@@ -3535,27 +3568,27 @@ export default function GameBoard() {
                     <button
                       key={tile.id}
                       onClick={() => setActiveModal(tile)}
-                      className="group flex w-full items-center gap-[0.9vmin] rounded-[0.9vmin] border border-white/10 bg-white/[0.05] px-[0.9vmin] py-[0.9vmin] text-left transition-all duration-200 hover:scale-[1.04] hover:border-white/40 hover:bg-white/[0.1] hover:shadow-[0_0_1.4vmin_rgba(255,255,255,0.2)]"
+                      className="group flex w-full items-center gap-2.5 md:gap-[0.9vmin] rounded-xl md:rounded-[0.9vmin] border border-white/10 bg-white/[0.05] px-3 py-2.5 md:px-[0.9vmin] md:py-[0.9vmin] text-left transition-all duration-200 hover:scale-[1.02] hover:border-white/40 hover:bg-white/[0.1]"
                     >
                       {tile.countryCode ? (
-                        <div className="h-[2.4vmin] w-[3.6vmin] shrink-0 overflow-hidden rounded-[0.35vmin] border border-white/25 shadow-md transition-transform duration-200 group-hover:scale-105">
+                        <div className="h-5 w-7 md:h-[2.4vmin] md:w-[3.6vmin] shrink-0 overflow-hidden rounded md:rounded-[0.35vmin] border border-white/25 shadow-md">
                           <Flag code={tile.countryCode} className="h-full w-full object-cover" />
                         </div>
                       ) : (
-                        <span className="shrink-0 text-[2.2vmin] leading-none transition-transform duration-200 group-hover:scale-110">
+                        <span className="shrink-0 text-base md:text-[2.2vmin] leading-none">
                           {tile.icon}
                         </span>
                       )}
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-[1.25vmin] font-black uppercase leading-tight text-white">
+                        <div className="truncate text-xs md:text-[1.25vmin] font-black uppercase leading-tight text-white">
                           {tile.name}
                         </div>
-                        <div className="mt-[0.3vmin] flex items-center gap-[0.5vmin]">
-                          <span className="text-[1.4vmin] font-black leading-none text-emerald-400">{tile.price}</span>
+                        <div className="mt-0.5 md:mt-[0.3vmin] flex items-center gap-1.5 md:gap-[0.5vmin]">
+                          <span className="text-xs md:text-[1.4vmin] font-black leading-none text-emerald-400">{tile.price}</span>
                           {PROPERTY_TYPES.has(tile.type) && houses > 0 && (
-                            <span className="flex items-center text-[1.05vmin] leading-none" title={isHotel ? "Hotel" : `${houses} house(s)`}>
+                            <span className="flex items-center text-[11px] md:text-[1.05vmin] leading-none" title={isHotel ? "Hotel" : `${houses} house(s)`}>
                               {isHotel ? "🏨" : "🏠"}
-                              {!isHotel && houses > 1 ? <span className="ml-[0.15vmin] text-[0.95vmin] text-gray-400">×{houses}</span> : null}
+                              {!isHotel && houses > 1 ? <span className="ml-0.5 md:ml-[0.15vmin] text-[10px] md:text-[0.95vmin] text-gray-400">×{houses}</span> : null}
                             </span>
                           )}
                         </div>
@@ -3569,7 +3602,7 @@ export default function GameBoard() {
         </div>
 
         <div
-          className="relative grid aspect-square h-[96vmin] w-[96vmin] shrink-0 rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)]"
+          className={`relative grid aspect-square h-[96vw] max-h-[96vmin] w-[96vw] max-w-[96vmin] lg:h-[96vmin] lg:w-[96vmin] shrink-0 rounded-2xl md:rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)] ${mobileTab === "board" ? "grid" : "hidden lg:grid"}`}
           style={{
             gridTemplateColumns: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
             gridTemplateRows: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
@@ -3957,14 +3990,14 @@ export default function GameBoard() {
             className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
             style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
           >
-            <div className="relative flex w-full items-center justify-between px-[0.4vmin]">
+            <div className="relative flex w-full items-center justify-between px-[0.4vmin] gap-1">
               {/* Leftmost: Fullscreen button */}
               <button
                 onClick={toggleFullscreen}
-                className="flex shrink-0 items-center gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer"
+                className="flex shrink-0 items-center justify-center gap-1 md:gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-2.5 py-1.5 md:px-[1.6vmin] md:py-[0.7vmin] text-xs sm:text-sm md:text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer min-h-[36px] sm:min-h-[40px] md:min-h-0"
                 title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
               >
-                <span className="text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
+                <span className="text-xs sm:text-sm md:text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
                 <span className="whitespace-nowrap tracking-wide">{isFullscreen ? "Exit" : "Fullscreen"}</span>
               </button>
 
@@ -3978,7 +4011,7 @@ export default function GameBoard() {
                 }
               >
                 <span
-                  className={`pointer-events-auto font-mono text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
+                  className={`pointer-events-auto font-mono text-sm sm:text-base md:text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
                       ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
                       : isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 30
                         ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
@@ -3995,14 +4028,14 @@ export default function GameBoard() {
 
               {/* Rightmost: LIVE connection indicator. The room code pill itself lives
                   in the Players panel on the right, next to Leave. */}
-              <div className="flex shrink-0 items-center gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-[1.6vmin] py-[0.7vmin] shadow-md">
+              <div className="flex shrink-0 items-center gap-1 md:gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-1 sm:px-2 md:px-[1.6vmin] md:py-[0.7vmin] shadow-md max-w-[48%] sm:max-w-none">
                 <div
-                  className={`h-[1vmin] w-[1vmin] shrink-0 rounded-full ${isConnected
+                  className={`h-2 w-2 md:h-[1vmin] md:w-[1vmin] shrink-0 rounded-full ${isConnected
                       ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
                       : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
                     }`}
                 />
-                <span className="whitespace-nowrap text-[1.35vmin] font-extrabold tracking-wide text-white">
+                <span className="truncate text-[10px] sm:text-xs md:text-[1.35vmin] font-extrabold tracking-wide text-white">
                   {connectionLabel}
                 </span>
               </div>
@@ -4010,7 +4043,7 @@ export default function GameBoard() {
 
             <div>
               <div
-                className={`mx-auto w-fit rounded-full border px-[1.8vmin] py-[0.4vmin] text-[1.1vmin] font-black uppercase tracking-widest ${gamePhase === "YOUR TURN"
+                className={`mx-auto w-fit rounded-full border px-2.5 py-0.5 md:px-[1.8vmin] md:py-[0.4vmin] text-[10px] sm:text-xs md:text-[1.1vmin] font-black uppercase tracking-widest ${gamePhase === "YOUR TURN"
                     ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
                     : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
                       ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
@@ -4022,29 +4055,29 @@ export default function GameBoard() {
             </div>
 
             {/* 3D Dice - back to its original size */}
-            <div className="-mt-2 mb-2 flex justify-center">
+            <div className="-mt-1 mb-1 md:-mt-2 md:mb-2 flex justify-center">
               <DiceScene dice={dice} rollTrigger={rollTrigger} onSettled={handleDiceSettled} />
             </div>
 
             {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
-            <div className="flex h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center -translate-y-[3.5vmin]">
-              <div>
+            <div className="flex h-12 sm:h-14 md:h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-2 sm:px-3 md:px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center -translate-y-0.5 md:-translate-y-[3.5vmin]">
+              <div className="w-full overflow-hidden">
                 {actionLog.slice(0, 3).map((msg, i) => (
-                  <p key={i} className={`text-[1.55vmin] leading-snug ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
+                  <p key={i} className={`w-full overflow-hidden text-[11px] sm:text-xs md:text-[1.55vmin] leading-snug truncate ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
                     {renderLogMessage(msg)}
                   </p>
                 ))}
               </div>
             </div>
 
-            <div className="flex w-full max-w-[44vmin] gap-[1.2vmin] -translate-y-[3.5vmin]">
+            <div className="flex w-full max-w-[44vmin] gap-1.5 md:gap-[1.2vmin] -translate-y-0.5 md:-translate-y-[3.5vmin]">
               {gamePhase === "YOUR TURN" ? (
                 <>
                   {currentPlayer?.inJail && (
                     <button
                       onClick={payBail}
                       disabled={(currentPlayer.money ?? 0) < 100}
-                      className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                      className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                     >
                       🔓 Pay Bail $100
                     </button>
@@ -4053,16 +4086,16 @@ export default function GameBoard() {
                   <button
                     onClick={rollDice}
                     disabled={isRolling || isMoving}
-                    className="flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                   >
-                    {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll for Doubles" : "🎲 Roll Dice"}
+                    {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll Doubles" : "🎲 Roll"}
                   </button>
 
                   {!currentPlayer?.inJail && enableMovementCards && (
                     <button
                       onClick={openSkillCard}
                       disabled={!hasSkillCard || isRolling || isMoving}
-                      className="relative flex-1 rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                      className="relative flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                     >
                       {hasSkillCard ? "🃏 Card" : "Exhausted"}
                     </button>
@@ -4072,7 +4105,7 @@ export default function GameBoard() {
                 <button
                   onClick={endTurn}
                   disabled={gamePhase !== "ACTION" && gamePhase !== "END TURN"}
-                  className="flex-1 rounded-[1.1vmin] border border-white/15 bg-white/10 py-[1.6vmin] text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/15 bg-white/10 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
                 >
                   End Turn
                 </button>
@@ -4083,41 +4116,41 @@ export default function GameBoard() {
           {/* ================= PROPERTY MODAL ================= */}
           {activeModal && (
             <div
-              className="absolute inset-0 z-[100] flex items-center justify-center rounded-[2vmin] bg-black/70 p-[4vmin] backdrop-blur-md"
+              className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-2 sm:p-3 md:p-[4vmin] backdrop-blur-md overflow-y-auto"
               // With Auction ON and an unowned ownable tile, the player must
               // choose Buy or Auction — clicking the backdrop must NOT dismiss.
               onClick={mandatoryPropertyDecision ? undefined : () => setActiveModal(null)}
             >
-              <div className="relative w-[42vmin]" onClick={(e) => e.stopPropagation()}>
+              <div className="relative w-full max-w-[360px] md:w-[42vmin] max-h-[92dvh] my-auto flex flex-col pt-5" onClick={(e) => e.stopPropagation()}>
                 {/* Flag / icon badge - centered on the card's top edge, half
                   poking out above the header, half sitting inside it. */}
-                <div className="absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1/2">
+                <div className="absolute left-1/2 top-5 z-20 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
                   {activeModal.countryCode ? (
-                    <div className="h-[5vmin] w-[7.6vmin] overflow-hidden rounded-[0.8vmin] border-[0.28vmin] border-white shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
+                    <div className="h-8 w-12 sm:h-[5vmin] sm:w-[7.6vmin] overflow-hidden rounded-[0.8vmin] border-2 border-white shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
                       <Flag code={activeModal.countryCode} className="h-full w-full object-cover" />
                     </div>
                   ) : (
-                    <div className="flex h-[5.4vmin] w-[5.4vmin] items-center justify-center rounded-full border-[0.28vmin] border-white bg-[#1c1730] text-[2.6vmin] shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
+                    <div className="flex h-10 w-10 sm:h-[5.4vmin] sm:w-[5.4vmin] items-center justify-center rounded-full border-2 border-white bg-[#1c1730] text-xl sm:text-[2.6vmin] shadow-[0_0.4vmin_1vmin_rgba(0,0,0,0.6)]">
                       {activeModal.icon}
                     </div>
                   )}
                 </div>
 
                 <div
-                  className="overflow-hidden rounded-[1.8vmin] border bg-[#161224] shadow-2xl"
+                  className="flex flex-col overflow-hidden rounded-2xl md:rounded-[1.8vmin] border bg-[#161224] shadow-2xl max-h-[calc(92dvh-20px)]"
                   style={{
                     borderColor: getTileOwner(activeModal.id)
                       ? `${getTileOwner(activeModal.id)!.color}66`
                       : "rgba(255,255,255,0.08)",
                   }}
                 >
-                  <div className="bg-gradient-to-r from-indigo-900/80 to-purple-900/60 px-[2.5vmin] pb-[1.8vmin] pt-[3.2vmin] text-center">
-                    <h2 className="text-[2.6vmin] font-black uppercase tracking-wider text-white">
+                  <div className="shrink-0 bg-gradient-to-r from-indigo-900/80 to-purple-900/60 px-4 pb-3 pt-7 md:px-[2.5vmin] md:pb-[1.8vmin] md:pt-[3.2vmin] text-center">
+                    <h2 className="text-lg md:text-[2.6vmin] font-black uppercase tracking-wider text-white">
                       {activeModal.name}
                     </h2>
                     {getTileOwner(activeModal.id) && (
                       <div
-                        className="mt-[0.6vmin] text-[1.1vmin] font-bold uppercase tracking-widest"
+                        className="mt-1 md:mt-[0.6vmin] text-xs md:text-[1.1vmin] font-bold uppercase tracking-widest"
                         style={{ color: getTileOwner(activeModal.id)!.color }}
                       >
                         {getTileOwner(activeModal.id)!.id === currentPlayer?.id
@@ -4127,7 +4160,7 @@ export default function GameBoard() {
                     )}
                   </div>
 
-                  <div className="p-[2.5vmin]">
+                  <div className="p-3.5 sm:p-4 md:p-[2.5vmin] overflow-y-auto">
                     {PROPERTY_TYPES.has(activeModal.type) &&
                       activeModal.rents &&
                       (() => {
@@ -4147,7 +4180,7 @@ export default function GameBoard() {
                         ];
 
                         return (
-                          <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
+                          <div className="mb-3 md:mb-[2vmin] space-y-1 md:space-y-[0.7vmin] text-xs md:text-[1.35vmin]">
                             {rows.map((row, idx) => {
                               const isActive = idx === activeTier;
                               return (
@@ -4170,7 +4203,7 @@ export default function GameBoard() {
                     scales with how many of that same type the owner holds,
                     not with houses - shown here as a simple tier list. */}
                     {UTILITY_TYPES.has(activeModal.type) && UTILITY_RENT_TABLE[activeModal.type] && (
-                      <div className="mb-[2vmin] space-y-[0.7vmin] text-[1.35vmin]">
+                      <div className="mb-3 md:mb-[2vmin] space-y-1 md:space-y-[0.7vmin] text-xs md:text-[1.35vmin]">
                         {UTILITY_RENT_TABLE[activeModal.type].map((amount, idx) => (
                           <div key={idx} className="flex justify-between text-gray-400">
                             <span>if owner holds {idx + 1}</span>
@@ -4178,7 +4211,7 @@ export default function GameBoard() {
                           </div>
                         ))}
                         {getTileOwner(activeModal.id) && (
-                          <div className="flex justify-between border-t border-white/10 pt-[0.7vmin] text-emerald-400">
+                          <div className="flex justify-between border-t border-white/10 pt-1.5 md:pt-[0.7vmin] text-emerald-400">
                             <span>currently owns</span>
                             <span className="font-black">
                               {getUtilityOwnerCount(activeModal.type, getTileOwner(activeModal.id)!.id)} of this type
@@ -4188,7 +4221,7 @@ export default function GameBoard() {
                       </div>
                     )}
 
-                    <div className="flex items-center justify-between border-t border-white/10 pt-[1.5vmin] text-[1.4vmin]">
+                    <div className="flex items-center justify-between border-t border-white/10 pt-2.5 md:pt-[1.5vmin] text-xs md:text-[1.4vmin]">
                       <div className="text-center">
                         <div className="text-gray-500">Price</div>
                         <div className="font-black text-white">{activeModal.price}</div>
@@ -4225,13 +4258,13 @@ export default function GameBoard() {
 
                         return (
                           <div
-                            className={`mt-[2vmin] grid gap-[1.2vmin] ${isUpgradable ? "grid-cols-3" : "grid-cols-1"
+                            className={`mt-3 md:mt-[2vmin] grid gap-2 md:gap-[1.2vmin] ${isUpgradable ? "grid-cols-3" : "grid-cols-1"
                               }`}
                           >
                             {enableMortgage && (
                             <button
                               onClick={() => sellPropertyEntirely(activeModal.id)}
-                              className="rounded-[0.9vmin] border-[0.18vmin] border-red-500 bg-red-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(239,68,68,0.85),0_0_1.6vmin_rgba(239,68,68,0.65)]"
+                              className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-red-500 bg-red-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white active:scale-95 cursor-pointer"
                             >
                               Sell (+${sellRefund})
                             </button>
@@ -4241,14 +4274,14 @@ export default function GameBoard() {
                                 <button
                                   onClick={() => upgradeHouse(activeModal.id)}
                                   disabled={maxedOut}
-                                  className="rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                                  className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-green-500 bg-green-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
                                 >
                                   {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
                                 </button>
                                 <button
                                   onClick={() => downgradeHouse(activeModal.id)}
                                   disabled={!canDegrade}
-                                  className="rounded-[0.9vmin] border-[0.18vmin] border-orange-500 bg-orange-950/60 py-[1.2vmin] text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(249,115,22,0.85),0_0_1.6vmin_rgba(249,115,22,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
+                                  className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-orange-500 bg-orange-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
                                 >
                                   {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
                                 </button>
@@ -4259,11 +4292,11 @@ export default function GameBoard() {
                       })()}
 
                     {!getTileOwner(activeModal.id) && OWNABLE_TYPES.has(activeModal.type) && (
-                      <div className="mt-[2vmin] flex gap-[1vmin]">
+                      <div className="mt-3 md:mt-[2vmin] flex gap-2 md:gap-[1vmin]">
                         <button
                           onClick={() => buyProperty(activeModal)}
                           disabled={(currentPlayer?.money ?? 0) < (parsePrice(activeModal.price) || 0)}
-                          className="flex-1 rounded-[0.9vmin] border-[0.18vmin] border-green-500 bg-green-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(34,197,94,0.85),0_0_1.6vmin_rgba(34,197,94,0.65)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
+                          className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-green-500 bg-green-950/60 py-2.5 px-2 md:py-[1.4vmin] text-xs sm:text-sm md:text-[1.3vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
                         >
                           Buy for {activeModal.price}
                         </button>
@@ -4274,7 +4307,7 @@ export default function GameBoard() {
                               setActiveModal(null);
                               startAuction(tileToAuction);
                             }}
-                            className="flex-1 rounded-[0.9vmin] border-[0.18vmin] border-amber-500 bg-amber-950/60 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-amber-100 shadow-[inset_0_0_1.4vmin_rgba(245,158,11,0.55),0_0_0.8vmin_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-amber-400 hover:bg-amber-600/70 hover:text-white hover:shadow-[inset_0_0_2vmin_rgba(245,158,11,0.85),0_0_1.6vmin_rgba(245,158,11,0.65)] cursor-pointer"
+                            className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-amber-500 bg-amber-950/60 py-2.5 px-2 md:py-[1.4vmin] text-xs sm:text-sm md:text-[1.3vmin] font-black uppercase text-amber-100 shadow-[inset_0_0_1.4vmin_rgba(245,158,11,0.55),0_0_0.8vmin_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-amber-400 hover:bg-amber-600/70 hover:text-white active:scale-95 cursor-pointer"
                           >
                             🔨 Pass & Auction
                           </button>
@@ -4285,7 +4318,7 @@ export default function GameBoard() {
                     {/* With Auction ON row is a forced choice, so make the
                         absent ✕ read as intentional, not broken. */}
                     {mandatoryPropertyDecision && (
-                      <p className="mt-[1.2vmin] text-center text-[1.05vmin] font-semibold uppercase tracking-wider text-amber-200/80">
+                      <p className="mt-2 md:mt-[1.2vmin] text-center text-xs md:text-[1.05vmin] font-semibold uppercase tracking-wider text-amber-200/80">
                         🔨 Buy or send to auction — no skipping
                       </p>
                     )}
@@ -4296,7 +4329,8 @@ export default function GameBoard() {
                 {!mandatoryPropertyDecision && (
                   <button
                     onClick={() => setActiveModal(null)}
-                    className="absolute right-[1.4vmin] top-[1.4vmin] z-30 text-[2vmin] text-white/50 hover:text-white"
+                    aria-label="Close modal"
+                    className="absolute right-1 top-6 z-30 flex h-10 w-10 md:h-8 md:w-8 items-center justify-center rounded-full bg-black/50 text-base md:text-[2vmin] text-white/70 hover:bg-black/75 hover:text-white cursor-pointer"
                   >
                     ✕
                   </button>
@@ -4308,74 +4342,74 @@ export default function GameBoard() {
           {/* ================= SPECIAL RULE MODALS ================= */}
           {specialModal && (
             <div
-              className="absolute inset-0 z-[110] flex items-center justify-center rounded-[2vmin] bg-black/75 p-[4vmin] backdrop-blur-md"
+              className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 p-2 sm:p-3 md:p-[4vmin] backdrop-blur-md overflow-y-auto"
               onClick={() => setSpecialModal(null)}
             >
               <div
-                className="w-[48vmin] rounded-[1.8vmin] border border-white/10 bg-[#111018] p-[3vmin] shadow-2xl"
+                className="w-full max-w-[380px] md:w-[48vmin] max-h-[92dvh] overflow-y-auto rounded-2xl md:rounded-[1.8vmin] border border-white/10 bg-[#111018] p-4 sm:p-5 md:p-[3vmin] shadow-2xl my-auto"
                 onClick={(e) => e.stopPropagation()}
               >
                 {specialModal === "treasure" && (
                   <>
-                    <div className="mb-[1.5vmin] text-center text-[3.5vmin]">🎁</div>
-                    <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-yellow-300">
+                    <div className="mb-2 md:mb-[1.5vmin] text-center text-3xl md:text-[3.5vmin]">🎁</div>
+                    <h3 className="mb-2 md:mb-[1.5vmin] text-center text-lg md:text-[2.4vmin] font-black uppercase tracking-widest text-yellow-300">
                       Treasure Chest
                     </h3>
-                    <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
+                    <div className="space-y-2 md:space-y-[1vmin] text-xs sm:text-sm md:text-[1.35vmin] text-gray-300">
                       <p className="font-bold text-white">Roll outcome:</p>
-                      <p>• <span className="text-emerald-400">1–2</span> → Collect $100 from bank</p>
-                      <p>• <span className="text-emerald-400">3–4</span> → Collect $200 + free Movement Card</p>
-                      <p>• <span className="text-yellow-400">5</span> → Advance to nearest Airport</p>
-                      <p>• <span className="text-red-400">6</span> → Pay $150 luxury tax</p>
+                      <p>• <span className="text-emerald-400 font-bold">1–2</span> → Collect $100 from bank</p>
+                      <p>• <span className="text-emerald-400 font-bold">3–4</span> → Collect $200 + free Movement Card</p>
+                      <p>• <span className="text-yellow-400 font-bold">5</span> → Advance to nearest Airport</p>
+                      <p>• <span className="text-red-400 font-bold">6</span> → Pay $150 luxury tax</p>
                     </div>
                   </>
                 )}
 
                 {specialModal === "surprise" && (
                   <>
-                    <div className="mb-[1.5vmin] text-center text-[3.5vmin]">❓</div>
-                    <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-purple-300">
+                    <div className="mb-2 md:mb-[1.5vmin] text-center text-3xl md:text-[3.5vmin]">❓</div>
+                    <h3 className="mb-2 md:mb-[1.5vmin] text-center text-lg md:text-[2.4vmin] font-black uppercase tracking-widest text-purple-300">
                       Surprise Card
                     </h3>
-                    <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
+                    <div className="space-y-2 md:space-y-[1vmin] text-xs sm:text-sm md:text-[1.35vmin] text-gray-300">
                       <p className="font-bold text-white">Roll outcome:</p>
-                      <p>• <span className="text-red-400">1–2</span> → Go directly to JAIL</p>
-                      <p>• <span className="text-yellow-400">3–4</span> → Jump forward 8 spaces</p>
-                      <p>• <span className="text-emerald-400">5</span> → Receive $250 dividend</p>
-                      <p>• <span className="text-blue-400">6</span> → Swap position with any player</p>
+                      <p>• <span className="text-red-400 font-bold">1–2</span> → Go directly to JAIL</p>
+                      <p>• <span className="text-yellow-400 font-bold">3–4</span> → Jump forward 8 spaces</p>
+                      <p>• <span className="text-emerald-400 font-bold">5</span> → Receive $250 dividend</p>
+                      <p>• <span className="text-blue-400 font-bold">6</span> → Swap position with any player</p>
                     </div>
                   </>
                 )}
 
                 {specialModal === "tax" && (
                   <>
-                    <div className="mb-[1.5vmin] text-center text-[3.5vmin]">📉</div>
-                    <h3 className="mb-[1.5vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-red-300">
+                    <div className="mb-2 md:mb-[1.5vmin] text-center text-3xl md:text-[3.5vmin]">📉</div>
+                    <h3 className="mb-2 md:mb-[1.5vmin] text-center text-lg md:text-[2.4vmin] font-black uppercase tracking-widest text-red-300">
                       Tax Office
                     </h3>
-                    <div className="space-y-[1vmin] text-[1.35vmin] text-gray-300">
+                    <div className="space-y-2 md:space-y-[1vmin] text-xs sm:text-sm md:text-[1.35vmin] text-gray-300">
                       <p className="font-bold text-white">Fixed amounts:</p>
-                      <p>• Income Tax → Pay <span className="text-red-400">$100</span></p>
-                      <p>• Fixed Tax → Pay <span className="text-red-400">$200</span></p>
-                      <p>• Luxury Tax → Pay <span className="text-red-400">$250</span></p>
-                      <p className="mt-[1vmin] text-gray-500">Tax is mandatory when you land here.</p>
+                      <p>• Income Tax → Pay <span className="text-red-400 font-bold">$100</span></p>
+                      <p>• Fixed Tax → Pay <span className="text-red-400 font-bold">$200</span></p>
+                      <p>• Luxury Tax → Pay <span className="text-red-400 font-bold">$250</span></p>
+                      <p className="mt-2 text-gray-400">Tax is mandatory when you land here.</p>
                     </div>
                   </>
                 )}
 
                 {specialModal === "resthouse" && (
                   <>
-                    <div className="mb-[1.5vmin] text-center text-[3.8vmin]">🏨</div>
-                    <h3 className="mb-[1vmin] text-center text-[2.4vmin] font-black uppercase tracking-widest text-emerald-400">
+                    <div className="mb-2 md:mb-[1.5vmin] text-center text-3xl md:text-[3.8vmin]">🏨</div>
+                    <h3 className="mb-1 md:mb-[1vmin] text-center text-lg md:text-[2.4vmin] font-black uppercase tracking-widest text-emerald-400">
                       Rest House Pot
                     </h3>
-                    <div className="mb-[1.8vmin] flex flex-col items-center justify-center rounded-[1.2vmin] border-2 border-emerald-400/40 bg-emerald-950/40 p-[1.6vmin] text-center">
-                      <span className="text-[1.2vmin] font-bold uppercase tracking-wider text-gray-300">Current JackPot:</span>
-                      <span className="text-[3.2vmin] font-black text-emerald-300 drop-shadow-lg">
+                    <div className="mb-3 md:mb-[1.8vmin] flex flex-col items-center justify-center rounded-xl md:rounded-[1.2vmin] border-2 border-emerald-400/40 bg-emerald-950/40 p-3 md:p-[1.6vmin] text-center">
+                      <span className="text-xs md:text-[1.2vmin] font-bold uppercase tracking-wider text-gray-300">Current JackPot:</span>
+                      <span className="text-2xl md:text-[3.2vmin] font-black text-emerald-300 drop-shadow-lg">
                         ${restHousePot.toLocaleString()}
                       </span>
                     </div>
-                    <div className="space-y-[0.8vmin] text-[1.3vmin] text-gray-300">
+                    <div className="space-y-1.5 md:space-y-[0.8vmin] text-xs sm:text-sm md:text-[1.3vmin] text-gray-300">
                       <p>• All luxury taxes, fines, bail, and club fees accumulate in this pot.</p>
                       <p>• Whoever lands directly on <span className="font-bold text-white">REST HOUSE</span> collects all stored money!</p>
                       <p>• You also take a relaxing rest for one turn.</p>
@@ -4385,7 +4419,7 @@ export default function GameBoard() {
 
                 <button
                   onClick={() => setSpecialModal(null)}
-                  className="mt-[2.5vmin] w-full rounded-[1vmin] bg-white/10 py-[1.3vmin] text-[1.3vmin] font-bold text-white hover:bg-white/20"
+                  className="mt-4 md:mt-[2.5vmin] w-full flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] bg-white/10 py-2.5 md:py-[1.3vmin] text-xs sm:text-sm md:text-[1.3vmin] font-bold text-white hover:bg-white/20 active:scale-95 cursor-pointer"
                 >
                   Close
                 </button>
@@ -4396,29 +4430,29 @@ export default function GameBoard() {
           {/* ================= MOVEMENT CARD SELECTOR ================= */}
           {showCardSelector && (
             <div
-              className="absolute inset-0 z-[110] flex items-center justify-center rounded-[2vmin] bg-black/75 p-[4vmin] backdrop-blur-md"
+              className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 p-2 sm:p-3 md:p-[4vmin] backdrop-blur-md overflow-y-auto"
               onClick={() => {
                 setShowCardSelector(false);
                 setSelectedCardValue(null);
               }}
             >
               <div
-                className="w-[48vmin] rounded-[1.8vmin] border border-emerald-500/30 bg-[#111018] p-[2.8vmin] shadow-xl"
+                className="w-full max-w-[380px] md:w-[48vmin] max-h-[92dvh] overflow-y-auto rounded-2xl md:rounded-[1.8vmin] border border-emerald-500/30 bg-[#111018] p-4 sm:p-5 md:p-[2.8vmin] shadow-xl my-auto"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="mb-[0.6vmin] text-center text-[2.6vmin] font-black uppercase tracking-widest text-white">
+                <div className="mb-1 md:mb-[0.6vmin] text-center text-lg md:text-[2.6vmin] font-black uppercase tracking-widest text-white">
                   Movement Card
                 </div>
-                <p className="mb-[2vmin] text-center text-[1.2vmin] text-gray-400">
+                <p className="mb-4 md:mb-[2vmin] text-center text-xs md:text-[1.2vmin] text-gray-400">
                   Choose how many spaces to move. Card recharges when you pass START.
                 </p>
 
-                <div className="grid grid-cols-3 gap-[1vmin]">
+                <div className="grid grid-cols-3 gap-2.5 md:gap-[1vmin]">
                   {[1, 2, 3, 4, 5, 6].map((value) => (
                     <button
                       key={value}
                       onClick={() => setSelectedCardValue(value)}
-                      className={`rounded-[1vmin] border py-[1.8vmin] text-[2.6vmin] font-black transition-all ${selectedCardValue === value
+                      className={`flex items-center justify-center min-h-[48px] rounded-xl md:rounded-[1vmin] border py-3 md:py-[1.8vmin] text-lg md:text-[2.6vmin] font-black transition-all active:scale-95 cursor-pointer ${selectedCardValue === value
                           ? "scale-105 border-emerald-400 bg-emerald-500/20 text-emerald-300"
                           : "border-white/10 bg-white/[0.03] text-white hover:border-white/30"
                         }`}
@@ -4428,20 +4462,20 @@ export default function GameBoard() {
                   ))}
                 </div>
 
-                <div className="mt-[2vmin] flex gap-[1vmin]">
+                <div className="mt-4 md:mt-[2vmin] flex gap-2 md:gap-[1vmin]">
                   <button
                     onClick={() => {
                       setShowCardSelector(false);
                       setSelectedCardValue(null);
                     }}
-                    className="flex-1 rounded-[0.9vmin] bg-white/5 py-[1.2vmin] text-[1.2vmin] font-bold text-gray-400 hover:bg-white/10"
+                    className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] bg-white/5 py-2.5 px-2 md:py-[1.2vmin] text-xs sm:text-sm md:text-[1.2vmin] font-bold text-gray-400 hover:bg-white/10 active:scale-95 cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={confirmSkillCard}
                     disabled={!selectedCardValue}
-                    className="flex-1 rounded-[0.9vmin] bg-gradient-to-r from-emerald-600 to-teal-600 py-[1.2vmin] text-[1.2vmin] font-black uppercase text-white disabled:opacity-30"
+                    className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] bg-gradient-to-r from-emerald-600 to-teal-600 py-2.5 px-2 md:py-[1.2vmin] text-xs sm:text-sm md:text-[1.2vmin] font-black uppercase text-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                   >
                     Confirm {selectedCardValue ? `→ ${selectedCardValue}` : ""}
                   </button>
@@ -4452,22 +4486,22 @@ export default function GameBoard() {
 
           {/* ================= GAME OVER ================= */}
           {winner && (
-            <div className="absolute inset-0 z-[130] flex items-center justify-center rounded-[2vmin] bg-black/85 p-[4vmin] backdrop-blur-md">
+            <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/85 p-2 sm:p-3 md:p-[4vmin] backdrop-blur-md overflow-y-auto">
               <div
-                className="w-[46vmin] rounded-[1.8vmin] border-2 p-[3vmin] text-center shadow-2xl"
+                className="w-full max-w-[380px] md:w-[46vmin] max-h-[92dvh] overflow-y-auto rounded-2xl md:rounded-[1.8vmin] border-2 p-4 sm:p-5 md:p-[3vmin] text-center shadow-2xl my-auto"
                 style={{ borderColor: winner.color, backgroundColor: "#111018" }}
               >
-                <div className="mb-[1vmin] text-[4vmin]">🏆</div>
-                <h2 className="mb-[0.5vmin] text-[2.6vmin] font-black uppercase tracking-widest text-white">
+                <div className="mb-2 md:mb-[1vmin] text-3xl md:text-[4vmin]">🏆</div>
+                <h2 className="mb-1 md:mb-[0.5vmin] text-xl md:text-[2.6vmin] font-black uppercase tracking-widest text-white">
                   Game Over
                 </h2>
-                <p className="mb-[2vmin] text-[1.6vmin] font-bold" style={{ color: winner.color }}>
+                <p className="mb-3 md:mb-[2vmin] text-base md:text-[1.6vmin] font-bold" style={{ color: winner.color }}>
                   {winner.name} wins!
                 </p>
-                <p className="mb-[2vmin] text-[1.2vmin] text-gray-400">Every other player has gone bankrupt.</p>
+                <p className="mb-4 md:mb-[2vmin] text-xs md:text-[1.2vmin] text-gray-400">Every other player has gone bankrupt.</p>
                 <button
                   onClick={() => window.location.reload()}
-                  className="w-full rounded-[1vmin] bg-gradient-to-r from-indigo-600 to-purple-600 py-[1.4vmin] text-[1.3vmin] font-black uppercase text-white hover:scale-[1.02]"
+                  className="w-full flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] bg-gradient-to-r from-indigo-600 to-purple-600 py-3 px-4 md:py-[1.4vmin] text-sm md:text-[1.3vmin] font-black uppercase text-white hover:scale-[1.02] active:scale-95 cursor-pointer"
                 >
                   New Game
                 </button>
@@ -4478,15 +4512,15 @@ export default function GameBoard() {
           {/* ================= BANKRUPT CONFIRMATION MODAL ================= */}
           {showBankruptModal && bankruptCandidateId !== null && (
             <div
-              className="absolute inset-0 z-[120] flex items-center justify-center rounded-[2vmin] bg-black/80 p-[4vmin] backdrop-blur-md"
+              className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-2 sm:p-3 md:p-[4vmin] backdrop-blur-md overflow-y-auto"
               onClick={() => setShowBankruptModal(false)}
             >
               <div
-                className="w-[44vmin] rounded-[1.8vmin] border border-red-500/40 bg-[#120f1d] p-[2.6vmin] text-center shadow-2xl"
+                className="w-full max-w-[380px] md:w-[44vmin] max-h-[92dvh] overflow-y-auto rounded-2xl md:rounded-[1.8vmin] border border-red-500/40 bg-[#120f1d] p-4 sm:p-5 md:p-[2.6vmin] text-center shadow-2xl my-auto"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="mb-[0.8vmin] text-[3.8vmin]">🏳️</div>
-                <h3 className="mb-[0.5vmin] text-[2.2vmin] font-black uppercase tracking-wider text-red-400">
+                <div className="mb-2 md:mb-[0.8vmin] text-3xl md:text-[3.8vmin]">🏳️</div>
+                <h3 className="mb-1 md:mb-[0.5vmin] text-lg md:text-[2.2vmin] font-black uppercase tracking-wider text-red-400">
                   Declare Bankruptcy
                 </h3>
                 {(() => {
@@ -4496,26 +4530,26 @@ export default function GameBoard() {
 
                   return (
                     <>
-                      <p className="text-[1.25vmin] text-gray-200">
+                      <p className="text-xs sm:text-sm md:text-[1.25vmin] text-gray-200">
                         Are you sure{" "}
                         <span className="font-bold" style={{ color: targetPlayer.color }}>
                           {targetPlayer.name}
                         </span>{" "}
                         wants to surrender and declare bankruptcy?
                       </p>
-                      <p className="mt-[0.8vmin] text-[1.05vmin] text-gray-400">
+                      <p className="mt-2 md:mt-[0.8vmin] text-[11px] sm:text-xs md:text-[1.05vmin] text-gray-400">
                         Whoever clicks this gets out immediately. All {ownedProps.length} propert{ownedProps.length === 1 ? "y" : "ies"} will be returned to the bank.
                       </p>
-                      <div className="mt-[2.2vmin] flex gap-[1vmin]">
+                      <div className="mt-4 md:mt-[2.2vmin] flex gap-2 md:gap-[1vmin]">
                         <button
                           onClick={() => setShowBankruptModal(false)}
-                          className="flex-1 rounded-[0.9vmin] bg-white/10 py-[1.1vmin] text-[1.2vmin] font-bold text-gray-300 hover:bg-white/20"
+                          className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] bg-white/10 py-2.5 px-2 md:py-[1.1vmin] text-xs sm:text-sm md:text-[1.2vmin] font-bold text-gray-300 hover:bg-white/20 active:scale-95 cursor-pointer"
                         >
                           Cancel
                         </button>
                         <button
                           onClick={() => handleVoluntaryBankruptcy(targetPlayer.id)}
-                          className="flex-1 rounded-[0.9vmin] bg-gradient-to-r from-red-600 to-rose-600 py-[1.1vmin] text-[1.2vmin] font-black uppercase text-white shadow-lg shadow-red-600/30 hover:brightness-110 active:scale-95"
+                          className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] bg-gradient-to-r from-red-600 to-rose-600 py-2.5 px-2 md:py-[1.1vmin] text-xs sm:text-sm md:text-[1.2vmin] font-black uppercase text-white shadow-lg shadow-red-600/30 hover:brightness-110 active:scale-95 cursor-pointer"
                         >
                           Yes, Bankrupt
                         </button>
@@ -4530,25 +4564,26 @@ export default function GameBoard() {
           {/* ================= CREATE / NEGOTIATE TRADE MODAL ================= */}
           {activeTradeModal === "create" && currentPlayer && (
             <div
-              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-2 sm:p-4 md:p-[2vmin] backdrop-blur-md overflow-y-auto"
               onClick={() => setActiveTradeModal(null)}
             >
               <div
-                className="relative flex max-h-[92vh] w-[88vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/50 bg-[#120c24] text-white shadow-[0_0_5vmin_rgba(139,92,246,0.45)]"
+                className="relative flex max-h-[92dvh] w-full max-w-[850px] md:w-[88vmin] flex-col overflow-hidden rounded-2xl md:rounded-[2vmin] border-2 border-purple-500/50 bg-[#120c24] text-white shadow-[0_0_5vmin_rgba(139,92,246,0.45)] my-auto"
                 onClick={(e) => e.stopPropagation()}
               >
                 {/* Header */}
-                <div className="relative border-b border-purple-500/30 bg-[#181133] py-[1.8vmin] text-center">
-                  <h3 className="text-[2.3vmin] font-black uppercase tracking-wider text-white flex items-center justify-center gap-[0.8vmin]">
+                <div className="relative border-b border-purple-500/30 bg-[#181133] py-3 px-10 md:py-[1.8vmin] text-center">
+                  <h3 className="text-base sm:text-lg md:text-[2.3vmin] font-black uppercase tracking-wider text-white flex items-center justify-center gap-2 md:gap-[0.8vmin]">
                     <span>🤝</span>
                     <span>{negotiatingTradeId ? "Negotiate Trade Offer" : "Create Trade Offer"}</span>
                   </h3>
-                  <p className="mt-[0.2vmin] text-[1.1vmin] font-medium text-gray-300">
+                  <p className="mt-0.5 md:mt-[0.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-medium text-gray-300">
                     Exchange cash and property ownership with any active player
                   </p>
                   <button
                     onClick={() => setActiveTradeModal(null)}
-                    className="absolute right-[1.8vmin] top-[1.6vmin] flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full bg-white/10 text-[1.5vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                    aria-label="Close modal"
+                    className="absolute right-2.5 top-2.5 md:right-[1.8vmin] md:top-[1.6vmin] flex h-10 w-10 md:h-[3.4vmin] md:w-[3.4vmin] items-center justify-center rounded-full bg-white/10 text-sm md:text-[1.5vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
                     title="Close Modal"
                   >
                     ✕
@@ -4557,11 +4592,11 @@ export default function GameBoard() {
 
                 {/* Target Player Selector (Tabs) */}
                 {alivePlayers.filter((p) => p.id !== currentPlayer.id).length > 0 && (
-                  <div className="flex items-center gap-[1vmin] border-b border-white/10 bg-[#160e2e] px-[2.4vmin] py-[1.2vmin]">
-                    <span className="text-[1.2vmin] font-black uppercase tracking-wider text-purple-300 shrink-0">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 md:gap-[1vmin] border-b border-white/10 bg-[#160e2e] px-3 py-2 md:px-[2.4vmin] md:py-[1.2vmin]">
+                    <span className="text-xs md:text-[1.2vmin] font-black uppercase tracking-wider text-purple-300 shrink-0">
                       Trade Partner:
                     </span>
-                    <div className="flex flex-wrap gap-[0.8vmin]">
+                    <div className="flex flex-wrap gap-1.5 md:gap-[0.8vmin]">
                       {alivePlayers
                         .filter((p) => p.id !== currentPlayer.id)
                         .map((partner) => {
@@ -4574,12 +4609,12 @@ export default function GameBoard() {
                                 setTradeDraftRequestedMoney(0);
                                 setTradeDraftRequestedPropIds([]);
                               }}
-                              className={`flex items-center gap-[0.7vmin] rounded-[0.9vmin] px-[1.5vmin] py-[0.65vmin] text-[1.25vmin] font-black transition-all cursor-pointer ${isSelected
+                              className={`flex items-center gap-1.5 md:gap-[0.7vmin] min-h-[38px] rounded-lg md:rounded-[0.9vmin] px-3 py-1.5 md:px-[1.5vmin] md:py-[0.65vmin] text-xs md:text-[1.25vmin] font-black transition-all cursor-pointer ${isSelected
                                   ? "border-2 border-cyan-300 bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 text-white shadow-[0_0_1.5vmin_rgba(6,182,212,0.5)] scale-[1.03]"
                                   : "border border-white/15 bg-white/5 text-gray-200 hover:border-purple-400/60 hover:bg-white/10"
                                 }`}
                             >
-                              <span className="h-[1.2vmin] w-[1.2vmin] rounded-full shadow" style={{ backgroundColor: partner.color }} />
+                              <span className="h-3 w-3 md:h-[1.2vmin] md:w-[1.2vmin] rounded-full shadow" style={{ backgroundColor: partner.color }} />
                               <span>{partner.name || `Player ${partner.id}`}</span>
                             </button>
                           );
@@ -4597,29 +4632,29 @@ export default function GameBoard() {
                     : [];
 
                   return (
-                    <div className="flex flex-1 overflow-y-auto p-[2.4vmin] gap-[1vmin]">
+                    <div className="flex flex-col md:flex-row flex-1 overflow-y-auto p-3 sm:p-4 md:p-[2.4vmin] gap-3 md:gap-[1vmin]">
                       {/* Left Column: Initiator (Your Offer) */}
                       <div className="flex flex-1 flex-col gap-[1.5vmin] pr-[1.4vmin]">
-                        <div className="flex items-center justify-between border-b border-purple-500/20 pb-[0.8vmin]">
-                          <div className="flex items-center gap-[0.8vmin]">
-                            <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: currentPlayer.color }} />
-                            <span className="text-[1.75vmin] font-black text-white">
+                        <div className="flex items-center justify-between border-b border-purple-500/20 pb-2 md:pb-[0.8vmin]">
+                          <div className="flex items-center gap-1.5 md:gap-[0.8vmin]">
+                            <span className="h-3 w-3 md:h-[1.8vmin] md:w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: currentPlayer.color }} />
+                            <span className="text-xs sm:text-sm md:text-[1.75vmin] font-black text-white">
                               {currentPlayer.name || `Player ${currentPlayer.id}`}
                             </span>
-                            <span className="rounded-full bg-purple-500/25 border border-purple-400/50 px-[0.8vmin] py-[0.15vmin] text-[0.9vmin] font-black uppercase text-purple-200">
+                            <span className="rounded-full bg-purple-500/25 border border-purple-400/50 px-2 py-0.5 md:px-[0.8vmin] md:py-[0.15vmin] text-[10px] md:text-[0.9vmin] font-black uppercase text-purple-200">
                               You
                             </span>
                           </div>
-                          <span className="text-[1.25vmin] font-bold text-gray-300">
-                            Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${currentPlayer.money.toLocaleString()}</span>
+                          <span className="text-xs md:text-[1.25vmin] font-bold text-gray-300">
+                            Balance: <span className="font-mono text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-400">${currentPlayer.money.toLocaleString()}</span>
                           </span>
                         </div>
 
                         {/* Cash Slider */}
-                        <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-purple-500/30 bg-[#181133] p-[1.4vmin]">
-                          <div className="flex items-center justify-between text-[1.2vmin] font-black text-purple-200 uppercase tracking-wide">
+                        <div className="flex flex-col gap-1.5 md:gap-[0.8vmin] rounded-xl md:rounded-[1.2vmin] border border-purple-500/30 bg-[#181133] p-2.5 md:p-[1.4vmin]">
+                          <div className="flex items-center justify-between text-xs md:text-[1.2vmin] font-black text-purple-200 uppercase tracking-wide">
                             <span>💵 Offer Cash:</span>
-                            <span className="rounded-full border border-purple-400/80 bg-purple-900/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-purple-100 shadow-[0_0_1vmin_rgba(168,85,247,0.4)]">
+                            <span className="rounded-full border border-purple-400/80 bg-purple-900/80 px-2.5 py-0.5 md:px-[1.6vmin] md:py-[0.3vmin] font-mono text-xs sm:text-sm md:text-[1.55vmin] font-black text-purple-100 shadow-[0_0_1vmin_rgba(168,85,247,0.4)]">
                               ${tradeDraftOfferedMoney.toLocaleString()}
                             </span>
                           </div>
@@ -4629,30 +4664,30 @@ export default function GameBoard() {
                             max={Math.max(0, currentPlayer.money)}
                             value={tradeDraftOfferedMoney}
                             onChange={(e) => setTradeDraftOfferedMoney(Math.min(currentPlayer.money, Math.max(0, Number(e.target.value))))}
-                            className="h-[0.9vmin] w-full cursor-pointer accent-purple-500"
+                            className="h-7 md:h-[0.9vmin] w-full cursor-pointer accent-purple-500"
                           />
-                          <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
+                          <div className="flex items-center justify-between text-[11px] md:text-[1.15vmin] font-mono font-bold text-gray-400">
                             <span>$0</span>
                             <span>${currentPlayer.money.toLocaleString()}</span>
                           </div>
                         </div>
 
                         {/* Properties Offered */}
-                        <div className="flex flex-1 flex-col gap-[0.8vmin]">
+                        <div className="flex flex-1 flex-col gap-1 md:gap-[0.8vmin]">
                           <div className="flex items-center justify-between">
-                            <span className="text-[1.25vmin] font-black uppercase tracking-wider text-purple-300">
+                            <span className="text-xs md:text-[1.25vmin] font-black uppercase tracking-wider text-purple-300">
                               Properties to Give:
                             </span>
-                            <span className="text-[1.1vmin] font-bold text-gray-400">
+                            <span className="text-[11px] md:text-[1.1vmin] font-bold text-gray-400">
                               {tradeDraftOfferedPropIds.length} selected
                             </span>
                           </div>
-                          <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
+                          <div className="flex max-h-48 md:max-h-[30vmin] min-h-[14vmin] flex-col gap-1 md:gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
                             {initiatorProps.length === 0 ? (
-                              <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
-                                <span className="text-[2.4vmin] opacity-70">🏚️</span>
-                                <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
-                                <span className="text-[1.1vmin] text-gray-400">You don&apos;t own any properties to give in this trade</span>
+                              <div className="flex flex-1 flex-col items-center justify-center gap-1 md:gap-[0.6vmin] rounded-xl md:rounded-[1.2vmin] border border-white/10 bg-black/40 py-6 md:py-[3.5vmin] text-center shadow-inner">
+                                <span className="text-xl md:text-[2.4vmin] opacity-70">🏚️</span>
+                                <span className="text-xs sm:text-sm md:text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
+                                <span className="text-[11px] md:text-[1.1vmin] text-gray-400">You don&apos;t own any properties to give in this trade</span>
                               </div>
                             ) : (
                               initiatorProps.map((tile) => {
@@ -4666,17 +4701,17 @@ export default function GameBoard() {
                                         prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
                                       )
                                     }
-                                    className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${isSelected
+                                    className={`flex items-center justify-between min-h-[44px] rounded-xl md:rounded-[1vmin] px-3 py-2 md:px-[1.4vmin] md:py-[1vmin] transition-all cursor-pointer ${isSelected
                                         ? "border-2 border-purple-300 bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 text-white shadow-[0_0_1.6vmin_rgba(168,85,247,0.6)] scale-[1.01]"
                                         : "border border-white/15 bg-[#1b1438] text-gray-200 hover:border-purple-400/60 hover:bg-[#231b47] hover:text-white"
                                       }`}
                                   >
-                                    <div className="flex items-center gap-[0.9vmin]">
-                                      {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
-                                      <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
-                                      {isSelected && <span className="text-[1.2vmin] font-black text-purple-200">✓</span>}
+                                    <div className="flex items-center gap-2 md:gap-[0.9vmin]">
+                                      {renderTileIconOrFlag(tile, "w-6 h-4 md:w-[2.6vmin] md:h-[1.8vmin]")}
+                                      <span className="text-xs sm:text-sm md:text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                      {isSelected && <span className="text-xs md:text-[1.2vmin] font-black text-purple-200">✓</span>}
                                     </div>
-                                    <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
+                                    <span className="font-mono text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-400 drop-shadow">
                                       {tile.price}
                                     </span>
                                   </button>
@@ -4688,34 +4723,34 @@ export default function GameBoard() {
                       </div>
 
                       {/* Center Divider with ↔ */}
-                      <div className="relative flex flex-col items-center justify-center px-[0.8vmin]">
-                        <div className="h-full w-[0.25vmin] bg-purple-500/30" />
-                        <div className="absolute flex h-[3.8vmin] w-[3.8vmin] items-center justify-center rounded-full border-2 border-purple-300 bg-[#211642] text-[1.6vmin] text-purple-200 shadow-[0_0_1.6vmin_rgba(168,85,247,0.5)]">
+                      <div className="relative flex flex-row md:flex-col items-center justify-center py-1 md:px-[0.8vmin]">
+                        <div className="w-full md:w-[0.25vmin] h-[1px] md:h-full bg-purple-500/30" />
+                        <div className="absolute flex h-7 w-7 md:h-[3.8vmin] md:w-[3.8vmin] items-center justify-center rounded-full border-2 border-purple-300 bg-[#211642] text-xs md:text-[1.6vmin] text-purple-200 shadow-[0_0_1.6vmin_rgba(168,85,247,0.5)]">
                           ↔
                         </div>
                       </div>
 
                       {/* Right Column: Target Player (Requested from them) */}
-                      <div className="flex flex-1 flex-col gap-[1.5vmin] pl-[1.4vmin]">
+                      <div className="flex flex-1 flex-col gap-2.5 md:gap-[1.5vmin] md:pl-[1.4vmin]">
                         {targetPlayer ? (
                           <>
-                            <div className="flex items-center justify-between border-b border-cyan-500/20 pb-[0.8vmin]">
-                              <div className="flex items-center gap-[0.8vmin]">
-                                <span className="h-[1.8vmin] w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: targetPlayer.color }} />
-                                <span className="text-[1.75vmin] font-black text-white">
+                            <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2 md:pb-[0.8vmin]">
+                              <div className="flex items-center gap-1.5 md:gap-[0.8vmin]">
+                                <span className="h-3 w-3 md:h-[1.8vmin] md:w-[1.8vmin] rounded-full shadow-md" style={{ backgroundColor: targetPlayer.color }} />
+                                <span className="text-xs sm:text-sm md:text-[1.75vmin] font-black text-white">
                                   {targetPlayer.name || `Player ${targetPlayer.id}`}
                                 </span>
                               </div>
-                              <span className="text-[1.25vmin] font-bold text-gray-300">
-                                Balance: <span className="font-mono text-[1.45vmin] font-black text-emerald-400">${targetPlayer.money.toLocaleString()}</span>
+                              <span className="text-xs md:text-[1.25vmin] font-bold text-gray-300">
+                                Balance: <span className="font-mono text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-400">${targetPlayer.money.toLocaleString()}</span>
                               </span>
                             </div>
 
                             {/* Cash Slider for Target */}
-                            <div className="flex flex-col gap-[0.8vmin] rounded-[1.2vmin] border border-cyan-500/30 bg-[#111933] p-[1.4vmin]">
-                              <div className="flex items-center justify-between text-[1.2vmin] font-black text-cyan-200 uppercase tracking-wide">
+                            <div className="flex flex-col gap-1.5 md:gap-[0.8vmin] rounded-xl md:rounded-[1.2vmin] border border-cyan-500/30 bg-[#111933] p-2.5 md:p-[1.4vmin]">
+                              <div className="flex items-center justify-between text-xs md:text-[1.2vmin] font-black text-cyan-200 uppercase tracking-wide">
                                 <span>💵 Ask Cash:</span>
-                                <span className="rounded-full border border-cyan-400/80 bg-cyan-950/80 px-[1.6vmin] py-[0.3vmin] font-mono text-[1.55vmin] font-black text-cyan-100 shadow-[0_0_1vmin_rgba(6,182,212,0.4)]">
+                                <span className="rounded-full border border-cyan-400/80 bg-cyan-950/80 px-2.5 py-0.5 md:px-[1.6vmin] md:py-[0.3vmin] font-mono text-xs sm:text-sm md:text-[1.55vmin] font-black text-cyan-100 shadow-[0_0_1vmin_rgba(6,182,212,0.4)]">
                                   ${tradeDraftRequestedMoney.toLocaleString()}
                                 </span>
                               </div>
@@ -4725,30 +4760,30 @@ export default function GameBoard() {
                                 max={Math.max(0, targetPlayer.money)}
                                 value={tradeDraftRequestedMoney}
                                 onChange={(e) => setTradeDraftRequestedMoney(Math.min(targetPlayer.money, Math.max(0, Number(e.target.value))))}
-                                className="h-[0.9vmin] w-full cursor-pointer accent-cyan-500"
+                                className="h-7 md:h-[0.9vmin] w-full cursor-pointer accent-cyan-500"
                               />
-                              <div className="flex items-center justify-between text-[1.15vmin] font-mono font-bold text-gray-400">
+                              <div className="flex items-center justify-between text-[11px] md:text-[1.15vmin] font-mono font-bold text-gray-400">
                                 <span>$0</span>
                                 <span>${targetPlayer.money.toLocaleString()}</span>
                               </div>
                             </div>
 
                             {/* Properties Requested from Target */}
-                            <div className="flex flex-1 flex-col gap-[0.8vmin]">
+                            <div className="flex flex-1 flex-col gap-1 md:gap-[0.8vmin]">
                               <div className="flex items-center justify-between">
-                                <span className="text-[1.25vmin] font-black uppercase tracking-wider text-cyan-300">
+                                <span className="text-xs md:text-[1.25vmin] font-black uppercase tracking-wider text-cyan-300">
                                   Properties to Receive:
                                 </span>
-                                <span className="text-[1.1vmin] font-bold text-gray-400">
+                                <span className="text-[11px] md:text-[1.1vmin] font-bold text-gray-400">
                                   {tradeDraftRequestedPropIds.length} selected
                                 </span>
                               </div>
-                              <div className="flex max-h-[30vmin] min-h-[14vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
+                              <div className="flex max-h-48 md:max-h-[30vmin] min-h-[14vmin] flex-col gap-1 md:gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.2vmin]">
                                 {targetProps.length === 0 ? (
-                                  <div className="flex flex-1 flex-col items-center justify-center gap-[0.6vmin] rounded-[1.2vmin] border border-white/10 bg-black/40 py-[3.5vmin] text-center shadow-inner">
-                                    <span className="text-[2.4vmin] opacity-70">🏚️</span>
-                                    <span className="text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
-                                    <span className="text-[1.1vmin] text-gray-400">{targetPlayer.name} doesn&apos;t own any properties to give</span>
+                                  <div className="flex flex-1 flex-col items-center justify-center gap-1 md:gap-[0.6vmin] rounded-xl md:rounded-[1.2vmin] border border-white/10 bg-black/40 py-6 md:py-[3.5vmin] text-center shadow-inner">
+                                    <span className="text-xl md:text-[2.4vmin] opacity-70">🏚️</span>
+                                    <span className="text-xs sm:text-sm md:text-[1.35vmin] font-black text-gray-200">No Properties Owned</span>
+                                    <span className="text-[11px] md:text-[1.1vmin] text-gray-400">{targetPlayer.name} doesn&apos;t own any properties to give</span>
                                   </div>
                                 ) : (
                                   targetProps.map((tile) => {
@@ -4762,17 +4797,17 @@ export default function GameBoard() {
                                             prev.includes(tile.id) ? prev.filter((id) => id !== tile.id) : [...prev, tile.id]
                                           )
                                         }
-                                        className={`flex items-center justify-between rounded-[1vmin] px-[1.4vmin] py-[1vmin] transition-all cursor-pointer ${isSelected
+                                        className={`flex items-center justify-between min-h-[44px] rounded-xl md:rounded-[1vmin] px-3 py-2 md:px-[1.4vmin] md:py-[1vmin] transition-all cursor-pointer ${isSelected
                                             ? "border-2 border-cyan-300 bg-gradient-to-r from-indigo-700 via-cyan-700 to-indigo-800 text-white shadow-[0_0_1.6vmin_rgba(6,182,212,0.6)] scale-[1.01]"
                                             : "border border-white/15 bg-[#141b38] text-gray-200 hover:border-cyan-400/60 hover:bg-[#1a2347] hover:text-white"
                                           }`}
                                       >
-                                        <div className="flex items-center gap-[0.9vmin]">
-                                          {renderTileIconOrFlag(tile, "w-[2.6vmin] h-[1.8vmin]")}
-                                          <span className="text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
-                                          {isSelected && <span className="text-[1.2vmin] font-black text-cyan-200">✓</span>}
+                                        <div className="flex items-center gap-2 md:gap-[0.9vmin]">
+                                          {renderTileIconOrFlag(tile, "w-6 h-4 md:w-[2.6vmin] md:h-[1.8vmin]")}
+                                          <span className="text-xs sm:text-sm md:text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                          {isSelected && <span className="text-xs md:text-[1.2vmin] font-black text-cyan-200">✓</span>}
                                         </div>
-                                        <span className="font-mono text-[1.45vmin] font-black text-emerald-400 drop-shadow">
+                                        <span className="font-mono text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-400 drop-shadow">
                                           {tile.price}
                                         </span>
                                       </button>
@@ -4783,7 +4818,7 @@ export default function GameBoard() {
                             </div>
                           </>
                         ) : (
-                          <div className="flex h-full items-center justify-center text-gray-300 font-bold text-[1.3vmin]">
+                          <div className="flex h-full items-center justify-center text-gray-300 font-bold text-xs sm:text-sm md:text-[1.3vmin] py-6 md:py-0">
                             Select a player to start trading
                           </div>
                         )}
@@ -4793,19 +4828,19 @@ export default function GameBoard() {
                 })()}
 
                 {/* Modal Footer */}
-                <div className="flex items-center justify-between border-t border-purple-500/30 bg-[#181133] px-[2.4vmin] py-[1.5vmin]">
+                <div className="flex items-center justify-between border-t border-purple-500/30 bg-[#181133] px-3 py-2.5 md:px-[2.4vmin] md:py-[1.5vmin] gap-2">
                   <button
                     onClick={() => setActiveTradeModal(null)}
-                    className="rounded-[1vmin] border border-white/20 bg-white/5 px-[2.2vmin] py-[1vmin] text-[1.25vmin] font-bold text-gray-300 transition hover:bg-white/15 hover:text-white cursor-pointer"
+                    className="flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-white/20 bg-white/5 px-4 py-2 md:px-[2.2vmin] md:py-[1vmin] text-xs sm:text-sm md:text-[1.25vmin] font-bold text-gray-300 transition hover:bg-white/15 hover:text-white active:scale-95 cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleSendTrade}
                     disabled={!tradeDraftTargetId}
-                    className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[3.5vmin] py-[1.2vmin] text-[1.45vmin] font-black uppercase tracking-wider text-white shadow-[0_0_2.5vmin_rgba(139,92,246,0.55)] transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                    className="flex items-center justify-center gap-1.5 md:gap-[0.8vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-4 py-2 md:px-[3.5vmin] md:py-[1.2vmin] text-xs sm:text-sm md:text-[1.45vmin] font-black uppercase tracking-wider text-white shadow-[0_0_2.5vmin_rgba(139,92,246,0.55)] transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                   >
-                    <span className="text-[1.6vmin]">✈️</span>
+                    <span className="text-sm md:text-[1.6vmin]">✈️</span>
                     <span>{negotiatingTradeId ? "Send Counter-Offer" : "Send Trade Offer"}</span>
                   </button>
                 </div>
@@ -4816,16 +4851,16 @@ export default function GameBoard() {
           {/* ================= VIEW TRADE MODAL ================= */}
           {activeTradeModal === "view" && selectedTradeId && (
             <div
-              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md"
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-2 sm:p-4 md:p-[2vmin] backdrop-blur-md overflow-y-auto"
               onClick={() => setActiveTradeModal(null)}
             >
               {(() => {
                 const trade = trades.find((t) => t.id === selectedTradeId);
                 if (!trade) {
                   return (
-                    <div className="rounded-[1.4vmin] bg-[#120d24] p-[3vmin] text-center text-white" onClick={(e) => e.stopPropagation()}>
-                      <p className="text-[1.3vmin]">Trade not found or already completed.</p>
-                      <button onClick={() => setActiveTradeModal(null)} className="mt-[1vmin] rounded-[0.8vmin] bg-white/10 px-[2vmin] py-[0.8vmin] text-[1.1vmin]">
+                    <div className="rounded-2xl md:rounded-[1.4vmin] bg-[#120d24] p-6 md:p-[3vmin] text-center text-white my-auto" onClick={(e) => e.stopPropagation()}>
+                      <p className="text-sm md:text-[1.3vmin]">Trade not found or already completed.</p>
+                      <button onClick={() => setActiveTradeModal(null)} className="mt-4 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.8vmin] bg-white/10 px-4 py-2 md:px-[2vmin] md:py-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] mx-auto cursor-pointer">
                         Close
                       </button>
                     </div>
@@ -4841,17 +4876,18 @@ export default function GameBoard() {
 
                 return (
                   <div
-                    className="relative flex max-h-[90vh] w-[86vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-purple-500/40 bg-[#120d24] text-white shadow-[0_0_4.5vmin_rgba(139,92,246,0.35)]"
+                    className="relative flex max-h-[92dvh] w-full max-w-[850px] md:w-[86vmin] flex-col overflow-hidden rounded-2xl md:rounded-[2vmin] border-2 border-purple-500/40 bg-[#120d24] text-white shadow-[0_0_4.5vmin_rgba(139,92,246,0.35)] my-auto"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Header */}
-                    <div className="relative border-b border-purple-500/25 bg-[#17112e] py-[1.5vmin] text-center">
-                      <h3 className="text-[2.2vmin] font-black uppercase tracking-wider text-white">
+                    <div className="relative border-b border-purple-500/25 bg-[#17112e] py-3 px-10 md:py-[1.5vmin] text-center">
+                      <h3 className="text-base sm:text-lg md:text-[2.2vmin] font-black uppercase tracking-wider text-white">
                         View Trade
                       </h3>
                       <button
                         onClick={() => setActiveTradeModal(null)}
-                        className="absolute right-[1.6vmin] top-[1.4vmin] flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                        aria-label="Close modal"
+                        className="absolute right-2.5 top-2.5 md:right-[1.6vmin] md:top-[1.4vmin] flex h-10 w-10 md:h-[3.2vmin] md:w-[3.2vmin] items-center justify-center rounded-full bg-white/10 text-sm md:text-[1.4vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
                         title="Close"
                       >
                         ✕
@@ -4859,52 +4895,52 @@ export default function GameBoard() {
                     </div>
 
                     {/* Body: Two Columns */}
-                    <div className="flex flex-1 overflow-y-auto p-[2.4vmin]">
+                    <div className="flex flex-col md:flex-row flex-1 overflow-y-auto p-3 sm:p-4 md:p-[2.4vmin] gap-3">
                       {/* Left: Initiator terms */}
-                      <div className="flex flex-1 flex-col gap-[1.4vmin] pr-[1.8vmin]">
-                        <div className="flex items-center gap-[0.8vmin]">
-                          <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: initiator?.color }} />
-                          <span className="text-[1.6vmin] font-black text-white">
+                      <div className="flex flex-1 flex-col gap-2.5 md:gap-[1.4vmin] md:pr-[1.8vmin]">
+                        <div className="flex items-center gap-2 md:gap-[0.8vmin]">
+                          <span className="h-4 w-4 md:h-[1.6vmin] md:w-[1.6vmin] rounded-full" style={{ backgroundColor: initiator?.color }} />
+                          <span className="text-sm md:text-[1.6vmin] font-black text-white">
                             {initiator?.name || `Player ${trade.initiatorId}`}
                           </span>
                           {isViewerSender && (
-                            <span className="rounded-full bg-purple-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-purple-300">
+                            <span className="rounded-full bg-purple-500/20 px-2 py-0.5 md:px-[0.7vmin] md:py-[0.1vmin] text-[10px] md:text-[0.85vmin] font-black uppercase text-purple-300">
                               You
                             </span>
                           )}
                         </div>
 
                         {/* Cash Offered Badge */}
-                        <div className="flex items-center justify-between rounded-[1.2vmin] border border-purple-500/30 bg-[#191336] p-[1.2vmin]">
-                          <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
+                        <div className="flex items-center justify-between rounded-xl md:rounded-[1.2vmin] border border-purple-500/30 bg-[#191336] p-2.5 md:p-[1.2vmin]">
+                          <span className="text-xs md:text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
                             Offered Cash:
                           </span>
-                          <span className="rounded-full border border-purple-400/80 bg-purple-900/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-purple-200 shadow">
+                          <span className="rounded-full border border-purple-400/80 bg-purple-900/60 px-3 py-1 md:px-[1.8vmin] md:py-[0.4vmin] font-mono text-sm md:text-[1.6vmin] font-black text-purple-200 shadow">
                             ${trade.initiatorMoney.toLocaleString()}
                           </span>
                         </div>
 
                         {/* Offered Properties */}
-                        <div className="flex flex-col gap-[0.8vmin]">
-                          <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                        <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
+                          <span className="text-xs md:text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
                             Properties Offered ({initiatorOfferedTiles.length}):
                           </span>
-                          <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                          <div className="flex max-h-40 md:max-h-[32vmin] flex-col gap-1.5 md:gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
                             {initiatorOfferedTiles.length === 0 ? (
-                              <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
+                              <div className="rounded-xl md:rounded-[1vmin] border border-white/5 bg-black/20 py-4 md:py-[2.4vmin] text-center text-xs md:text-[1.15vmin] italic text-gray-500">
                                 No properties offered ($ cash only)
                               </div>
                             ) : (
                               initiatorOfferedTiles.map((tile) => (
                                 <div
                                   key={tile.id}
-                                  className="flex items-center justify-between rounded-[0.9vmin] border border-purple-400/40 bg-[#1f173d] px-[1.2vmin] py-[0.9vmin]"
+                                  className="flex items-center justify-between rounded-lg md:rounded-[0.9vmin] border border-purple-400/40 bg-[#1f173d] px-2.5 py-2 md:px-[1.2vmin] md:py-[0.9vmin] min-h-[40px]"
                                 >
-                                  <div className="flex items-center gap-[0.8vmin]">
+                                  <div className="flex items-center gap-2 md:gap-[0.8vmin]">
                                     {renderTileIconOrFlag(tile)}
-                                    <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                    <span className="text-xs md:text-[1.35vmin] font-black text-white">{tile.name}</span>
                                   </div>
-                                  <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                  <span className="font-mono text-xs md:text-[1.4vmin] font-black text-emerald-400 drop-shadow">
                                     {tile.price}
                                   </span>
                                 </div>
@@ -4915,58 +4951,58 @@ export default function GameBoard() {
                       </div>
 
                       {/* Center ↔ */}
-                      <div className="relative flex flex-col items-center justify-center px-[1vmin]">
-                        <div className="h-full w-[0.2vmin] bg-purple-500/25" />
-                        <div className="absolute flex h-[3.4vmin] w-[3.4vmin] items-center justify-center rounded-full border-2 border-purple-400 bg-[#1f163d] text-[1.5vmin] text-purple-200 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]">
+                      <div className="relative flex flex-row md:flex-col items-center justify-center py-1 md:px-[1vmin]">
+                        <div className="w-full md:w-[0.2vmin] h-[1px] md:h-full bg-purple-500/25" />
+                        <div className="absolute flex h-7 w-7 md:h-[3.4vmin] md:w-[3.4vmin] items-center justify-center rounded-full border-2 border-purple-400 bg-[#1f163d] text-xs md:text-[1.5vmin] text-purple-200 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]">
                           ↔
                         </div>
                       </div>
 
                       {/* Right: Target terms */}
-                      <div className="flex flex-1 flex-col gap-[1.4vmin] pl-[1.8vmin]">
-                        <div className="flex items-center gap-[0.8vmin]">
-                          <span className="h-[1.6vmin] w-[1.6vmin] rounded-full" style={{ backgroundColor: target?.color }} />
-                          <span className="text-[1.6vmin] font-black text-white">
+                      <div className="flex flex-1 flex-col gap-2.5 md:gap-[1.4vmin] md:pl-[1.8vmin]">
+                        <div className="flex items-center gap-2 md:gap-[0.8vmin]">
+                          <span className="h-4 w-4 md:h-[1.6vmin] md:w-[1.6vmin] rounded-full" style={{ backgroundColor: target?.color }} />
+                          <span className="text-sm md:text-[1.6vmin] font-black text-white">
                             {target?.name || `Player ${trade.targetId}`}
                           </span>
                           {isViewerRecipient && (
-                            <span className="rounded-full bg-emerald-500/20 px-[0.7vmin] py-[0.1vmin] text-[0.85vmin] font-black uppercase text-emerald-300">
+                            <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 md:px-[0.7vmin] md:py-[0.1vmin] text-[10px] md:text-[0.85vmin] font-black uppercase text-emerald-300">
                               You
                             </span>
                           )}
                         </div>
 
                         {/* Cash Requested Badge */}
-                        <div className="flex items-center justify-between rounded-[1.2vmin] border border-cyan-500/30 bg-[#141b33] p-[1.2vmin]">
-                          <span className="text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
+                        <div className="flex items-center justify-between rounded-xl md:rounded-[1.2vmin] border border-cyan-500/30 bg-[#141b33] p-2.5 md:p-[1.2vmin]">
+                          <span className="text-xs md:text-[1.15vmin] font-bold text-gray-400 uppercase tracking-wide">
                             Requested Cash:
                           </span>
-                          <span className="rounded-full border border-cyan-400/80 bg-cyan-950/60 px-[1.8vmin] py-[0.4vmin] font-mono text-[1.6vmin] font-black text-cyan-200 shadow">
+                          <span className="rounded-full border border-cyan-400/80 bg-cyan-950/60 px-3 py-1 md:px-[1.8vmin] md:py-[0.4vmin] font-mono text-sm md:text-[1.6vmin] font-black text-cyan-200 shadow">
                             ${trade.targetMoney.toLocaleString()}
                           </span>
                         </div>
 
                         {/* Requested Properties */}
-                        <div className="flex flex-col gap-[0.8vmin]">
-                          <span className="text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
+                        <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
+                          <span className="text-xs md:text-[1.15vmin] font-black uppercase tracking-wider text-gray-300">
                             Properties Requested ({targetRequestedTiles.length}):
                           </span>
-                          <div className="flex max-h-[32vmin] flex-col gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
+                          <div className="flex max-h-40 md:max-h-[32vmin] flex-col gap-1.5 md:gap-[0.7vmin] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-[0.4vmin]">
                             {targetRequestedTiles.length === 0 ? (
-                              <div className="rounded-[1vmin] border border-white/5 bg-black/20 py-[2.4vmin] text-center text-[1.15vmin] italic text-gray-500">
+                              <div className="rounded-xl md:rounded-[1vmin] border border-white/5 bg-black/20 py-4 md:py-[2.4vmin] text-center text-xs md:text-[1.15vmin] italic text-gray-500">
                                 No properties requested ($ cash only)
                               </div>
                             ) : (
                               targetRequestedTiles.map((tile) => (
                                 <div
                                   key={tile.id}
-                                  className="flex items-center justify-between rounded-[0.9vmin] border border-cyan-400/40 bg-[#16213d] px-[1.2vmin] py-[0.9vmin]"
+                                  className="flex items-center justify-between rounded-lg md:rounded-[0.9vmin] border border-cyan-400/40 bg-[#16213d] px-2.5 py-2 md:px-[1.2vmin] md:py-[0.9vmin] min-h-[40px]"
                                 >
-                                  <div className="flex items-center gap-[0.8vmin]">
+                                  <div className="flex items-center gap-2 md:gap-[0.8vmin]">
                                     {renderTileIconOrFlag(tile)}
-                                    <span className="text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                    <span className="text-xs md:text-[1.35vmin] font-black text-white">{tile.name}</span>
                                   </div>
-                                  <span className="font-mono text-[1.4vmin] font-black text-emerald-400 drop-shadow">
+                                  <span className="font-mono text-xs md:text-[1.4vmin] font-black text-emerald-400 drop-shadow">
                                     {tile.price}
                                   </span>
                                 </div>
@@ -4978,36 +5014,36 @@ export default function GameBoard() {
                     </div>
 
                     {/* Footer Actions */}
-                    <div className="flex items-center justify-between border-t border-purple-500/25 bg-[#17112e] px-[2.4vmin] py-[1.4vmin]">
+                    <div className="flex items-center justify-between border-t border-purple-500/25 bg-[#17112e] px-3 py-2.5 md:px-[2.4vmin] md:py-[1.4vmin] gap-2">
                       {isViewerSender ? (
                         <div className="flex w-full items-center justify-center">
                           <button
                             onClick={() => handleCancelTrade(trade.id)}
-                            className="flex items-center gap-[0.8vmin] rounded-[1vmin] bg-gradient-to-r from-red-600 via-rose-600 to-red-700 px-[3.5vmin] py-[1.2vmin] text-[1.4vmin] font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 transition hover:brightness-110 active:scale-95 cursor-pointer"
+                            className="flex items-center justify-center gap-2 md:gap-[0.8vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] bg-gradient-to-r from-red-600 via-rose-600 to-red-700 px-5 py-2 md:px-[3.5vmin] md:py-[1.2vmin] text-xs sm:text-sm md:text-[1.4vmin] font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 transition hover:brightness-110 active:scale-95 cursor-pointer"
                           >
                             <span>✕</span>
                             <span>Delete Trade</span>
                           </button>
                         </div>
                       ) : isViewerRecipient ? (
-                        <div className="flex w-full items-center justify-between gap-[1.2vmin]">
+                        <div className="flex w-full flex-wrap sm:flex-nowrap items-center justify-between gap-2 md:gap-[1.2vmin]">
                           <button
                             onClick={() => handleDeclineTrade(trade.id)}
-                            className="rounded-[1vmin] border border-red-500/40 bg-red-950/40 px-[2.2vmin] py-[1.1vmin] text-[1.25vmin] font-black uppercase text-red-300 transition hover:bg-red-900/60 active:scale-95 cursor-pointer"
+                            className="flex-1 sm:flex-initial flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1vmin] border border-red-500/40 bg-red-950/40 px-4 py-2 md:px-[2.2vmin] md:py-[1.1vmin] text-xs sm:text-sm md:text-[1.25vmin] font-black uppercase text-red-300 transition hover:bg-red-900/60 active:scale-95 cursor-pointer"
                           >
                             ✕ Decline
                           </button>
-                          <div className="flex items-center gap-[1.2vmin]">
+                          <div className="flex flex-1 sm:flex-initial items-center gap-2 md:gap-[1.2vmin]">
                             <button
                               onClick={() => handleStartNegotiation(trade)}
-                              className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-amber-500 to-orange-600 px-[2.5vmin] py-[1.1vmin] text-[1.35vmin] font-black uppercase tracking-wide text-white shadow-lg shadow-amber-500/30 transition hover:brightness-110 active:scale-95 cursor-pointer"
+                              className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[44px] rounded-lg md:rounded-[1vmin] bg-gradient-to-r from-amber-500 to-orange-600 px-3.5 py-2 md:px-[2.5vmin] md:py-[1.1vmin] text-xs sm:text-sm md:text-[1.35vmin] font-black uppercase tracking-wide text-white shadow-lg shadow-amber-500/30 transition hover:brightness-110 active:scale-95 cursor-pointer"
                             >
                               <span>🔄</span>
                               <span>Negotiate</span>
                             </button>
                             <button
                               onClick={() => handleAcceptTrade(trade.id)}
-                              className="flex items-center gap-[0.6vmin] rounded-[1vmin] bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-[3vmin] py-[1.1vmin] text-[1.4vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2vmin_rgba(16,185,129,0.5)] transition hover:brightness-110 active:scale-95 cursor-pointer"
+                              className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[44px] rounded-lg md:rounded-[1vmin] bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-4 py-2 md:px-[3vmin] md:py-[1.1vmin] text-xs sm:text-sm md:text-[1.4vmin] font-black uppercase tracking-wide text-white shadow-[0_0_2vmin_rgba(16,185,129,0.5)] transition hover:brightness-110 active:scale-95 cursor-pointer"
                             >
                               <span>✓</span>
                               <span>Accept Trade</span>
@@ -5015,13 +5051,13 @@ export default function GameBoard() {
                           </div>
                         </div>
                       ) : (
-                        <div className="flex w-full items-center justify-between">
-                          <span className="text-[1.15vmin] text-gray-400 font-medium">
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="text-xs md:text-[1.15vmin] text-gray-400 font-medium truncate">
                             Spectating active trade between {initiator?.name || `Player ${trade.initiatorId}`} and {target?.name || `Player ${trade.targetId}`}
                           </span>
                           <button
                             onClick={() => setActiveTradeModal(null)}
-                            className="rounded-[0.9vmin] bg-white/10 px-[2.4vmin] py-[0.9vmin] text-[1.2vmin] font-bold text-white hover:bg-white/20 cursor-pointer"
+                            className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] bg-white/10 px-4 py-2 md:px-[2.4vmin] md:py-[0.9vmin] text-xs sm:text-sm md:text-[1.2vmin] font-bold text-white hover:bg-white/20 active:scale-95 cursor-pointer shrink-0"
                           >
                             Close
                           </button>
@@ -5036,40 +5072,40 @@ export default function GameBoard() {
         </div>
 
         {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
-        <div className="flex h-[96vmin] w-full min-w-[36vmin] flex-1 flex-col self-start overflow-y-auto rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/90 p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)]">
+        <div className={`w-full max-w-[500px] lg:w-full lg:min-w-[36vmin] flex max-h-[88vh] lg:h-[96vmin] lg:flex-1 flex-col self-center lg:self-start overflow-y-auto rounded-2xl lg:rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/95 p-3 lg:p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)] ${mobileTab === "players" ? "flex" : "hidden lg:flex"}`}>
           {/* Room code pill + Leave button, relocated here from the centre
               console so the code stays visible while you play. */}
           {roomId && (
-            <div className="mb-[1.2vmin] flex flex-col gap-[0.8vmin] rounded-[1vmin] border-[0.18vmin] border-white/10 bg-black/40 p-[1vmin]">
-              <div className="flex items-center justify-between px-[0.3vmin]">
-                <span className="text-[1.05vmin] font-black uppercase tracking-widest text-gray-400">
+            <div className="mb-2 md:mb-[1.2vmin] flex flex-col gap-1.5 md:gap-[0.8vmin] rounded-xl md:rounded-[1vmin] border border-white/10 bg-black/40 p-2.5 md:p-[1vmin]">
+              <div className="flex items-center justify-between px-1 md:px-[0.3vmin]">
+                <span className="text-[11px] md:text-[1.05vmin] font-black uppercase tracking-widest text-gray-400">
                   Room code
                 </span>
-                <span className="text-[1.05vmin] font-bold text-gray-400">
+                <span className="text-[11px] md:text-[1.05vmin] font-bold text-gray-400">
                   {peerCount} online{roomRole === "host" ? " • host" : ""}
                   {sessionToken ? (
                     <span
-                      className="ml-[0.6vmin] text-emerald-400"
+                      className="ml-1 md:ml-[0.6vmin] text-emerald-400"
                       title={
                         myPlayerId
                           ? `Session saved as Player ${myPlayerId} — you'll rejoin this seat after a refresh`
                           : "Session saved — you'll rejoin this room after a refresh"
                       }
                     >
-                      • session saved{myPlayerId ? ` (P${myPlayerId})` : ""}
+                      • saved{myPlayerId ? ` (P${myPlayerId})` : ""}
                     </span>
                   ) : null}
                 </span>
               </div>
 
-              <div className="flex items-center gap-[0.8vmin]">
+              <div className="flex items-center gap-2 md:gap-[0.8vmin]">
                 <button
                   onClick={handleCopyRoomCode}
                   title="Copy room code to share"
-                  className="flex min-w-0 flex-1 items-center justify-center gap-[0.8vmin] rounded-[1vmin] border-[0.25vmin] border-cyan-400/60 bg-cyan-500/15 px-[1.4vmin] py-[1vmin] shadow-md transition-all hover:scale-[1.02] hover:border-cyan-300 hover:bg-cyan-500/25 active:scale-95 cursor-pointer"
+                  className="flex min-w-0 flex-1 items-center justify-center gap-1.5 md:gap-[0.8vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] border border-cyan-400/60 bg-cyan-500/15 px-3 py-2 md:px-[1.4vmin] md:py-[1vmin] shadow-md transition-all hover:scale-[1.02] hover:border-cyan-300 hover:bg-cyan-500/25 active:scale-95 cursor-pointer"
                 >
-                  <span className="text-[1.6vmin] leading-none">{copiedCode ? "✓" : "🔑"}</span>
-                  <span className="font-mono text-[2vmin] font-black uppercase tracking-[0.3vmin] text-cyan-200">
+                  <span className="text-sm md:text-[1.6vmin] leading-none">{copiedCode ? "✓" : "🔑"}</span>
+                  <span className="font-mono text-base md:text-[2vmin] font-black uppercase tracking-wider text-cyan-200">
                     {copiedCode ? "COPIED" : roomId}
                   </span>
                 </button>
@@ -5077,31 +5113,31 @@ export default function GameBoard() {
                 <button
                   onClick={handleLeaveRoom}
                   title="Leave this room and return to the lobby"
-                  className="flex shrink-0 items-center gap-[0.6vmin] rounded-[1vmin] border-[0.25vmin] border-red-400/70 bg-gradient-to-r from-red-500/35 to-red-600/20 px-[1.6vmin] py-[1vmin] text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.6vmin_rgba(239,68,68,0.5)] transition-all hover:scale-[1.04] hover:border-red-300 hover:from-red-500/60 hover:to-red-600/40 hover:shadow-[0_0_2.4vmin_rgba(239,68,68,0.85)] active:scale-95 cursor-pointer"
+                  className="flex shrink-0 items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] border border-red-400/70 bg-gradient-to-r from-red-500/35 to-red-600/20 px-3.5 py-2 md:px-[1.6vmin] md:py-[1vmin] text-xs md:text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.6vmin_rgba(239,68,68,0.5)] transition-all hover:scale-[1.04] hover:border-red-300 hover:from-red-500/60 hover:to-red-600/40 hover:shadow-[0_0_2.4vmin_rgba(239,68,68,0.85)] active:scale-95 cursor-pointer"
                 >
-                  <span className="text-[1.7vmin] leading-none">🚪</span>
+                  <span className="text-sm md:text-[1.7vmin] leading-none">🚪</span>
                   <span>Leave</span>
                 </button>
               </div>
 
-              <span className="px-[0.3vmin] text-[0.95vmin] text-gray-500">
+              <span className="px-1 md:px-[0.3vmin] text-[10px] md:text-[0.95vmin] text-gray-500">
                 Tap the code to copy it and share with friends
               </span>
             </div>
           )}
 
-          <div className="mb-[0.8vmin] flex items-center justify-between px-[0.3vmin]">
-            <h2 className="text-[1.4vmin] font-black uppercase tracking-widest text-white">
+          <div className="mb-2 md:mb-[0.8vmin] flex items-center justify-between px-1 md:px-[0.3vmin]">
+            <h2 className="text-xs md:text-[1.4vmin] font-black uppercase tracking-widest text-white">
               Players
             </h2>
             {isVoteKickOpen && (
-              <span className="rounded-full border border-purple-500/40 bg-purple-500/20 px-[0.6vmin] py-[0.15vmin] text-[0.85vmin] font-bold text-purple-300 animate-pulse">
+              <span className="rounded-full border border-purple-500/40 bg-purple-500/20 px-2 py-0.5 md:px-[0.6vmin] md:py-[0.15vmin] text-[10px] md:text-[0.85vmin] font-bold text-purple-300 animate-pulse">
                 Vote Kick Mode
               </span>
             )}
           </div>
 
-          <div className="flex flex-col gap-[0.7vmin]">
+          <div className="flex flex-col gap-2 md:gap-[0.7vmin]">
             {players.map((player) => {
               const isSelected = selectedPlayerId === player.id;
               const isSelf = player.id === currentPlayer?.id;
@@ -5131,7 +5167,7 @@ export default function GameBoard() {
                       setSelectedPlayerId((prev) => (prev === player.id ? null : player.id));
                     }
                   }}
-                  className={`flex items-center justify-between rounded-[1vmin] border-[0.18vmin] px-[1.1vmin] py-[0.9vmin] text-left transition-all duration-200 ${player.isBankrupt
+                  className={`flex items-center justify-between rounded-xl md:rounded-[1vmin] border px-3 py-2 md:px-[1.1vmin] md:py-[0.9vmin] text-left transition-all duration-200 ${player.isBankrupt
                       ? "opacity-30 grayscale cursor-not-allowed"
                       : isVoteKickOpen && isSelf
                         ? "opacity-30 grayscale-[30%] cursor-not-allowed border-white/5 bg-white/[0.02]"
@@ -5140,7 +5176,7 @@ export default function GameBoard() {
                             ? "border-emerald-500/60 bg-emerald-500/10 cursor-pointer hover:bg-emerald-500/15"
                             : "border-purple-500/40 bg-purple-500/5 cursor-pointer hover:border-purple-400/60 hover:bg-purple-500/15"
                           : isSelected && !player.isCurrentPlayer
-                            ? "ring-[0.14vmin] ring-white/40 cursor-pointer"
+                            ? "ring-2 md:ring-[0.14vmin] ring-white/40 cursor-pointer"
                             : "cursor-pointer"
                     }`}
                   style={{
@@ -5170,56 +5206,42 @@ export default function GameBoard() {
                         : undefined,
                   }}
                 >
-                  <div className="flex items-center gap-[1vmin]">
-                    <div className="shrink-0">{renderPlayerFace(player, "4vmin")}</div>
+                  <div className="flex items-center gap-2.5 md:gap-[1vmin]">
+                    <div className="shrink-0">{renderPlayerFace(player, "clamp(32px, 4vmin, 44px)")}</div>
                     <div className="flex flex-col leading-tight">
                       {!isGameStarted ? (
                         <div
-                          className="flex items-center gap-[0.6vmin]"
+                          className="flex items-center gap-1.5 md:gap-[0.6vmin]"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Plain white name text — no input chrome. The seat is
-                              still editable before the game starts (same
-                              player:set-name commit on blur), it just doesn't
-                              advertise itself with a purple box or a lock badge. */}
                           <input
                             type="text"
                             value={player.name}
                             onChange={(e) => handlePlayerNameChange(player.id, e.target.value)}
                             onBlur={(e) => {
-                              // One path for renaming: this commits through the
-                              // SAME player:set-name event the lobby picker uses,
-                              // so the server and every other client stay in step.
                               if (isSelf) commitName(e.target.value);
                             }}
                             disabled={lockForThisSeat || !isSelf}
                             placeholder={`Player ${player.id}`}
                             maxLength={PLAYER_NAME_MAX}
-                            className="w-[16.5vmin] cursor-pointer rounded-[0.4vmin] border-0 bg-transparent p-0 text-[1.75vmin] font-black text-white placeholder:font-black placeholder:text-[1.65vmin] placeholder:text-gray-400/90 focus:outline-none disabled:cursor-default"
+                            className="w-28 sm:w-36 md:w-[16.5vmin] cursor-pointer rounded border-0 bg-transparent p-0 text-sm md:text-[1.75vmin] font-black text-white placeholder:font-black placeholder:text-xs md:placeholder:text-[1.65vmin] placeholder:text-gray-400/90 focus:outline-none disabled:cursor-default"
                             title={nameLocked ? "Your name is locked once you enter the room" : "Click to edit player name"}
                           />
                         </div>
                       ) : (
                         <span
-                          className={`text-[1.8vmin] font-black tracking-wide text-white drop-shadow-[0_0.2vmin_0.4vmin_rgba(0,0,0,0.9)] ${isVoteKickOpen && isSelf ? "text-gray-400" : ""}`}
+                          className={`text-sm md:text-[1.8vmin] font-black tracking-wide text-white drop-shadow-[0_0.2vmin_0.4vmin_rgba(0,0,0,0.9)] ${isVoteKickOpen && isSelf ? "text-gray-400" : ""}`}
                         >
                           {player.name || `Player ${player.id}`}
                         </span>
                       )}
 
-                      {/* NO colour picker here. A colour is chosen ONCE on the
-                          "Pick your colour" screen and is permanent for the
-                          session (the server refuses any later player:set-color
-                          with COLOR_ALREADY_SET). The only way to change it is to
-                          leave the room and rejoin, which lands back on the
-                          picker — so deliberately no edit affordance in-room. */}
-
                       {player.isBankrupt ? (
-                        <span className="text-[0.9vmin] text-red-400">BANKRUPT</span>
+                        <span className="text-[10px] md:text-[0.9vmin] text-red-400">BANKRUPT</span>
                       ) : isVoteKickOpen && isSelf ? (
-                        <span className="text-[0.8vmin] font-medium text-gray-500">(Yourself)</span>
+                        <span className="text-[10px] md:text-[0.8vmin] font-medium text-gray-500">(Yourself)</span>
                       ) : isVoteKickOpen && isTarget ? (
-                        <div className="mt-[0.15vmin] flex items-center gap-[0.3vmin]">
+                        <div className="mt-1 md:mt-[0.15vmin] flex items-center gap-1 md:gap-[0.3vmin]">
                           {otherEligibleVoters.map((voter) => {
                             const thisVoted = voters.includes(voter.id);
                             return (
@@ -5229,14 +5251,14 @@ export default function GameBoard() {
                                   e.stopPropagation();
                                   togglePlayerKickVote(player.id, voter.id);
                                 }}
-                                className={`flex cursor-pointer items-center gap-[0.2vmin] rounded-full border px-[0.45vmin] py-[0.05vmin] text-[0.7vmin] font-bold transition-all ${thisVoted
+                                className={`flex cursor-pointer items-center gap-1 md:gap-[0.2vmin] rounded-full border px-1.5 py-0.5 md:px-[0.45vmin] md:py-[0.05vmin] text-[10px] md:text-[0.7vmin] font-bold transition-all ${thisVoted
                                     ? "border-emerald-500/50 bg-emerald-500/25 text-emerald-300"
                                     : "border-white/10 bg-white/[0.03] text-gray-400 hover:border-white/30 hover:text-white"
                                   }`}
                                 title={`${voter.name}: ${thisVoted ? "Voted (click to remove)" : "Click to vote"} (1 vote per player)`}
                               >
                                 <span
-                                  className="h-[0.45vmin] w-[0.45vmin] rounded-full"
+                                  className="h-1.5 w-1.5 md:h-[0.45vmin] md:w-[0.45vmin] rounded-full"
                                   style={{ backgroundColor: voter.color }}
                                 />
                                 <span>{voter.name}</span>
@@ -5246,16 +5268,16 @@ export default function GameBoard() {
                           })}
                         </div>
                       ) : player.inJail ? (
-                        <span className="text-[0.9vmin] text-amber-400">🔒 JAIL</span>
+                        <span className="text-[10px] md:text-[0.9vmin] text-amber-400">🔒 JAIL</span>
                       ) : null}
                     </div>
                   </div>
 
                   {/* Right side: In Vote Kick mode, show vote count & button; otherwise show money */}
                   {isVoteKickOpen && isTarget ? (
-                    <div className="flex items-center gap-[0.7vmin]">
+                    <div className="flex items-center gap-1.5 md:gap-[0.7vmin]">
                       <span
-                        className={`text-[1.35vmin] font-black ${votes > 0 ? "text-purple-300" : "text-gray-400"
+                        className={`text-xs md:text-[1.35vmin] font-black ${votes > 0 ? "text-purple-300" : "text-gray-400"
                           }`}
                       >
                         {votes}/{totalOthers}
@@ -5267,7 +5289,7 @@ export default function GameBoard() {
                             e.stopPropagation();
                             togglePlayerKickVote(player.id, currentPlayer.id);
                           }}
-                          className={`rounded-[0.65vmin] px-[0.85vmin] py-[0.35vmin] text-[0.9vmin] font-black uppercase transition-all hover:scale-105 active:scale-95 ${hasCurrentVoted
+                          className={`flex items-center justify-center min-h-[36px] px-2.5 py-1.5 md:px-[0.85vmin] md:py-[0.35vmin] rounded-md md:rounded-[0.65vmin] text-[10px] md:text-[0.9vmin] font-black uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer ${hasCurrentVoted
                               ? "border border-emerald-500/60 bg-emerald-500/25 text-emerald-300 hover:border-red-500/50 hover:bg-red-500/20 hover:text-red-300"
                               : "border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md"
                             }`}
@@ -5279,15 +5301,15 @@ export default function GameBoard() {
                     </div>
                   ) : (
                     <div
-                      className={`flex items-center gap-[0.4vmin] rounded-[0.9vmin] border-[0.2vmin] px-[1.1vmin] py-[0.45vmin] shadow-md transition-all ${isVoteKickOpen && isSelf
+                      className={`flex items-center gap-1 md:gap-[0.4vmin] rounded-lg md:rounded-[0.9vmin] border px-2.5 py-1 md:px-[1.1vmin] md:py-[0.45vmin] shadow-md transition-all ${isVoteKickOpen && isSelf
                           ? "border-white/10 bg-white/[0.02] text-gray-500"
                           : player.isCurrentPlayer
                             ? "border-emerald-400/70 bg-[#062418] text-emerald-300 shadow-[0_0_1.4vmin_rgba(16,185,129,0.45)]"
                             : "border-emerald-500/40 bg-[#091b14] text-emerald-300"
                         }`}
                     >
-                      <span className="text-[1.35vmin] leading-none">💵</span>
-                      <span className="text-[1.85vmin] font-black tracking-tight drop-shadow">
+                      <span className="text-xs md:text-[1.35vmin] leading-none">💵</span>
+                      <span className="text-xs sm:text-sm md:text-[1.85vmin] font-black tracking-tight drop-shadow">
                         ${player.money.toLocaleString()}
                       </span>
                     </div>
@@ -5326,12 +5348,12 @@ export default function GameBoard() {
 
           {/* ================= SMALL BOX: PLAYER ACTIONS (VOTE KICK & BANKRUPT) ================= */}
           {isGameStarted && (
-            <div className="mt-[1.2vmin] rounded-[1vmin] border border-white/10 bg-white/[0.03] p-[0.9vmin] shadow-sm">
-              <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
-                <span className="text-[1.05vmin] font-bold uppercase tracking-wider text-gray-400">
+            <div className="mt-2 md:mt-[1.2vmin] rounded-xl md:rounded-[1vmin] border border-white/10 bg-white/[0.03] p-2.5 md:p-[0.9vmin] shadow-sm">
+              <div className="mb-1.5 md:mb-[0.7vmin] flex items-center justify-between px-1 md:px-[0.2vmin]">
+                <span className="text-[11px] md:text-[1.05vmin] font-bold uppercase tracking-wider text-gray-400">
                   Player Actions
                 </span>
-                <span className="text-[0.9vmin] font-medium text-gray-400">
+                <span className="text-[11px] md:text-[0.9vmin] font-medium text-gray-400">
                   Turn:{" "}
                   <span className="font-bold" style={{ color: currentPlayer?.color }}>
                     {currentPlayer?.name || `Player ${currentPlayer?.id}`}
@@ -5339,16 +5361,16 @@ export default function GameBoard() {
                 </span>
               </div>
 
-              <div className="flex items-center justify-between px-[0.3vmin]">
+              <div className="flex items-center justify-between px-1 md:px-[0.3vmin] gap-2 md:gap-0">
                 {/* Left Button: Vote Kick (same design and color as Roll Dice) */}
                 <button
                   onClick={() => setIsVoteKickOpen((prev) => !prev)}
                   disabled={alivePlayers.length < 3}
-                  className={`flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${isVoteKickOpen ? "ring-2 ring-purple-300 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]" : ""
+                  className={`flex-1 md:flex-initial flex items-center justify-center gap-1 md:gap-[0.4vmin] min-h-[44px] rounded-xl md:rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 px-3.5 py-2.5 md:px-[1.2vmin] md:py-[0.75vmin] text-xs sm:text-sm md:text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer ${isVoteKickOpen ? "ring-2 ring-purple-300 shadow-[0_0_1.2vmin_rgba(168,85,247,0.4)]" : ""
                     }`}
                   title={alivePlayers.length < 3 ? "Vote kick needs at least 3 active players" : isVoteKickOpen ? "Click to close Vote Kick mode" : "Click to vote kick players in the panel above"}
                 >
-                  <span className="text-[1.2vmin]">🗳️</span>
+                  <span className="text-sm md:text-[1.2vmin]">🗳️</span>
                   <span>Vote Kick</span>
                 </button>
 
@@ -5361,10 +5383,10 @@ export default function GameBoard() {
                     }
                   }}
                   disabled={!currentPlayer || currentPlayer.isBankrupt}
-                  className="flex items-center justify-center gap-[0.4vmin] rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-red-600 to-rose-600 px-[1.2vmin] py-[0.75vmin] text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex-1 md:flex-initial flex items-center justify-center gap-1 md:gap-[0.4vmin] min-h-[44px] rounded-xl md:rounded-[0.9vmin] border border-white/20 bg-gradient-to-r from-red-600 to-rose-600 px-3.5 py-2.5 md:px-[1.2vmin] md:py-[0.75vmin] text-xs sm:text-sm md:text-[1.1vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                   title="Whoever clicks this gets out (surrender/bankrupt)"
                 >
-                  <span className="text-[1.2vmin]">🏳️</span>
+                  <span className="text-sm md:text-[1.2vmin]">🏳️</span>
                   <span>Bankrupt</span>
                 </button>
               </div>
@@ -5373,15 +5395,15 @@ export default function GameBoard() {
 
           {/* ================= TRADE PANEL (BETWEEN PLAYER ACTIONS & SETTINGS) ================= */}
           {isGameStarted && enableTrading && (
-            <div className="mt-[1.2vmin] rounded-[1.2vmin] border-2 border-indigo-500/35 bg-[#141024] p-[1.1vmin] shadow-[0_0_2vmin_rgba(99,102,241,0.15)] transition-all">
-              <div className="mb-[0.7vmin] flex items-center justify-between px-[0.2vmin]">
-                <div className="flex items-center gap-[0.6vmin]">
-                  <span className="text-[1.15vmin] font-black uppercase tracking-wider text-white flex items-center gap-[0.4vmin]">
+            <div className="mt-2 md:mt-[1.2vmin] rounded-xl md:rounded-[1.2vmin] border-2 border-indigo-500/35 bg-[#141024] p-2.5 md:p-[1.1vmin] shadow-[0_0_2vmin_rgba(99,102,241,0.15)] transition-all">
+              <div className="mb-1.5 md:mb-[0.7vmin] flex items-center justify-between px-1 md:px-[0.2vmin]">
+                <div className="flex items-center gap-1.5 md:gap-[0.6vmin]">
+                  <span className="text-xs md:text-[1.15vmin] font-black uppercase tracking-wider text-white flex items-center gap-1 md:gap-[0.4vmin]">
                     <span>🤝</span>
                     <span>Active Trades</span>
                   </span>
                   {trades.filter((t) => t.status === "pending").length > 0 && (
-                    <span className="rounded-full border border-emerald-400/60 bg-emerald-500/20 px-[0.6vmin] py-[0.1vmin] text-[0.8vmin] font-black uppercase text-emerald-300 animate-pulse">
+                    <span className="rounded-full border border-emerald-400/60 bg-emerald-500/20 px-2 py-0.5 md:px-[0.6vmin] md:py-[0.1vmin] text-[10px] md:text-[0.8vmin] font-black uppercase text-emerald-300 animate-pulse">
                       {trades.filter((t) => t.status === "pending").length} active
                     </span>
                   )}
@@ -5389,7 +5411,7 @@ export default function GameBoard() {
                 <button
                   onClick={() => openCreateTradeModal()}
                   disabled={alivePlayers.length <= 1 || !enableTrading}
-                  className="flex items-center gap-[0.4vmin] rounded-[0.8vmin] border border-purple-400/40 bg-gradient-to-r from-purple-600 to-indigo-600 px-[1vmin] py-[0.5vmin] text-[1.05vmin] font-black uppercase tracking-wide text-white shadow transition hover:scale-[1.03] hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  className="flex items-center gap-1 md:gap-[0.4vmin] min-h-[36px] rounded-lg md:rounded-[0.8vmin] border border-purple-400/40 bg-gradient-to-r from-purple-600 to-indigo-600 px-3 py-1.5 md:px-[1vmin] md:py-[0.5vmin] text-xs md:text-[1.05vmin] font-black uppercase tracking-wide text-white shadow transition hover:scale-[1.03] hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                   title={enableTrading ? "Propose a new trade offer" : "Trading is disabled in this game"}
                 >
                   <span>+ Propose</span>
@@ -5401,12 +5423,12 @@ export default function GameBoard() {
                 const pendingTrades = trades.filter((t) => t.status === "pending");
                 if (pendingTrades.length === 0) {
                   return (
-                    <div className="rounded-[0.9vmin] border border-white/5 bg-black/25 py-[1vmin] px-[0.8vmin] text-center">
-                      <p className="text-[1.05vmin] text-gray-400 font-medium">No active trade offers.</p>
+                    <div className="rounded-lg md:rounded-[0.9vmin] border border-white/5 bg-black/25 py-2.5 md:py-[1vmin] px-2 md:px-[0.8vmin] text-center">
+                      <p className="text-xs md:text-[1.05vmin] text-gray-400 font-medium">No active trade offers.</p>
                       <button
                         onClick={() => openCreateTradeModal()}
                         disabled={alivePlayers.length <= 1 || !enableTrading}
-                        className="mt-[0.4vmin] text-[1vmin] font-black text-purple-300 hover:text-purple-200 underline decoration-purple-400/50 cursor-pointer disabled:opacity-40"
+                        className="mt-1 md:mt-[0.4vmin] text-xs md:text-[1vmin] font-black text-purple-300 hover:text-purple-200 underline decoration-purple-400/50 cursor-pointer disabled:opacity-40"
                       >
                         {enableTrading ? "Start a trade offer" : "Trading is disabled"}
                       </button>
@@ -5415,7 +5437,7 @@ export default function GameBoard() {
                 }
 
                 return (
-                  <div className="flex flex-col gap-[0.7vmin] max-h-[18vmin] overflow-y-auto pr-[0.3vmin]">
+                  <div className="flex flex-col gap-2 md:gap-[0.7vmin] max-h-48 md:max-h-[18vmin] overflow-y-auto pr-1 md:pr-[0.3vmin]">
                     {pendingTrades.map((trade) => {
                       const initiator = players.find((p) => p.id === trade.initiatorId);
                       const target = players.find((p) => p.id === trade.targetId);
@@ -5425,25 +5447,25 @@ export default function GameBoard() {
                       return (
                         <div
                           key={trade.id}
-                          className={`rounded-[0.9vmin] border p-[0.8vmin] transition-all flex flex-col gap-[0.5vmin] ${isRecipient
+                          className={`rounded-lg md:rounded-[0.9vmin] border p-2 md:p-[0.8vmin] transition-all flex flex-col gap-1.5 md:gap-[0.5vmin] ${isRecipient
                               ? "border-emerald-500/50 bg-[#0c1f17] shadow-[0_0_1.2vmin_rgba(16,185,129,0.2)]"
                               : isSender
                                 ? "border-amber-500/40 bg-[#1c1810]"
                                 : "border-purple-500/30 bg-[#141026]"
                             }`}
                         >
-                          <div className="flex items-center justify-between text-[1vmin]">
-                            <div className="flex items-center gap-[0.5vmin] truncate">
-                              <span className="font-black truncate max-w-[8vmin]" style={{ color: initiator?.color }}>
+                          <div className="flex items-center justify-between text-xs md:text-[1vmin]">
+                            <div className="flex items-center gap-1.5 md:gap-[0.5vmin] truncate">
+                              <span className="font-black truncate max-w-[100px] md:max-w-[8vmin]" style={{ color: initiator?.color }}>
                                 {initiator?.name || `P${trade.initiatorId}`}
                               </span>
-                              <span className="text-gray-400 text-[0.9vmin]">⇄</span>
-                              <span className="font-black truncate max-w-[8vmin]" style={{ color: target?.color }}>
+                              <span className="text-gray-400 text-xs md:text-[0.9vmin]">⇄</span>
+                              <span className="font-black truncate max-w-[100px] md:max-w-[8vmin]" style={{ color: target?.color }}>
                                 {target?.name || `P${trade.targetId}`}
                               </span>
                             </div>
                             <span
-                              className={`rounded-full px-[0.7vmin] py-[0.15vmin] text-[0.8vmin] font-black uppercase tracking-wider ${isRecipient
+                              className={`rounded-full px-2 py-0.5 md:px-[0.7vmin] md:py-[0.15vmin] text-[10px] md:text-[0.8vmin] font-black uppercase tracking-wider ${isRecipient
                                   ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/60 animate-pulse"
                                   : isSender
                                     ? "bg-amber-500/20 text-amber-300 border border-amber-400/50"
@@ -5454,7 +5476,7 @@ export default function GameBoard() {
                             </span>
                           </div>
 
-                          <div className="flex items-center justify-between text-[0.95vmin] text-gray-300 bg-black/30 rounded-[0.6vmin] px-[0.7vmin] py-[0.35vmin]">
+                          <div className="flex items-center justify-between text-[11px] md:text-[0.95vmin] text-gray-300 bg-black/30 rounded-md md:rounded-[0.6vmin] px-2 py-1 md:px-[0.7vmin] md:py-[0.35vmin]">
                             <span>
                               Gives: <span className="font-black text-white">${trade.initiatorMoney}</span>
                               {trade.initiatorPropertyIds.length > 0 && ` +${trade.initiatorPropertyIds.length} prop`}
@@ -5470,7 +5492,7 @@ export default function GameBoard() {
                               setSelectedTradeId(trade.id);
                               setActiveTradeModal("view");
                             }}
-                            className={`w-full rounded-[0.6vmin] py-[0.5vmin] text-[1vmin] font-black uppercase tracking-wider transition hover:brightness-110 active:scale-95 cursor-pointer ${isRecipient
+                            className={`w-full flex items-center justify-center min-h-[40px] rounded-lg md:rounded-[0.6vmin] py-2 md:py-[0.5vmin] text-xs md:text-[1vmin] font-black uppercase tracking-wider transition hover:brightness-110 active:scale-95 cursor-pointer ${isRecipient
                                 ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-[0_0_1vmin_rgba(16,185,129,0.3)]"
                                 : isSender
                                   ? "bg-gradient-to-r from-amber-600 to-orange-600 text-white"
@@ -5490,40 +5512,40 @@ export default function GameBoard() {
 
           {/* ================= SETTINGS PANEL (ONLY IN SIDEBAR BEFORE GAME START) ================= */}
           {!isGameStarted && (
-            <div className="mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-[1.4vmin] border-2 border-cyan-500/40 bg-[#0d1b22] p-[1.6vmin] shadow-[0_0_2vmin_rgba(34,211,238,0.18),0_1vmin_2vmin_rgba(0,0,0,0.4)]">
-              <div className="flex flex-col gap-[1.6vmin]">
+            <div className="mt-2 md:mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-xl md:rounded-[1.4vmin] border-2 border-cyan-500/40 bg-[#0d1b22] p-3 md:p-[1.6vmin] shadow-[0_0_2vmin_rgba(34,211,238,0.18),0_1vmin_2vmin_rgba(0,0,0,0.4)]">
+              <div className="flex flex-col gap-3 md:gap-[1.6vmin]">
                 {/* Header */}
-                <div className="flex items-center justify-between border-b border-cyan-500/25 pb-[1.1vmin]">
-                  <div className="flex items-center gap-[0.8vmin]">
-                    <span className="text-[1.8vmin]">⚙️</span>
-                    <span className="text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">
+                <div className="flex items-center justify-between border-b border-cyan-500/25 pb-2 md:pb-[1.1vmin]">
+                  <div className="flex items-center gap-2 md:gap-[0.8vmin]">
+                    <span className="text-base md:text-[1.8vmin]">⚙️</span>
+                    <span className="text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">
                       GAME SETTINGS
                     </span>
                   </div>
-                  <span className="rounded-[0.5vmin] border-cyan-400/50 bg-cyan-500/15 px-[1vmin] py-[0.35vmin] text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
+                  <span className="rounded md:rounded-[0.5vmin] border-cyan-400/50 bg-cyan-500/15 px-2 py-0.5 md:px-[1vmin] md:py-[0.35vmin] text-[10px] md:text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
                     Editable
                   </span>
                 </div>
 
                 {/* Setting: MAX players (2 to 6). A ceiling, not a headcount —
                     the game starts with however many have joined (2+), up to this. */}
-                <div className="flex flex-col gap-[0.8vmin]">
+                <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                    <span className="text-xs md:text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
                       Max Players
                     </span>
-                    <span className="text-[1.4vmin] font-semibold text-slate-100">
+                    <span className="text-xs sm:text-sm md:text-[1.4vmin] font-semibold text-slate-100">
                       {players.filter((p) => p.hasSeat).length} / {maxPlayers}
                     </span>
                   </div>
-                  <div className="grid grid-cols-5 gap-[0.6vmin]">
+                  <div className="grid grid-cols-5 gap-1.5 md:gap-[0.6vmin]">
                     {[2, 3, 4, 5, 6].map((count) => {
                       const isActive = maxPlayers === count;
                       return (
                         <button
                           key={count}
                           onClick={() => handlePlayerCountChange(count)}
-                          className={`rounded-[0.6vmin] border py-[0.8vmin] text-[1.25vmin] font-semibold transition-colors cursor-pointer ${isActive
+                          className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.8vmin] text-xs sm:text-sm md:text-[1.25vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${isActive
                               ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                               : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                             }`}
@@ -5534,27 +5556,27 @@ export default function GameBoard() {
                       );
                     })}
                   </div>
-                  <span className="text-[0.95vmin] font-semibold text-gray-500">
+                  <span className="text-[10px] md:text-[0.95vmin] font-semibold text-gray-500">
                     Start with any number from 2 up to {maxPlayers}.
                   </span>
                 </div>
 
                 {/* Setting 1: Starting Cash */}
-                <div className="flex flex-col gap-[0.8vmin]">
+                <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                    <span className="text-xs md:text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
                       Starting Cash
                     </span>
-                    <span className="text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">
+                    <span className="text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">
                       ${startingCash.toLocaleString()}
                     </span>
                   </div>
-                  <div className="grid grid-cols-4 gap-[0.6vmin]">
+                  <div className="grid grid-cols-4 gap-1.5 md:gap-[0.6vmin]">
                     {[1500, 2000, 2500, 3000].map((cash) => (
                       <button
                         key={cash}
                         onClick={() => handleStartingCashChange(cash)}
-                        className={`rounded-[0.6vmin] border py-[0.9vmin] text-[1.25vmin] font-semibold transition-colors cursor-pointer ${startingCash === cash
+                        className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.9vmin] text-xs sm:text-sm md:text-[1.25vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${startingCash === cash
                             ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                             : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                           }`}
@@ -5567,36 +5589,36 @@ export default function GameBoard() {
                 </div>
 
                 {/* Setting 2: START Bonus (Pass / Land) */}
-                <div className="flex flex-col gap-[0.8vmin]">
+                <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                    <span className="text-xs md:text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
                       START Bonus
                     </span>
-                    <span className="text-[1.35vmin] font-medium text-slate-400">
-                      Pass <span className="text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${passStartBonus}</span> / Land{" "}
-                      <span className="text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${landStartBonus}</span>
+                    <span className="text-xs md:text-[1.35vmin] font-medium text-slate-400">
+                      Pass <span className="text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${passStartBonus}</span> / Land{" "}
+                      <span className="text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${landStartBonus}</span>
                     </span>
                   </div>
-                  <div className="flex flex-col gap-[0.8vmin]">
+                  <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
                     {/* Pass Bonus */}
-                    <div className="flex flex-col gap-[0.4vmin]">
-                      <label className="text-[1.05vmin] font-medium text-cyan-300/70">Pass Bonus</label>
-                      <div className="flex items-center justify-center gap-[0.8vmin]">
+                    <div className="flex flex-col gap-1 md:gap-[0.4vmin]">
+                      <label className="text-[11px] md:text-[1.05vmin] font-medium text-cyan-300/70">Pass Bonus</label>
+                      <div className="flex items-center justify-center gap-2 md:gap-[0.8vmin]">
                         <button
                           onClick={() => handlePassBonusChange(Math.max(0, passStartBonus - 50))}
                           disabled={isGameStarted || passStartBonus === 0}
-                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                          className="flex items-center justify-center w-11 h-11 md:w-[3.2vmin] md:h-[3.2vmin] rounded-lg md:rounded-[0.5vmin] border border-cyan-500/30 bg-cyan-500/10 text-xs md:text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                           title="Decrease by $50"
                         >
                           ◀
                         </button>
-                        <div className="flex-1 text-center rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 py-[0.55vmin] px-[1vmin]">
-                          <span className="text-[1.5vmin] font-black text-emerald-300">+${passStartBonus}</span>
+                        <div className="flex-1 min-h-[44px] flex items-center justify-center text-center rounded-lg md:rounded-[0.5vmin] border border-cyan-500/30 bg-cyan-500/10 py-1 px-2 md:py-[0.55vmin] md:px-[1vmin]">
+                          <span className="text-xs sm:text-sm md:text-[1.5vmin] font-black text-emerald-300">+${passStartBonus}</span>
                         </div>
                         <button
                           onClick={() => handlePassBonusChange(passStartBonus + 50)}
                           disabled={isGameStarted}
-                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                          className="flex items-center justify-center w-11 h-11 md:w-[3.2vmin] md:h-[3.2vmin] rounded-lg md:rounded-[0.5vmin] border border-cyan-500/30 bg-cyan-500/10 text-xs md:text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                           title="Increase by $50"
                         >
                           ▶
@@ -5605,24 +5627,24 @@ export default function GameBoard() {
                     </div>
 
                     {/* Land Bonus */}
-                    <div className="flex flex-col gap-[0.4vmin]">
-                      <label className="text-[1.05vmin] font-medium text-cyan-300/70">Land Bonus</label>
-                      <div className="flex items-center justify-center gap-[0.8vmin]">
+                    <div className="flex flex-col gap-1 md:gap-[0.4vmin]">
+                      <label className="text-[11px] md:text-[1.05vmin] font-medium text-cyan-300/70">Land Bonus</label>
+                      <div className="flex items-center justify-center gap-2 md:gap-[0.8vmin]">
                         <button
                           onClick={() => handleLandBonusChange(Math.max(0, landStartBonus - 50))}
                           disabled={isGameStarted || landStartBonus === 0}
-                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                          className="flex items-center justify-center w-11 h-11 md:w-[3.2vmin] md:h-[3.2vmin] rounded-lg md:rounded-[0.5vmin] border border-cyan-500/30 bg-cyan-500/10 text-xs md:text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                           title="Decrease by $50"
                         >
                           ◀
                         </button>
-                        <div className="flex-1 text-center rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 py-[0.55vmin] px-[1vmin]">
-                          <span className="text-[1.5vmin] font-black text-emerald-300">+${landStartBonus}</span>
+                        <div className="flex-1 min-h-[44px] flex items-center justify-center text-center rounded-lg md:rounded-[0.5vmin] border border-cyan-500/30 bg-cyan-500/10 py-1 px-2 md:py-[0.55vmin] md:px-[1vmin]">
+                          <span className="text-xs sm:text-sm md:text-[1.5vmin] font-black text-emerald-300">+${landStartBonus}</span>
                         </div>
                         <button
                           onClick={() => handleLandBonusChange(landStartBonus + 50)}
                           disabled={isGameStarted}
-                          className="flex items-center justify-center w-[3.2vmin] h-[3.2vmin] rounded-[0.5vmin] border-cyan-500/30 bg-cyan-500/10 text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                          className="flex items-center justify-center w-11 h-11 md:w-[3.2vmin] md:h-[3.2vmin] rounded-lg md:rounded-[0.5vmin] border border-cyan-500/30 bg-cyan-500/10 text-xs md:text-[1.2vmin] text-cyan-200 transition-colors hover:border-cyan-400 hover:bg-cyan-500/25 hover:text-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                           title="Increase by $50"
                         >
                           ▶
@@ -5632,7 +5654,7 @@ export default function GameBoard() {
                   </div>
 
                   {/* Quick Presets */}
-                  <div className="grid grid-cols-3 gap-[0.6vmin] mt-[0.4vmin]">
+                  <div className="grid grid-cols-3 gap-1.5 md:gap-[0.6vmin] mt-1 md:mt-[0.4vmin]">
                     {[
                       { label: "Standard", pass: 200, land: 300 },
                       { label: "Boosted", pass: 300, land: 450 },
@@ -5644,7 +5666,7 @@ export default function GameBoard() {
                           key={preset.label}
                           onClick={() => handleBonusPresetChange(preset.pass, preset.land)}
                           disabled={isGameStarted}
-                          className={`rounded-[0.5vmin] border py-[0.55vmin] text-[1.05vmin] font-semibold transition-colors cursor-pointer ${isActive
+                          className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.5vmin] border py-1.5 px-1 md:py-[0.55vmin] text-xs sm:text-sm md:text-[1.05vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${isActive
                               ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                               : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                             } disabled:opacity-40 disabled:cursor-not-allowed`}
@@ -5658,14 +5680,14 @@ export default function GameBoard() {
                 </div>
 
                 {/* Setting 3: Movement Speed */}
-                <div className="flex flex-col gap-[0.6vmin]">
-                  <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                <div className="flex flex-col gap-1 md:gap-[0.6vmin]">
+                  <span className="text-xs md:text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
                     Game Speed
                   </span>
-                  <div className="flex gap-[0.5vmin]">
+                  <div className="flex gap-1.5 md:gap-[0.5vmin]">
                     <button
                       onClick={() => setFastMode(false)}
-                      className={`flex-1 rounded-[0.6vmin] border py-[0.85vmin] text-[1.2vmin] font-semibold transition-colors cursor-pointer ${!fastMode
+                      className={`flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.2vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${!fastMode
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5674,7 +5696,7 @@ export default function GameBoard() {
                     </button>
                     <button
                       onClick={() => setFastMode(true)}
-                      className={`flex-1 rounded-[0.6vmin] border py-[0.85vmin] text-[1.2vmin] font-semibold transition-colors cursor-pointer ${fastMode
+                      className={`flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.2vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${fastMode
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5685,14 +5707,14 @@ export default function GameBoard() {
                 </div>
 
                 {/* Setting 4: Rest House Mode */}
-                <div className="flex flex-col gap-[0.6vmin]">
-                  <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                <div className="flex flex-col gap-1 md:gap-[0.6vmin]">
+                  <span className="text-xs md:text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
                     Rest House Money
                   </span>
-                  <div className="grid grid-cols-2 gap-[0.6vmin]">
+                  <div className="grid grid-cols-2 gap-1.5 md:gap-[0.6vmin]">
                     <button
                       onClick={() => setRestHouseMode("pot")}
-                      className={`rounded-[0.6vmin] border py-[0.85vmin] text-[1.15vmin] font-semibold transition-colors cursor-pointer ${restHouseMode === "pot"
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.15vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${restHouseMode === "pot"
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5701,7 +5723,7 @@ export default function GameBoard() {
                     </button>
                     <button
                       onClick={() => setRestHouseMode("rest")}
-                      className={`rounded-[0.6vmin] border py-[0.85vmin] text-[1.15vmin] font-semibold transition-colors cursor-pointer ${restHouseMode === "rest"
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.15vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${restHouseMode === "rest"
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5709,21 +5731,21 @@ export default function GameBoard() {
                       Skip Turn
                     </button>
                   </div>
-                  <span className="text-[1.05vmin] text-cyan-200/50">
+                  <span className="text-[10px] md:text-[1.05vmin] text-cyan-200/50">
                     {restHouseMode === "pot" ? "Money accumulates & pays out on landing" : "Player skips one turn, no money gained"}
                   </span>
                 </div>
 
                 {/* Setting 5: Game Rules Toggle */}
-                <div className="flex flex-col gap-[0.8vmin]">
-                  <span className="text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
+                <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
+                  <span className="text-xs md:text-[1.25vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90">
                     Game Rules
                   </span>
-                  <div className="grid grid-cols-2 gap-[0.6vmin]">
+                  <div className="grid grid-cols-2 gap-2 md:gap-[0.6vmin]">
                     {/* Movement Cards */}
                     <button
                       onClick={() => setEnableMovementCards((prev) => !prev)}
-                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableMovementCards
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableMovementCards
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5734,7 +5756,7 @@ export default function GameBoard() {
                     {/* Trading */}
                     <button
                       onClick={() => setEnableTrading((prev) => !prev)}
-                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableTrading
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableTrading
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5745,7 +5767,7 @@ export default function GameBoard() {
                     {/* Mortgage */}
                     <button
                       onClick={() => setEnableMortgage((prev) => !prev)}
-                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableMortgage
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableMortgage
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5756,7 +5778,7 @@ export default function GameBoard() {
                     {/* Jail Rent */}
                     <button
                       onClick={() => setJailCollectsRent((prev) => !prev)}
-                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${jailCollectsRent
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${jailCollectsRent
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5767,7 +5789,7 @@ export default function GameBoard() {
                     {/* Auctions */}
                     <button
                       onClick={() => setEnableAuction((prev) => !prev)}
-                      className={`rounded-[0.6vmin] border py-[0.8vmin] px-[0.8vmin] text-[1.1vmin] font-semibold transition-colors cursor-pointer ${enableAuction
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableAuction
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -5779,12 +5801,12 @@ export default function GameBoard() {
               </div>
 
               {/* Start Game Button */}
-              <div className="mt-[1.4vmin] border-t border-cyan-500/25 pt-[1.1vmin]">
+              <div className="mt-3 md:mt-[1.4vmin] border-t border-cyan-500/25 pt-2 md:pt-[1.1vmin]">
                 <button
                   onClick={handleStartGame}
-                  className="flex w-full items-center justify-center gap-[0.8vmin] rounded-[0.8vmin] border-cyan-300/60 bg-gradient-to-r from-cyan-600 to-teal-600 py-[1.25vmin] text-[1.35vmin] font-black uppercase tracking-[0.14em] text-white shadow-[0_0_2vmin_rgba(34,211,238,0.55)] transition-all hover:brightness-110 hover:shadow-[0_0_2.8vmin_rgba(34,211,238,0.85)] active:scale-[0.98] cursor-pointer"
+                  className="flex w-full items-center justify-center gap-2 md:gap-[0.8vmin] min-h-[48px] rounded-xl md:rounded-[0.8vmin] border border-cyan-300/60 bg-gradient-to-r from-cyan-600 to-teal-600 py-3 md:py-[1.25vmin] text-xs sm:text-sm md:text-[1.35vmin] font-black uppercase tracking-[0.14em] text-white shadow-[0_0_2vmin_rgba(34,211,238,0.55)] transition-all hover:brightness-110 hover:shadow-[0_0_2.8vmin_rgba(34,211,238,0.85)] active:scale-[0.98] cursor-pointer"
                 >
-                  <span className="text-[1.4vmin]">▶</span>
+                  <span className="text-sm md:text-[1.4vmin]">▶</span>
                   <span>Start Game</span>
                 </button>
               </div>
@@ -5796,11 +5818,11 @@ export default function GameBoard() {
             <>
               <button
                 onClick={() => setIsSettingsExpanded(true)}
-                className="fixed bottom-[2.5vmin] left-[2.5vmin] z-[150] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-cyan-400/70 bg-[#0e2b33] text-[2.2vmin] text-cyan-100 shadow-[0_0_2vmin_rgba(34,211,238,0.5)] transition-all hover:border-cyan-300 hover:shadow-[0_0_3vmin_rgba(34,211,238,0.85)] active:scale-95 cursor-pointer"
+                className="fixed bottom-4 left-4 md:bottom-[2.5vmin] md:left-[2.5vmin] z-[150] flex h-12 w-12 md:h-[5.5vmin] md:w-[5.5vmin] items-center justify-center rounded-full border-2 border-cyan-400/70 bg-[#0e2b33] text-lg md:text-[2.2vmin] text-cyan-100 shadow-[0_0_2vmin_rgba(34,211,238,0.5)] transition-all hover:border-cyan-300 hover:shadow-[0_0_3vmin_rgba(34,211,238,0.85)] active:scale-95 cursor-pointer"
                 title="Open Locked Game Settings"
               >
                 ⚙️
-                <span className="absolute -top-[0.3vmin] -right-[0.3vmin] flex h-[2vmin] w-[2vmin] items-center justify-center rounded-full border-cyan-400/60 bg-[#0e2b33] text-[0.9vmin] font-bold text-cyan-200">
+                <span className="absolute -top-1 -right-1 md:-top-[0.3vmin] md:-right-[0.3vmin] flex h-5 w-5 md:h-[2vmin] md:w-[2vmin] items-center justify-center rounded-full border-cyan-400/60 bg-[#0e2b33] text-[10px] md:text-[0.9vmin] font-bold text-cyan-200">
                   🔒
                 </span>
               </button>
@@ -5808,24 +5830,25 @@ export default function GameBoard() {
               {/* Settings Overlay Popover */}
               {isSettingsExpanded && (
                 <div
-                  className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-[2vmin] backdrop-blur-sm"
+                  className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-2 sm:p-3 md:p-[2vmin] backdrop-blur-sm overflow-y-auto"
                   onClick={() => setIsSettingsExpanded(false)}
                 >
                   <div
-                    className="relative flex max-h-[85vh] w-[50vmin] flex-col overflow-hidden rounded-[1.6vmin] border-2 border-cyan-500/50 bg-[#0d1b22] p-[2.4vmin] text-white shadow-[0_0_3.5vmin_rgba(34,211,238,0.45),0_1.5vmin_3vmin_rgba(0,0,0,0.55)]"
+                    className="relative flex max-h-[92dvh] w-full max-w-[440px] md:w-[50vmin] flex-col overflow-hidden rounded-2xl md:rounded-[1.6vmin] border-2 border-cyan-500/50 bg-[#0d1b22] p-4 sm:p-5 md:p-[2.4vmin] text-white shadow-[0_0_3.5vmin_rgba(34,211,238,0.45),0_1.5vmin_3vmin_rgba(0,0,0,0.55)] my-auto"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <div className="flex items-center justify-between border-b border-cyan-500/25 pb-[1.4vmin] mb-[1.8vmin]">
-                      <div className="flex items-center gap-[0.8vmin]">
-                        <span className="text-[1.9vmin]">⚙</span>
-                        <span className="text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">Game Settings</span>
-                        <span className="ml-[0.6vmin] rounded-[0.5vmin] border border-cyan-400/50 bg-cyan-500/15 px-[1vmin] py-[0.3vmin] text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
+                    <div className="flex items-center justify-between border-b border-cyan-500/25 pb-3 md:pb-[1.4vmin] mb-3 md:mb-[1.8vmin]">
+                      <div className="flex items-center gap-2 md:gap-[0.8vmin]">
+                        <span className="text-lg md:text-[1.9vmin]">⚙</span>
+                        <span className="text-sm md:text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">Game Settings</span>
+                        <span className="ml-1 md:ml-[0.6vmin] rounded-md md:rounded-[0.5vmin] border border-cyan-400/50 bg-cyan-500/15 px-2 py-0.5 md:px-[1vmin] md:py-[0.3vmin] text-[10px] md:text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
                           Locked
                         </span>
                       </div>
                       <button
                         onClick={() => setIsSettingsExpanded(false)}
-                        className="flex h-[3.2vmin] w-[3.2vmin] items-center justify-center rounded-full bg-cyan-500/15 text-[1.4vmin] text-cyan-200 transition-colors hover:bg-cyan-500/30 hover:text-white cursor-pointer"
+                        aria-label="Close settings"
+                        className="flex h-9 w-9 md:h-[3.2vmin] md:w-[3.2vmin] items-center justify-center rounded-full bg-cyan-500/15 text-xs md:text-[1.4vmin] text-cyan-200 transition-colors hover:bg-cyan-500/30 hover:text-white cursor-pointer"
                         title="Close"
                       >
                         ✕
@@ -5833,45 +5856,45 @@ export default function GameBoard() {
                     </div>
 
                     {/* Settings list (Read Only) */}
-                    <div className="flex flex-col gap-[1.4vmin] overflow-y-auto max-h-[50vh] pr-[1vmin]">
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
-                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Number of Players</span>
-                        <span className="text-[1.3vmin] font-bold text-cyan-100">{players.length}</span>
+                    <div className="flex flex-col gap-2.5 md:gap-[1.4vmin] overflow-y-auto max-h-[60vh] pr-1 md:pr-[1vmin]">
+                      <div className="flex items-center justify-between rounded-xl md:rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2.5 md:p-[1.2vmin]">
+                        <span className="text-xs md:text-[1.2vmin] font-medium text-cyan-200/70">Number of Players</span>
+                        <span className="text-xs sm:text-sm md:text-[1.3vmin] font-bold text-cyan-100">{players.length}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
-                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Starting Cash</span>
-                        <span className="text-[1.3vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">${startingCash.toLocaleString()}</span>
+                      <div className="flex items-center justify-between rounded-xl md:rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2.5 md:p-[1.2vmin]">
+                        <span className="text-xs md:text-[1.2vmin] font-medium text-cyan-200/70">Starting Cash</span>
+                        <span className="text-xs sm:text-sm md:text-[1.3vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">${startingCash.toLocaleString()}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
-                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">START Pass / Land Bonus</span>
-                        <span className="text-[1.3vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${passStartBonus} / +${landStartBonus}</span>
+                      <div className="flex items-center justify-between rounded-xl md:rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2.5 md:p-[1.2vmin]">
+                        <span className="text-xs md:text-[1.2vmin] font-medium text-cyan-200/70">START Pass / Land Bonus</span>
+                        <span className="text-xs sm:text-sm md:text-[1.3vmin] font-black text-emerald-300 drop-shadow-[0_0_0.7vmin_rgba(16,185,129,0.7)]">+${passStartBonus} / +${landStartBonus}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
-                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Game Speed</span>
-                        <span className="text-[1.3vmin] font-bold text-cyan-100">{fastMode ? "Fast" : "Normal"}</span>
+                      <div className="flex items-center justify-between rounded-xl md:rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2.5 md:p-[1.2vmin]">
+                        <span className="text-xs md:text-[1.2vmin] font-medium text-cyan-200/70">Game Speed</span>
+                        <span className="text-xs sm:text-sm md:text-[1.3vmin] font-bold text-cyan-100">{fastMode ? "Fast" : "Normal"}</span>
                       </div>
-                      <div className="flex items-center justify-between rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1.2vmin]">
-                        <span className="text-[1.2vmin] font-medium text-cyan-200/70">Rest House</span>
-                        <span className="text-[1.3vmin] font-bold text-cyan-100">{restHouseMode === "pot" ? "Collect Pot" : "Skip Turn"}</span>
+                      <div className="flex items-center justify-between rounded-xl md:rounded-[1vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2.5 md:p-[1.2vmin]">
+                        <span className="text-xs md:text-[1.2vmin] font-medium text-cyan-200/70">Rest House</span>
+                        <span className="text-xs sm:text-sm md:text-[1.3vmin] font-bold text-cyan-100">{restHouseMode === "pot" ? "Collect Pot" : "Skip Turn"}</span>
                       </div>
-                      <div className="border-t border-cyan-500/25 pt-[1vmin] mt-[0.6vmin]">
-                        <span className="text-[1.2vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90 mb-[0.8vmin] block">Game Rules</span>
-                        <div className="grid grid-cols-2 gap-[0.8vmin]">
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
-                            <span className={`text-[1.1vmin] font-bold ${enableMovementCards ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableMovementCards ? "On" : "Off"}</span>
-                            <span className="text-[1.15vmin] text-cyan-200/70">Movement Cards</span>
+                      <div className="border-t border-cyan-500/25 pt-2 md:pt-[1vmin] mt-1 md:mt-[0.6vmin]">
+                        <span className="text-xs md:text-[1.2vmin] font-bold uppercase tracking-[0.12em] text-cyan-300/90 mb-2 md:mb-[0.8vmin] block">Game Rules</span>
+                        <div className="grid grid-cols-2 gap-2 md:gap-[0.8vmin]">
+                          <div className="flex items-center gap-1.5 md:gap-[0.6vmin] rounded-lg md:rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2 md:p-[1vmin]">
+                            <span className={`text-[11px] md:text-[1.1vmin] font-bold ${enableMovementCards ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableMovementCards ? "On" : "Off"}</span>
+                            <span className="text-xs md:text-[1.15vmin] text-cyan-200/70">Movement Cards</span>
                           </div>
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
-                            <span className={`text-[1.1vmin] font-bold ${enableTrading ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableTrading ? "On" : "Off"}</span>
-                            <span className="text-[1.15vmin] text-cyan-200/70">Trading</span>
+                          <div className="flex items-center gap-1.5 md:gap-[0.6vmin] rounded-lg md:rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2 md:p-[1vmin]">
+                            <span className={`text-[11px] md:text-[1.1vmin] font-bold ${enableTrading ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableTrading ? "On" : "Off"}</span>
+                            <span className="text-xs md:text-[1.15vmin] text-cyan-200/70">Trading</span>
                           </div>
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
-                            <span className={`text-[1.1vmin] font-bold ${enableMortgage ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableMortgage ? "On" : "Off"}</span>
-                            <span className="text-[1.15vmin] text-cyan-200/70">Mortgage</span>
+                          <div className="flex items-center gap-1.5 md:gap-[0.6vmin] rounded-lg md:rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2 md:p-[1vmin]">
+                            <span className={`text-[11px] md:text-[1.1vmin] font-bold ${enableMortgage ? "text-emerald-300" : "text-cyan-300/50"}`}>{enableMortgage ? "On" : "Off"}</span>
+                            <span className="text-xs md:text-[1.15vmin] text-cyan-200/70">Mortgage</span>
                           </div>
-                          <div className="flex items-center gap-[0.6vmin] rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-[1vmin]">
-                            <span className={`text-[1.1vmin] font-bold ${jailCollectsRent ? "text-emerald-300" : "text-cyan-300/50"}`}>{jailCollectsRent ? "On" : "Off"}</span>
-                            <span className="text-[1.15vmin] text-cyan-200/70">Jail Rent</span>
+                          <div className="flex items-center gap-1.5 md:gap-[0.6vmin] rounded-lg md:rounded-[0.9vmin] border border-cyan-500/25 bg-cyan-500/[0.07] p-2 md:p-[1vmin]">
+                            <span className={`text-[11px] md:text-[1.1vmin] font-bold ${jailCollectsRent ? "text-emerald-300" : "text-cyan-300/50"}`}>{jailCollectsRent ? "On" : "Off"}</span>
+                            <span className="text-xs md:text-[1.15vmin] text-cyan-200/70">Jail Rent</span>
                           </div>
                         </div>
                       </div>
@@ -5879,7 +5902,7 @@ export default function GameBoard() {
 
                     <button
                       onClick={() => setIsSettingsExpanded(false)}
-                      className="mt-[2.2vmin] w-full rounded-[0.8vmin] border-cyan-400/50 bg-gradient-to-r from-cyan-600 to-teal-600 py-[1.1vmin] text-[1.2vmin] font-black uppercase tracking-[0.14em] text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.5)] transition-all hover:brightness-110 cursor-pointer"
+                      className="mt-4 md:mt-[2.2vmin] w-full flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[0.8vmin] border-cyan-400/50 bg-gradient-to-r from-cyan-600 to-teal-600 py-2.5 px-4 md:py-[1.1vmin] text-xs sm:text-sm md:text-[1.2vmin] font-black uppercase tracking-[0.14em] text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.5)] transition-all hover:brightness-110 active:scale-95 cursor-pointer"
                     >
                       Close Settings
                     </button>
@@ -5895,12 +5918,12 @@ export default function GameBoard() {
               setIsChatOpen((prev) => !prev);
               if (!isChatOpen) setUnreadChatCount(0);
             }}
-            className="fixed bottom-[2.5vmin] right-[2.5vmin] z-[160] flex h-[5.5vmin] w-[5.5vmin] items-center justify-center rounded-full border-2 border-indigo-400/80 bg-gradient-to-br from-[#1e153b] via-[#140e2b] to-[#0d091d] text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(99,102,241,0.5)] transition-all hover:scale-110 hover:border-cyan-300 hover:shadow-[0_0_3.5vmin_rgba(6,182,212,0.7)] active:scale-95 cursor-pointer"
+            className="fixed bottom-4 right-4 md:bottom-[2.5vmin] md:right-[2.5vmin] z-[160] flex h-12 w-12 md:h-[5.5vmin] md:w-[5.5vmin] items-center justify-center rounded-full border-2 border-indigo-400/80 bg-gradient-to-br from-[#1e153b] via-[#140e2b] to-[#0d091d] text-lg md:text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(99,102,241,0.5)] transition-all hover:scale-110 hover:border-cyan-300 hover:shadow-[0_0_3.5vmin_rgba(6,182,212,0.7)] active:scale-95 cursor-pointer"
             title="Open Player Chat"
           >
             💬
             {!isChatOpen && unreadChatCount > 0 && (
-              <span className="absolute -top-[0.4vmin] -right-[0.4vmin] flex h-[2.2vmin] w-[2.2vmin] items-center justify-center rounded-full bg-gradient-to-r from-red-500 to-rose-500 text-[1.1vmin] font-black text-white shadow-lg animate-bounce">
+              <span className="absolute -top-1 -right-1 md:-top-[0.4vmin] md:-right-[0.4vmin] flex h-5 w-5 md:h-[2.2vmin] md:w-[2.2vmin] items-center justify-center rounded-full bg-gradient-to-r from-red-500 to-rose-500 text-[10px] md:text-[1.1vmin] font-black text-white shadow-lg animate-bounce">
                 {unreadChatCount > 9 ? "9+" : unreadChatCount}
               </span>
             )}
@@ -5908,19 +5931,20 @@ export default function GameBoard() {
 
           {/* Chat Window Popover */}
           {isChatOpen && (
-            <div className="fixed bottom-[9vmin] right-[2.5vmin] z-[180] flex h-[54vmin] w-[42vmin] flex-col overflow-hidden rounded-[2vmin] border-2 border-indigo-500/50 bg-[#120c24] text-white shadow-[0_0_4.5vmin_rgba(99,102,241,0.45)] backdrop-blur-md">
+            <div className="fixed inset-x-2 bottom-16 sm:inset-x-auto sm:right-4 sm:bottom-16 md:bottom-[9vmin] md:right-[2.5vmin] z-[180] flex h-[65dvh] sm:h-[480px] md:h-[54vmin] sm:w-[360px] md:w-[42vmin] flex-col overflow-hidden rounded-2xl md:rounded-[2vmin] border-2 border-indigo-500/50 bg-[#120c24] text-white shadow-[0_0_4.5vmin_rgba(99,102,241,0.45)] backdrop-blur-md">
               {/* Header */}
-              <div className="flex items-center justify-between border-b border-indigo-500/30 bg-[#191133] px-[1.8vmin] py-[1.2vmin]">
-                <div className="flex items-center gap-[0.8vmin]">
-                  <span className="text-[2vmin]">💬</span>
-                  <span className="text-[1.65vmin] font-black uppercase tracking-wider text-white">Player Chat</span>
-                  <span className="rounded-full bg-emerald-500/20 border border-emerald-400/50 px-[0.8vmin] py-[0.1vmin] text-[0.85vmin] font-bold text-emerald-300">
+              <div className="flex items-center justify-between border-b border-indigo-500/30 bg-[#191133] px-3.5 py-2.5 md:px-[1.8vmin] md:py-[1.2vmin]">
+                <div className="flex items-center gap-2 md:gap-[0.8vmin]">
+                  <span className="text-base md:text-[2vmin]">💬</span>
+                  <span className="text-xs sm:text-sm md:text-[1.65vmin] font-black uppercase tracking-wider text-white">Player Chat</span>
+                  <span className="rounded-full bg-emerald-500/20 border border-emerald-400/50 px-2 py-0.5 md:px-[0.8vmin] md:py-[0.1vmin] text-[10px] md:text-[0.85vmin] font-bold text-emerald-300">
                     ● Live
                   </span>
                 </div>
                 <button
                   onClick={() => setIsChatOpen(false)}
-                  className="flex h-[3vmin] w-[3vmin] items-center justify-center rounded-full bg-white/10 text-[1.2vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
+                  aria-label="Close chat"
+                  className="flex h-9 w-9 md:h-[3vmin] md:w-[3vmin] items-center justify-center rounded-full bg-white/10 text-xs md:text-[1.2vmin] text-gray-300 transition hover:bg-white/20 hover:text-white cursor-pointer"
                   title="Close chat"
                 >
                   ✕
@@ -5928,12 +5952,12 @@ export default function GameBoard() {
               </div>
 
               {/* Messages Body */}
-              <div className="flex flex-1 flex-col gap-[1vmin] overflow-y-auto p-[1.4vmin] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden bg-[#0d091a]">
+              <div className="flex flex-1 flex-col gap-2 md:gap-[1vmin] overflow-y-auto p-3 md:p-[1.4vmin] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden bg-[#0d091a]">
                 {chatMessages.length === 0 ? (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-[0.8vmin] text-center text-gray-400">
-                    <span className="text-[3vmin] opacity-60">👋</span>
-                    <p className="text-[1.2vmin] font-medium">No messages yet.</p>
-                    <p className="text-[1vmin] text-gray-500">Say hello to other players!</p>
+                  <div className="flex flex-1 flex-col items-center justify-center gap-1.5 md:gap-[0.8vmin] text-center text-gray-400">
+                    <span className="text-2xl md:text-[3vmin] opacity-60">👋</span>
+                    <p className="text-xs sm:text-sm md:text-[1.2vmin] font-medium">No messages yet.</p>
+                    <p className="text-[11px] md:text-[1vmin] text-gray-500">Say hello to other players!</p>
                   </div>
                 ) : (
                   chatMessages.map((msg) => {
@@ -5941,16 +5965,16 @@ export default function GameBoard() {
                     return (
                       <div
                         key={msg.id}
-                        className={`flex flex-col gap-[0.2vmin] ${isSelf ? "items-end" : "items-start"}`}
+                        className={`flex flex-col gap-0.5 md:gap-[0.2vmin] ${isSelf ? "items-end" : "items-start"}`}
                       >
-                        <div className="flex items-center gap-[0.6vmin] px-[0.2vmin]">
-                          <span className="text-[0.95vmin] font-black" style={{ color: msg.senderColor }}>
+                        <div className="flex items-center gap-1.5 md:gap-[0.6vmin] px-1 md:px-[0.2vmin]">
+                          <span className="text-[10px] md:text-[0.95vmin] font-black" style={{ color: msg.senderColor }}>
                             {msg.senderName} {isSelf ? "(You)" : ""}
                           </span>
-                          <span className="text-[0.8vmin] text-gray-400">{msg.timestamp}</span>
+                          <span className="text-[9px] md:text-[0.8vmin] text-gray-400">{msg.timestamp}</span>
                         </div>
                         <div
-                          className={`max-w-[85%] rounded-[1.2vmin] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium leading-normal shadow ${isSelf
+                          className={`max-w-[85%] rounded-xl md:rounded-[1.2vmin] px-3 py-1.5 md:px-[1.2vmin] md:py-[0.8vmin] text-xs md:text-[1.25vmin] font-medium leading-normal shadow ${isSelf
                               ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-tr-none"
                               : "bg-[#1c1538] border border-purple-500/30 text-gray-100 rounded-tl-none"
                             }`}
@@ -5965,19 +5989,19 @@ export default function GameBoard() {
               </div>
 
               {/* Input Footer */}
-              <form onSubmit={handleSendChatMessage} className="flex items-center gap-[0.8vmin] border-t border-indigo-500/30 bg-[#160f2e] p-[1.1vmin]">
+              <form onSubmit={handleSendChatMessage} className="flex items-center gap-2 md:gap-[0.8vmin] border-t border-indigo-500/30 bg-[#160f2e] p-2.5 md:p-[1.1vmin]">
                 <input
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder="Type a message..."
                   maxLength={200}
-                  className="flex-1 rounded-[0.9vmin] border border-purple-500/40 bg-[#0e091f] px-[1.2vmin] py-[0.8vmin] text-[1.25vmin] font-medium text-white placeholder:text-gray-500 focus:border-cyan-400 focus:bg-[#140c2c] focus:outline-none transition-all"
+                  className="flex-1 min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-purple-500/40 bg-[#0e091f] px-3 py-2 md:px-[1.2vmin] md:py-[0.8vmin] text-sm md:text-[1.25vmin] font-medium text-white placeholder:text-gray-500 focus:border-cyan-400 focus:bg-[#140c2c] focus:outline-none transition-all"
                 />
                 <button
                   type="submit"
                   disabled={!chatInput.trim()}
-                  className="flex items-center justify-center rounded-[0.9vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-[1.6vmin] py-[0.8vmin] text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  className="flex items-center justify-center min-h-[44px] min-w-[44px] rounded-lg md:rounded-[0.9vmin] bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 px-3.5 py-2 md:px-[1.6vmin] md:py-[0.8vmin] text-sm md:text-[1.3vmin] font-black uppercase text-white shadow transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                   title="Send message"
                 >
                   ✈️
@@ -5994,9 +6018,9 @@ export default function GameBoard() {
           // bid controls all breathe in the SAME colour as the auctioned card.
           const accent = auctionAccent(players.find((p) => p.id === activeAuction.highestBidderId));
           return (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-[2vmin] backdrop-blur-md">
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 p-2 sm:p-4 md:p-[2vmin] backdrop-blur-md overflow-y-auto">
             <div
-              className="relative flex max-h-[92vh] w-[90vmin] flex-col overflow-hidden rounded-[2vmin] border-2 bg-[#120b24] text-white"
+              className="relative flex max-h-[92dvh] w-full max-w-[850px] md:w-[90vmin] flex-col overflow-hidden rounded-2xl md:rounded-[2vmin] border-2 bg-[#120b24] text-white my-auto"
               style={{
                 borderColor: accent + "80",
                 boxShadow: `0 0 5vmin ${accent}55, inset 0 0 3vmin ${accent}14`,
@@ -6004,32 +6028,26 @@ export default function GameBoard() {
             >
               {/* Header */}
               <div
-                className="relative flex items-center justify-between border-b bg-[#190f33] px-[2.4vmin] py-[1.6vmin]"
+                className="relative flex items-center justify-between border-b bg-[#190f33] px-3 py-2.5 md:px-[2.4vmin] md:py-[1.6vmin]"
                 style={{ borderColor: accent + "4d" }}
               >
-                <div className="flex items-center gap-[1vmin]">
-                  <span className="text-[2.4vmin]">🔨</span>
+                <div className="flex items-center gap-2 md:gap-[1vmin]">
+                  <span className="text-xl md:text-[2.4vmin]">🔨</span>
                   <div>
                     <h3
-                      className="text-[2.2vmin] font-black uppercase tracking-wider"
+                      className="text-sm sm:text-base md:text-[2.2vmin] font-black uppercase tracking-wider"
                       style={{ color: accent, textShadow: `0 0 1.6vmin ${accent}99` }}
                     >
                       PROPERTY AUCTION
                     </h3>
-                    <p className="text-[1.1vmin] font-medium text-indigo-200/80">
+                    <p className="text-[10px] sm:text-xs md:text-[1.1vmin] font-medium text-indigo-200/80">
                       Bidding starts at $2. Highest bidder wins the property!
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-[1.2vmin]">
-                  <div className="flex items-center gap-[0.6vmin]">
+                <div className="flex items-center gap-2 md:gap-[1.2vmin]">
+                  <div className="flex items-center gap-1 md:gap-[0.6vmin]">
                     {(() => {
-                      // The countdown is the auction's most time-critical piece of
-                      // information, so it gets its own urgency scale: calm violet
-                      // while there is room to think, amber under 6s, and a loud red
-                      // that pulses and grows for the final 3 seconds. The bar below
-                      // drains in lockstep so the remaining time is readable at a
-                      // glance from across the table.
                       const t = activeAuction.timeLeft;
                       const urgent = t <= 3;
                       const warn = t <= 6 && !urgent;
@@ -6037,25 +6055,25 @@ export default function GameBoard() {
                       const pct = Math.max(0, Math.min(100, (t / 15) * 100));
                       return (
                         <div
-                          className={`flex flex-col items-center gap-[0.5vmin] rounded-[1.2vmin] border-2 bg-black/40 px-[1.8vmin] py-[0.7vmin] shadow-lg transition-all ${urgent ? "animate-pulse scale-105" : ""}`}
+                          className={`flex flex-col items-center gap-0.5 md:gap-[0.5vmin] rounded-xl md:rounded-[1.2vmin] border-2 bg-black/40 px-2.5 py-1 md:px-[1.8vmin] md:py-[0.7vmin] shadow-lg transition-all ${urgent ? "animate-pulse scale-105" : ""}`}
                           style={{
                             borderColor: timerColor + "cc",
                             boxShadow: `0 0 ${urgent ? "3vmin" : "1.6vmin"} ${timerColor}${urgent ? "88" : "44"}`,
                           }}
                         >
-                          <div className="flex items-center gap-[0.7vmin] leading-none">
-                            <span className="text-[1.5vmin]">⏳</span>
+                          <div className="flex items-center gap-1.5 md:gap-[0.7vmin] leading-none">
+                            <span className="text-xs md:text-[1.5vmin]">⏳</span>
                             <span
-                              className={`font-mono ${urgent ? "text-[3.4vmin]" : "text-[2.8vmin]"} font-black tabular-nums leading-none text-white transition-all`}
+                              className={`font-mono ${urgent ? "text-xl md:text-[3.4vmin]" : "text-base md:text-[2.8vmin]"} font-black tabular-nums leading-none text-white transition-all`}
                               style={{ textShadow: `0 0 2vmin ${timerColor}cc` }}
                             >
                               {t}s
                             </span>
                           </div>
-                          <span className="text-[0.95vmin] font-black uppercase tracking-[0.25vmin] leading-none text-white">
+                          <span className="text-[9px] md:text-[0.95vmin] font-black uppercase tracking-[0.25vmin] leading-none text-white">
                             {urgent ? "⏱ LAST CHANCE!" : "Time Left"}
                           </span>
-                          <div className="h-[0.5vmin] w-[12vmin] overflow-hidden rounded-full bg-white/15">
+                          <div className="h-1 md:h-[0.5vmin] w-16 md:w-[12vmin] overflow-hidden rounded-full bg-white/15">
                             <div
                               className="h-full rounded-full transition-all duration-1000 ease-linear"
                               style={{
@@ -6081,40 +6099,40 @@ export default function GameBoard() {
                 const isCurrentHighest = currentPlayer && activeAuction.highestBidderId === currentPlayer.id;
 
                 return (
-                  <div className="flex flex-1 overflow-y-auto p-[2.4vmin] gap-[2vmin]">
+                  <div className="flex flex-col md:flex-row flex-1 overflow-y-auto p-3 sm:p-4 md:p-[2.4vmin] gap-3 md:gap-[2vmin]">
                     {/* Left Column: Bidding Controls */}
-                    <div className="flex flex-1 flex-col gap-[1.8vmin] justify-between">
+                    <div className="flex flex-1 flex-col gap-2.5 md:gap-[1.8vmin] justify-between">
                       {/* Current Bid Display */}
-                      <div className="flex flex-col items-center justify-center rounded-[1.6vmin] border-2 bg-[#1b1236] p-[2vmin] text-center shadow-inner"
+                      <div className="flex flex-col items-center justify-center rounded-xl md:rounded-[1.6vmin] border-2 bg-[#1b1236] p-3 md:p-[2vmin] text-center shadow-inner"
                         style={{ borderColor: accent + "59" }}
                       >
-                        <span className="text-[1.2vmin] font-black uppercase tracking-widest text-gray-400">Current Highest Bid</span>
+                        <span className="text-[11px] md:text-[1.2vmin] font-black uppercase tracking-widest text-gray-400">Current Highest Bid</span>
                         <span
-                          className="my-[0.4vmin] font-mono text-[4.2vmin] font-black"
+                          className="my-1 md:my-[0.4vmin] font-mono text-2xl sm:text-3xl md:text-[4.2vmin] font-black"
                           style={{ color: accent, textShadow: `0 0 2vmin ${accent}cc` }}
                         >
                           ${activeAuction.currentBid.toLocaleString()}
                         </span>
                         {highestBidder ? (
-                          <div className="flex items-center gap-[0.7vmin] rounded-full border border-emerald-400/50 bg-emerald-500/15 px-[1.4vmin] py-[0.3vmin]">
-                            <span className="h-[1.2vmin] w-[1.2vmin] rounded-full" style={{ backgroundColor: highestBidder.color }} />
-                            <span className="text-[1.35vmin] font-black text-emerald-300">
+                          <div className="flex items-center gap-1.5 md:gap-[0.7vmin] rounded-full border border-emerald-400/50 bg-emerald-500/15 px-3 py-1 md:px-[1.4vmin] md:py-[0.3vmin]">
+                            <span className="h-2.5 w-2.5 md:h-[1.2vmin] md:w-[1.2vmin] rounded-full" style={{ backgroundColor: highestBidder.color }} />
+                            <span className="text-xs md:text-[1.35vmin] font-black text-emerald-300">
                               Highest Bidder: {highestBidder.name}
                             </span>
                           </div>
                         ) : (
-                          <span className="text-[1.2vmin] font-bold italic text-gray-400">
+                          <span className="text-xs md:text-[1.2vmin] font-bold italic text-gray-400">
                             No bids placed yet (Starts at $2)
                           </span>
                         )}
                       </div>
 
                       {/* Bidding Increments Buttons (+$2, +$10, +$100) */}
-                      <div className="flex flex-col gap-[1vmin]">
-                        <span className="text-[1.2vmin] font-black uppercase tracking-wider text-indigo-300">
+                      <div className="flex flex-col gap-1 md:gap-[1vmin]">
+                        <span className="text-xs md:text-[1.2vmin] font-black uppercase tracking-wider text-indigo-300">
                           Place a Bid (Shows Resulting Total Bid):
                         </span>
-                        <div className="grid grid-cols-3 gap-[1vmin]">
+                        <div className="grid grid-cols-3 gap-1.5 md:gap-[1vmin]">
                           {[2, 10, 100].map((inc) => (
                             <BidButton
                               key={inc}
@@ -6130,15 +6148,15 @@ export default function GameBoard() {
                       </div>
 
                       {/* Status Note & Pass Button */}
-                      <div className="flex flex-col gap-[1vmin]">
+                      <div className="flex flex-col gap-1 md:gap-[1vmin]">
                         {isCurrentHighest ? (
-                          <div className="rounded-[1vmin] border border-emerald-500/40 bg-emerald-950/30 py-[1vmin] text-center text-[1.25vmin] font-bold text-emerald-300">
+                          <div className="flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-emerald-500/40 bg-emerald-950/30 py-2.5 px-3 md:py-[1vmin] text-center text-xs sm:text-sm md:text-[1.25vmin] font-bold text-emerald-300">
                             👑 You are currently the highest bidder!
                           </div>
                         ) : (
                           <button
                             onClick={handlePassAuction}
-                            className="w-full rounded-[1vmin] border border-red-500/40 bg-red-950/40 py-[1.2vmin] text-[1.3vmin] font-black uppercase text-red-200 transition hover:bg-red-900/60 hover:text-white cursor-pointer active:scale-95"
+                            className="w-full flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-red-500/40 bg-red-950/40 py-2.5 px-3 md:py-[1.2vmin] text-xs sm:text-sm md:text-[1.3vmin] font-black uppercase text-red-200 transition hover:bg-red-900/60 hover:text-white cursor-pointer active:scale-95"
                           >
                             Pass / Withdraw from Auction
                           </button>
@@ -6146,16 +6164,16 @@ export default function GameBoard() {
                       </div>
 
                       {/* Bidders Status Grid */}
-                      <div className="flex flex-col gap-[0.6vmin] border-t border-white/10 pt-[1.2vmin]">
-                        <span className="text-[1.15vmin] font-black uppercase text-gray-400">Players Status:</span>
-                        <div className="flex flex-wrap gap-[0.6vmin]">
+                      <div className="flex flex-col gap-1 md:gap-[0.6vmin] border-t border-white/10 pt-2 md:pt-[1.2vmin]">
+                        <span className="text-[11px] md:text-[1.15vmin] font-black uppercase text-gray-400">Players Status:</span>
+                        <div className="flex flex-wrap gap-1.5 md:gap-[0.6vmin]">
                           {alivePlayers.map((p) => {
                             const isPassed = activeAuction.passedPlayerIds.includes(p.id);
                             const isHighest = activeAuction.highestBidderId === p.id;
                             return (
                               <div
                                 key={p.id}
-                                className={`flex items-center gap-[0.5vmin] rounded-full border px-[1vmin] py-[0.3vmin] text-[1.05vmin] font-bold ${
+                                className={`flex items-center gap-1 md:gap-[0.5vmin] rounded-full border px-2 py-0.5 md:px-[1vmin] md:py-[0.3vmin] text-[10px] md:text-[1.05vmin] font-bold ${
                                   isHighest
                                     ? "border-emerald-400 bg-emerald-500/20 text-emerald-300"
                                     : isPassed
@@ -6163,7 +6181,7 @@ export default function GameBoard() {
                                     : "border-white/15 bg-white/5 text-gray-200"
                                 }`}
                               >
-                                <span className="h-[0.8vmin] w-[0.8vmin] rounded-full" style={{ backgroundColor: p.color }} />
+                                <span className="h-2 w-2 md:h-[0.8vmin] md:w-[0.8vmin] rounded-full" style={{ backgroundColor: p.color }} />
                                 <span>{p.name}</span>
                                 <span>{isHighest ? "👑" : isPassed ? "❌" : "⚡"}</span>
                               </div>
@@ -6174,19 +6192,19 @@ export default function GameBoard() {
                     </div>
 
                     {/* Right Column: Full Info of the Card Being Auctioned */}
-                    <div className="w-[42vmin] shrink-0 rounded-[1.6vmin] border border-purple-500/30 bg-[#161226] p-[2vmin] shadow-lg flex flex-col justify-between transition-colors duration-300" style={auctionCardStyle(highestBidder)}>
+                    <div className="w-full md:w-[42vmin] shrink-0 rounded-xl md:rounded-[1.6vmin] border border-purple-500/30 bg-[#161226] p-3 md:p-[2vmin] shadow-lg flex flex-col justify-between transition-colors duration-300" style={auctionCardStyle(highestBidder)}>
                       <div>
                         {/* Header Badge */}
-                        <div className="flex flex-col items-center text-center pb-[1.4vmin] border-b border-white/10">
-                          {renderTileIconOrFlag(tile, "w-[4.8vmin] h-[3.2vmin]")}
-                          <h4 className="mt-[0.8vmin] text-[2.2vmin] font-black text-white uppercase">{tile.name}</h4>
-                          <span className="text-[1.2vmin] font-bold text-emerald-400 font-mono">Bank Value: {tile.price}</span>
+                        <div className="flex flex-col items-center text-center pb-2.5 md:pb-[1.4vmin] border-b border-white/10">
+                          {renderTileIconOrFlag(tile, "w-10 h-7 md:w-[4.8vmin] md:h-[3.2vmin]")}
+                          <h4 className="mt-1.5 md:mt-[0.8vmin] text-base md:text-[2.2vmin] font-black text-white uppercase">{tile.name}</h4>
+                          <span className="text-xs md:text-[1.2vmin] font-bold text-emerald-400 font-mono">Bank Value: {tile.price}</span>
                         </div>
 
                         {/* Rent Table */}
                         {PROPERTY_TYPES.has(tile.type) && tile.rents && (
-                          <div className="my-[1.4vmin] space-y-[0.6vmin] text-[1.25vmin]">
-                            <div className="text-[1.1vmin] font-black uppercase text-purple-300 tracking-wider mb-[0.4vmin]">Rent Structure:</div>
+                          <div className="my-2.5 md:my-[1.4vmin] space-y-1 md:space-y-[0.6vmin] text-xs md:text-[1.25vmin]">
+                            <div className="text-[11px] md:text-[1.1vmin] font-black uppercase text-purple-300 tracking-wider mb-1 md:mb-[0.4vmin]">Rent Structure:</div>
                             {[
                               { label: "Base Rent", val: tile.rents[0] },
                               { label: "1 House", val: tile.rents[1] },
@@ -6205,8 +6223,8 @@ export default function GameBoard() {
 
                         {/* Utility Table */}
                         {UTILITY_TYPES.has(tile.type) && UTILITY_RENT_TABLE[tile.type] && (
-                          <div className="my-[1.4vmin] space-y-[0.6vmin] text-[1.25vmin]">
-                            <div className="text-[1.1vmin] font-black uppercase text-purple-300 tracking-wider mb-[0.4vmin]">Utility Rent Tiers:</div>
+                          <div className="my-2.5 md:my-[1.4vmin] space-y-1 md:space-y-[0.6vmin] text-xs md:text-[1.25vmin]">
+                            <div className="text-[11px] md:text-[1.1vmin] font-black uppercase text-purple-300 tracking-wider mb-1 md:mb-[0.4vmin]">Utility Rent Tiers:</div>
                             {UTILITY_RENT_TABLE[tile.type].map((amt, idx) => (
                               <div key={idx} className="flex justify-between text-gray-300">
                                 <span>If owner holds {idx + 1}</span>
@@ -6219,7 +6237,7 @@ export default function GameBoard() {
 
                       {/* House / Hotel Cost Footer */}
                       {PROPERTY_TYPES.has(tile.type) && (
-                        <div className="flex items-center justify-between border-t border-white/10 pt-[1.2vmin] text-[1.2vmin]">
+                        <div className="flex items-center justify-between border-t border-white/10 pt-2 md:pt-[1.2vmin] text-xs md:text-[1.2vmin]">
                           <span className="text-gray-400">🏠 House: <strong className="text-white">${tile.houseCost || 100}</strong></span>
                           <span className="text-gray-400">🏨 Hotel: <strong className="text-white">${tile.hotelCost || 100}</strong></span>
                         </div>

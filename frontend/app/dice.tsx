@@ -250,14 +250,17 @@ export default function DiceScene({
 
   return (
     <div
-      className="w-[200px] sm:w-[240px] md:w-[280px] lg:w-[300px] h-[100px] sm:h-[120px] md:h-[140px] lg:h-[150px] max-w-full"
+      className="w-[150px] min-[380px]:w-[180px] sm:w-[220px] md:w-[260px] lg:w-[280px] h-[85px] min-[380px]:h-[100px] sm:h-[110px] md:h-[130px] lg:h-[140px] max-w-full shrink-0 relative overflow-hidden"
       style={{
         borderRadius: "16px",
         overflow: "hidden",
         background: "rgba(0,0,0,0.4)",
+        touchAction: "none",
       }}
     >
       <Canvas
+        className="!w-full !h-full"
+        style={{ width: "100%", height: "100%" }}
         camera={{ position: [0, 7.5, 0], fov: 40 }}
         shadows
         gl={{ antialias: true }}
