@@ -3509,7 +3509,27 @@ export default function GameBoard() {
               : "border-white/10 bg-white/5 text-gray-300"
             }`}
         >
-          👥 Players & Code
+          ⚙️ Settings<span style={{ position: "absolute", width: "1px", height: "1px", padding: 0, margin: "-1px", overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}>(Players)</span>
+        </button>
+        {/* Persistent Chat Quick-Toggle Button for Mobile */}
+        <button
+          onClick={() => {
+            setIsChatOpen((prev) => !prev);
+            if (!isChatOpen) setUnreadChatCount(0);
+          }}
+          className={`relative flex items-center justify-center min-h-[44px] px-3 rounded-xl border transition-all active:scale-95 cursor-pointer ${isChatOpen
+              ? "border-purple-400 bg-purple-500/30 text-white shadow-[0_0_12px_rgba(168,85,247,0.5)]"
+              : "border-purple-500/40 bg-purple-500/10 text-purple-200 hover:border-purple-400 hover:bg-purple-500/20"
+            }`}
+          title="Toggle Chat"
+          aria-label="Toggle Chat"
+        >
+          <span className="text-base leading-none">💬</span>
+          {!isChatOpen && unreadChatCount > 0 && (
+            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] font-black text-white shadow animate-bounce">
+              {unreadChatCount > 9 ? "9+" : unreadChatCount}
+            </span>
+          )}
         </button>
       </div>
 
@@ -3602,7 +3622,7 @@ export default function GameBoard() {
         </div>
 
         <div
-          className={`relative grid aspect-square h-[96vw] max-h-[96vmin] w-[96vw] max-w-[96vmin] lg:h-[96vmin] lg:w-[96vmin] shrink-0 rounded-2xl md:rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)] ${mobileTab === "board" ? "grid" : "hidden lg:grid"}`}
+          className={`relative grid aspect-square w-[min(96vw,calc(100dvh-130px))] max-w-[96vmin] h-[min(96vw,calc(100dvh-130px))] max-h-[96vmin] lg:h-[96vmin] lg:w-[96vmin] shrink-0 rounded-2xl md:rounded-[2vmin] border-[0.3vmin] border-indigo-400/30 bg-[#0f0c16] p-[0.4vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.15),inset_0_0_0_0.15vmin_rgba(255,255,255,0.06)] ${mobileTab === "board" ? "grid" : "hidden lg:grid"}`}
           style={{
             gridTemplateColumns: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
             gridTemplateRows: `${CORNER_FR}fr repeat(9, 1fr) ${CORNER_FR}fr`,
@@ -3987,23 +4007,23 @@ export default function GameBoard() {
 
           {/* ================= CENTER CONSOLE ================= */}
           <div
-            className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-[1.6vmin] text-center shadow-2xl"
+            className="relative z-0 flex flex-col items-center justify-between overflow-y-auto rounded-[1.8vmin] border border-white/5 bg-[#0a0812] p-1.5 sm:p-[1.6vmin] text-center shadow-2xl"
             style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
           >
-            <div className="relative flex w-full items-center justify-between px-[0.4vmin] gap-1">
+            <div className="relative flex w-full items-center justify-between px-1 sm:px-[0.4vmin] gap-1 sm:gap-2">
               {/* Leftmost: Fullscreen button */}
               <button
                 onClick={toggleFullscreen}
-                className="flex shrink-0 items-center justify-center gap-1 md:gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-2.5 py-1.5 md:px-[1.6vmin] md:py-[0.7vmin] text-xs sm:text-sm md:text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer min-h-[36px] sm:min-h-[40px] md:min-h-0"
+                className="flex shrink-0 items-center justify-center gap-1 md:gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-2 py-1 sm:px-2.5 sm:py-1.5 md:px-[1.6vmin] md:py-[0.7vmin] text-[10px] sm:text-xs md:text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer min-h-[30px] sm:min-h-[36px] md:min-h-0"
                 title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
               >
                 <span className="text-xs sm:text-sm md:text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
-                <span className="whitespace-nowrap tracking-wide">{isFullscreen ? "Exit" : "Fullscreen"}</span>
+                <span className="whitespace-nowrap tracking-wide hidden xs:inline">{isFullscreen ? "Exit" : "Fullscreen"}</span>
               </button>
 
               {/* Center: Turn Timer (aligned exactly with YOUR TURN badge below) */}
               <div
-                className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center select-none pointer-events-none"
+                className="flex-1 flex items-center justify-center select-none pointer-events-none px-1"
                 title={
                   !isGameStarted
                     ? "Turn Timer: 120s per turn"
@@ -4011,7 +4031,7 @@ export default function GameBoard() {
                 }
               >
                 <span
-                  className={`pointer-events-auto font-mono text-sm sm:text-base md:text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
+                  className={`pointer-events-auto font-mono text-xs sm:text-base md:text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
                       ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
                       : isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 30
                         ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
@@ -4028,14 +4048,14 @@ export default function GameBoard() {
 
               {/* Rightmost: LIVE connection indicator. The room code pill itself lives
                   in the Players panel on the right, next to Leave. */}
-              <div className="flex shrink-0 items-center gap-1 md:gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-1 sm:px-2 md:px-[1.6vmin] md:py-[0.7vmin] shadow-md max-w-[48%] sm:max-w-none">
+              <div className="flex shrink-0 items-center gap-1 md:gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-1 sm:px-2 md:px-[1.6vmin] md:py-[0.7vmin] shadow-md max-w-[40%] sm:max-w-none">
                 <div
                   className={`h-2 w-2 md:h-[1vmin] md:w-[1vmin] shrink-0 rounded-full ${isConnected
                       ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
                       : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
                     }`}
                 />
-                <span className="truncate text-[10px] sm:text-xs md:text-[1.35vmin] font-extrabold tracking-wide text-white">
+                <span className="truncate text-[9px] sm:text-xs md:text-[1.35vmin] font-extrabold tracking-wide text-white">
                   {connectionLabel}
                 </span>
               </div>
@@ -4060,17 +4080,17 @@ export default function GameBoard() {
             </div>
 
             {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
-            <div className="flex h-12 sm:h-14 md:h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-2 sm:px-3 md:px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center -translate-y-0.5 md:-translate-y-[3.5vmin]">
+            <div className="flex h-11 sm:h-14 md:h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-2 sm:px-3 md:px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center md:-translate-y-[3.5vmin]">
               <div className="w-full overflow-hidden">
                 {actionLog.slice(0, 3).map((msg, i) => (
-                  <p key={i} className={`w-full overflow-hidden text-[11px] sm:text-xs md:text-[1.55vmin] leading-snug truncate ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
+                  <p key={i} className={`w-full overflow-hidden text-[10px] sm:text-xs md:text-[1.55vmin] leading-snug truncate ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
                     {renderLogMessage(msg)}
                   </p>
                 ))}
               </div>
             </div>
 
-            <div className="flex w-full max-w-[44vmin] gap-1.5 md:gap-[1.2vmin] -translate-y-0.5 md:-translate-y-[3.5vmin]">
+            <div className="flex w-full max-w-[44vmin] gap-1 sm:gap-1.5 md:gap-[1.2vmin] md:-translate-y-[3.5vmin]">
               {gamePhase === "YOUR TURN" ? (
                 <>
                   {currentPlayer?.inJail && (
