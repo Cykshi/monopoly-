@@ -3509,27 +3509,7 @@ export default function GameBoard() {
               : "border-white/10 bg-white/5 text-gray-300"
             }`}
         >
-          ⚙️ Settings<span style={{ position: "absolute", width: "1px", height: "1px", padding: 0, margin: "-1px", overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}>(Players)</span>
-        </button>
-        {/* Persistent Chat Quick-Toggle Button for Mobile */}
-        <button
-          onClick={() => {
-            setIsChatOpen((prev) => !prev);
-            if (!isChatOpen) setUnreadChatCount(0);
-          }}
-          className={`relative flex items-center justify-center min-h-[44px] px-3 rounded-xl border transition-all active:scale-95 cursor-pointer ${isChatOpen
-              ? "border-purple-400 bg-purple-500/30 text-white shadow-[0_0_12px_rgba(168,85,247,0.5)]"
-              : "border-purple-500/40 bg-purple-500/10 text-purple-200 hover:border-purple-400 hover:bg-purple-500/20"
-            }`}
-          title="Toggle Chat"
-          aria-label="Toggle Chat"
-        >
-          <span className="text-base leading-none">💬</span>
-          {!isChatOpen && unreadChatCount > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] font-black text-white shadow animate-bounce">
-              {unreadChatCount > 9 ? "9+" : unreadChatCount}
-            </span>
-          )}
+          👥 Players & Code
         </button>
       </div>
 
@@ -4014,10 +3994,10 @@ export default function GameBoard() {
               {/* Leftmost: Fullscreen button */}
               <button
                 onClick={toggleFullscreen}
-                className="flex shrink-0 items-center justify-center gap-1 md:gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-2 py-1 sm:px-2.5 sm:py-1.5 md:px-[1.6vmin] md:py-[0.7vmin] text-[10px] sm:text-xs md:text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer min-h-[30px] sm:min-h-[36px] md:min-h-0"
+                className="no-touch-target flex shrink-0 items-center justify-center gap-0.5 sm:gap-1 md:gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-0.5 sm:px-2.5 sm:py-1.5 md:px-[1.6vmin] md:py-[0.7vmin] text-[9px] sm:text-xs md:text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer min-h-0"
                 title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
               >
-                <span className="text-xs sm:text-sm md:text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
+                <span className="text-[10px] sm:text-sm md:text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
                 <span className="whitespace-nowrap tracking-wide hidden xs:inline">{isFullscreen ? "Exit" : "Fullscreen"}</span>
               </button>
 
@@ -4031,7 +4011,7 @@ export default function GameBoard() {
                 }
               >
                 <span
-                  className={`pointer-events-auto font-mono text-xs sm:text-base md:text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
+                  className={`pointer-events-auto font-mono text-[10px] sm:text-sm md:text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
                       ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
                       : isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 30
                         ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
@@ -4048,14 +4028,14 @@ export default function GameBoard() {
 
               {/* Rightmost: LIVE connection indicator. The room code pill itself lives
                   in the Players panel on the right, next to Leave. */}
-              <div className="flex shrink-0 items-center gap-1 md:gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-1 sm:px-2 md:px-[1.6vmin] md:py-[0.7vmin] shadow-md max-w-[40%] sm:max-w-none">
+              <div className="flex shrink-0 items-center gap-0.5 sm:gap-1 md:gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-0.5 sm:px-2 md:px-[1.6vmin] md:py-[0.7vmin] shadow-md max-w-[42%] sm:max-w-none">
                 <div
-                  className={`h-2 w-2 md:h-[1vmin] md:w-[1vmin] shrink-0 rounded-full ${isConnected
+                  className={`h-1.5 w-1.5 sm:h-2 sm:w-2 md:h-[1vmin] md:w-[1vmin] shrink-0 rounded-full ${isConnected
                       ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
                       : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
                     }`}
                 />
-                <span className="truncate text-[9px] sm:text-xs md:text-[1.35vmin] font-extrabold tracking-wide text-white">
+                <span className="truncate text-[8.5px] sm:text-xs md:text-[1.35vmin] font-extrabold tracking-wide text-white">
                   {connectionLabel}
                 </span>
               </div>
@@ -4063,7 +4043,7 @@ export default function GameBoard() {
 
             <div>
               <div
-                className={`mx-auto w-fit rounded-full border px-2.5 py-0.5 md:px-[1.8vmin] md:py-[0.4vmin] text-[10px] sm:text-xs md:text-[1.1vmin] font-black uppercase tracking-widest ${gamePhase === "YOUR TURN"
+                className={`mx-auto w-fit rounded-full border px-2 py-0.5 sm:px-2.5 md:px-[1.8vmin] md:py-[0.4vmin] text-[8.5px] sm:text-[10px] md:text-[1.1vmin] font-black uppercase tracking-wider md:tracking-widest ${gamePhase === "YOUR TURN"
                     ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
                     : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
                       ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
@@ -4097,25 +4077,25 @@ export default function GameBoard() {
                     <button
                       onClick={payBail}
                       disabled={(currentPlayer.money ?? 0) < 100}
-                      className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                      className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-1 sm:py-2 md:py-[1.6vmin] px-1 sm:px-2 md:px-2 text-[10px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                     >
-                      🔓 Pay Bail $100
+                      🔓 Pay $100
                     </button>
                   )}
 
                   <button
                     onClick={rollDice}
                     disabled={isRolling || isMoving}
-                    className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                    className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                   >
-                    {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll Doubles" : "🎲 Roll"}
+                    {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll 2x" : "🎲 Roll"}
                   </button>
 
                   {!currentPlayer?.inJail && enableMovementCards && (
                     <button
                       onClick={openSkillCard}
                       disabled={!hasSkillCard || isRolling || isMoving}
-                      className="relative flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                      className="no-touch-target relative flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                     >
                       {hasSkillCard ? "🃏 Card" : "Exhausted"}
                     </button>
@@ -4125,7 +4105,7 @@ export default function GameBoard() {
                 <button
                   onClick={endTurn}
                   disabled={gamePhase !== "ACTION" && gamePhase !== "END TURN"}
-                  className="flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[1.1vmin] border border-white/15 bg-white/10 py-2.5 px-2 md:py-[1.6vmin] text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
+                  className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/15 bg-white/10 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
                 >
                   End Turn
                 </button>
@@ -5832,6 +5812,8 @@ export default function GameBoard() {
               </div>
             </div>
           )}
+        </div>
+      </div>
 
           {/* ================= FLOATING SETTINGS ICON (WHEN GAME IS STARTED) ================= */}
           {isGameStarted && (
@@ -5933,14 +5915,17 @@ export default function GameBoard() {
           )}
 
           {/* ================= FLOATING CHAT SYSTEM (BOTTOM RIGHT) ================= */}
-          <button
-            onClick={() => {
-              setIsChatOpen((prev) => !prev);
-              if (!isChatOpen) setUnreadChatCount(0);
-            }}
-            className="fixed bottom-4 right-4 md:bottom-[2.5vmin] md:right-[2.5vmin] z-[160] flex h-12 w-12 md:h-[5.5vmin] md:w-[5.5vmin] items-center justify-center rounded-full border-2 border-indigo-400/80 bg-gradient-to-br from-[#1e153b] via-[#140e2b] to-[#0d091d] text-lg md:text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(99,102,241,0.5)] transition-all hover:scale-110 hover:border-cyan-300 hover:shadow-[0_0_3.5vmin_rgba(6,182,212,0.7)] active:scale-95 cursor-pointer"
-            title="Open Player Chat"
-          >
+          {Boolean(roomId) && (
+            <>
+              <button
+                onClick={() => {
+                  setIsChatOpen((prev) => !prev);
+                  if (!isChatOpen) setUnreadChatCount(0);
+                }}
+                className="fixed bottom-4 right-4 md:bottom-[2.5vmin] md:right-[2.5vmin] z-[160] flex h-12 w-12 md:h-[5.5vmin] md:w-[5.5vmin] items-center justify-center rounded-full border-2 border-indigo-400/80 bg-gradient-to-br from-[#1e153b] via-[#140e2b] to-[#0d091d] text-lg md:text-[2.6vmin] shadow-[0_0_2.5vmin_rgba(99,102,241,0.5)] transition-all hover:scale-110 hover:border-cyan-300 hover:shadow-[0_0_3.5vmin_rgba(6,182,212,0.7)] active:scale-95 cursor-pointer"
+                title="Open Player Chat"
+                aria-label="Open Player Chat"
+              >
             💬
             {!isChatOpen && unreadChatCount > 0 && (
               <span className="absolute -top-1 -right-1 md:-top-[0.4vmin] md:-right-[0.4vmin] flex h-5 w-5 md:h-[2.2vmin] md:w-[2.2vmin] items-center justify-center rounded-full bg-gradient-to-r from-red-500 to-rose-500 text-[10px] md:text-[1.1vmin] font-black text-white shadow-lg animate-bounce">
@@ -6029,6 +6014,8 @@ export default function GameBoard() {
               </form>
             </div>
           )}
+        </>
+      )}
 
         {/* ================= DUAL-COLUMN AUCTION POP-UP MODAL ================= */}
         {activeAuction && (() => {
@@ -6270,8 +6257,6 @@ export default function GameBoard() {
           </div>
           );
         })()}
-        </div>
-      </div>
     </main>
   );
 }

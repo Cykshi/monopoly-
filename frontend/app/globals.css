@@ -47,6 +47,12 @@ body::-webkit-scrollbar {
     min-width: 44px;
   }
 
+  /* Compact controls inside board center console allow custom proportional sizing */
+  .no-touch-target {
+    min-height: 0 !important;
+    min-width: 0 !important;
+  }
+
   input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not(.no-touch-target) {
     min-height: 44px;
     font-size: 16px; /* Prevents auto-zoom in iOS Safari */
