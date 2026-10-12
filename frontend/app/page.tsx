@@ -3211,7 +3211,7 @@ export default function GameBoard() {
   );
 
   return (
-    <main className="flex min-h-[100dvh] w-full flex-col items-center justify-start overflow-x-hidden overflow-y-auto lg:h-screen lg:flex-row lg:overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-1.5 md:p-[1vmin] font-sans">
+    <main className="flex h-[100dvh] max-h-[100dvh] w-full flex-col items-center justify-start overflow-hidden lg:h-screen lg:flex-row lg:overflow-hidden bg-[#050508] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#110d1c] to-[#050508] p-1.5 md:p-[1vmin] font-sans">
       <style jsx global>{`
         @keyframes tokenBounce {
           0%, 100% { transform: translateY(0) scale(1); }
@@ -3475,9 +3475,9 @@ export default function GameBoard() {
         </button>
       </div>
 
-      <div className="flex flex-col lg:flex-row w-full lg:h-[96vmin] items-center justify-center gap-3 lg:gap-[1.6vmin]">
+      <div className="flex flex-col flex-1 min-h-0 w-full lg:flex-row lg:h-[96vmin] items-center justify-center gap-3 lg:gap-[1.6vmin]">
         {/* ================= LEFT SIDEBAR - PROPERTIES YOU OWN ================= */}
-        <div className={`w-full max-w-[500px] lg:w-[32vmin] flex max-h-[88vh] lg:max-h-[96vmin] flex-col self-center lg:self-start rounded-2xl lg:rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/95 p-3 lg:p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)] overflow-y-auto ${mobileTab === "properties" ? "flex" : "hidden lg:flex"}`}>
+        <div className={`w-full max-w-[500px] lg:w-[32vmin] flex h-full max-h-full min-h-0 lg:max-h-[96vmin] flex-col self-center lg:self-start rounded-2xl lg:rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/95 p-3 lg:p-[1.1vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)] overflow-y-auto ${mobileTab === "properties" ? "flex" : "hidden lg:flex"}`}>
           {/* Balance card - total cash on hand plus the player's own recent
               gains/losses (green for +, red for -), pulled straight out of
               the shared action log so it never drifts out of sync with it.
@@ -5036,11 +5036,11 @@ export default function GameBoard() {
         </div>
 
         {/* ================= RIGHT SIDEBAR - ALL PLAYERS & THEIR CARDS ================= */}
-        <div className={`w-full max-w-[500px] lg:w-full lg:min-w-[36vmin] flex max-h-[88vh] lg:h-[96vmin] lg:flex-1 flex-col self-center lg:self-start overflow-y-auto rounded-2xl lg:rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/95 p-3 lg:p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)] ${mobileTab === "players" ? "flex" : "hidden lg:flex"}`}>
+        <div className={`w-full max-w-[500px] lg:w-full lg:min-w-[36vmin] flex h-full max-h-full min-h-0 lg:h-[96vmin] lg:flex-1 flex-col self-center lg:self-start overflow-hidden lg:overflow-y-auto rounded-2xl lg:rounded-[1.4vmin] border border-white/10 bg-[#0f0c16]/95 p-3 lg:p-[1.3vmin] shadow-[0_0_2vmin_rgba(139,92,246,0.12)] ${mobileTab === "players" ? "flex" : "hidden lg:flex"}`}>
           {/* Room code pill + Leave button, relocated here from the centre
               console so the code stays visible while you play. */}
           {roomId && (
-            <div className="mb-2 md:mb-[1.2vmin] flex flex-col gap-1.5 md:gap-[0.8vmin] rounded-xl md:rounded-[1vmin] border border-white/10 bg-black/40 p-2.5 md:p-[1vmin]">
+            <div className="mb-2 md:mb-[1.2vmin] flex shrink-0 flex-col gap-1.5 md:gap-[0.8vmin] rounded-xl md:rounded-[1vmin] border border-white/10 bg-black/40 p-2.5 md:p-[1vmin]">
               <div className="flex items-center justify-between px-1 md:px-[0.3vmin]">
                 <span className="text-[11px] md:text-[1.05vmin] font-black uppercase tracking-widest text-gray-400">
                   Room code
@@ -5090,7 +5090,7 @@ export default function GameBoard() {
             </div>
           )}
 
-          <div className="mb-2 md:mb-[0.8vmin] flex items-center justify-between px-1 md:px-[0.3vmin]">
+          <div className="mb-2 md:mb-[0.8vmin] flex shrink-0 items-center justify-between px-1 md:px-[0.3vmin]">
             <h2 className="text-xs md:text-[1.4vmin] font-black uppercase tracking-widest text-white">
               Players
             </h2>
@@ -5101,7 +5101,7 @@ export default function GameBoard() {
             )}
           </div>
 
-          <div className="flex flex-col gap-2 md:gap-[0.7vmin]">
+          <div className="flex shrink-0 flex-col gap-2 md:gap-[0.7vmin]">
             {players.map((player) => {
               const isSelected = selectedPlayerId === player.id;
               const isSelf = player.id === currentPlayer?.id;
@@ -5476,21 +5476,22 @@ export default function GameBoard() {
 
           {/* ================= SETTINGS PANEL (ONLY IN SIDEBAR BEFORE GAME START) ================= */}
           {!isGameStarted && (
-            <div className="mt-2 md:mt-[1.4vmin] flex flex-1 flex-col justify-between rounded-xl md:rounded-[1.4vmin] border-2 border-cyan-500/40 bg-[#0d1b22] p-3 md:p-[1.6vmin] shadow-[0_0_2vmin_rgba(34,211,238,0.18),0_1vmin_2vmin_rgba(0,0,0,0.4)]">
-              <div className="flex flex-col gap-3 md:gap-[1.6vmin]">
-                {/* Header */}
-                <div className="flex items-center justify-between border-b border-cyan-500/25 pb-2 md:pb-[1.1vmin]">
-                  <div className="flex items-center gap-2 md:gap-[0.8vmin]">
-                    <span className="text-base md:text-[1.8vmin]">⚙️</span>
-                    <span className="text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">
-                      GAME SETTINGS
-                    </span>
-                  </div>
-                  <span className="rounded md:rounded-[0.5vmin] border-cyan-400/50 bg-cyan-500/15 px-2 py-0.5 md:px-[1vmin] md:py-[0.35vmin] text-[10px] md:text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
-                    Editable
+            <div className="mt-2 md:mt-[1.4vmin] flex flex-1 min-h-0 flex-col justify-between rounded-xl md:rounded-[1.4vmin] border-2 border-cyan-500/40 bg-[#0d1b22] p-3 md:p-[1.6vmin] shadow-[0_0_2vmin_rgba(34,211,238,0.18),0_1vmin_2vmin_rgba(0,0,0,0.4)]">
+              {/* Header */}
+              <div className="shrink-0 flex items-center justify-between border-b border-cyan-500/25 pb-2 md:pb-[1.1vmin]">
+                <div className="flex items-center gap-2 md:gap-[0.8vmin]">
+                  <span className="text-base md:text-[1.8vmin]">⚙️</span>
+                  <span className="text-xs sm:text-sm md:text-[1.6vmin] font-black uppercase tracking-[0.18em] text-cyan-100">
+                    GAME SETTINGS
                   </span>
                 </div>
+                <span className="rounded md:rounded-[0.5vmin] border-cyan-400/50 bg-cyan-500/15 px-2 py-0.5 md:px-[1vmin] md:py-[0.35vmin] text-[10px] md:text-[1vmin] font-bold uppercase tracking-[0.14em] text-cyan-200">
+                  Editable
+                </span>
+              </div>
 
+              {/* Scrollable Game Settings content area */}
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-3 md:gap-[1.6vmin] py-2 md:py-[1.2vmin] pr-1">
                 {/* Setting: MAX players (2 to 6). A ceiling, not a headcount —
                     the game starts with however many have joined (2+), up to this. */}
                 <div className="flex flex-col gap-1.5 md:gap-[0.8vmin]">
@@ -5765,7 +5766,7 @@ export default function GameBoard() {
               </div>
 
               {/* Start Game Button */}
-              <div className="mt-3 md:mt-[1.4vmin] border-t border-cyan-500/25 pt-2 md:pt-[1.1vmin]">
+              <div className="shrink-0 mt-auto border-t border-cyan-500/25 pt-2 md:pt-[1.1vmin] pr-12 md:pr-0">
                 <button
                   onClick={handleStartGame}
                   className="flex w-full items-center justify-center gap-2 md:gap-[0.8vmin] min-h-[48px] rounded-xl md:rounded-[0.8vmin] border border-cyan-300/60 bg-gradient-to-r from-cyan-600 to-teal-600 py-3 md:py-[1.25vmin] text-xs sm:text-sm md:text-[1.35vmin] font-black uppercase tracking-[0.14em] text-white shadow-[0_0_2vmin_rgba(34,211,238,0.55)] transition-all hover:brightness-110 hover:shadow-[0_0_2.8vmin_rgba(34,211,238,0.85)] active:scale-[0.98] cursor-pointer"
