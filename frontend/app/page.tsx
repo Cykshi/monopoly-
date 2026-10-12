@@ -3509,7 +3509,7 @@ export default function GameBoard() {
               : "border-white/10 bg-white/5 text-gray-300"
             }`}
         >
-          👥 Players & Code
+          ⚙️ Settings
         </button>
       </div>
 
@@ -3991,14 +3991,14 @@ export default function GameBoard() {
             style={{ gridRow: "2 / 11", gridColumn: "2 / 11", margin: "1.3vmin" }}
           >
             {/* Top Bar: Fullscreen (left), Independent Centered Timer (exact console center), Connection (right) */}
-            <div className="relative flex w-full items-center justify-between px-1 sm:px-[0.4vmin]">
+            <div className="relative flex w-full items-center justify-between px-0.5 sm:px-[0.4vmin]">
               {/* Leftmost: Fullscreen button */}
               <button
                 onClick={toggleFullscreen}
-                className="no-touch-target z-10 flex shrink-0 items-center justify-center gap-0.5 sm:gap-1 md:gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-0.5 sm:px-2.5 sm:py-1.5 md:px-[1.6vmin] md:py-[0.7vmin] text-[9px] sm:text-xs md:text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer min-h-0"
+                className="no-touch-target z-10 flex shrink-0 items-center justify-center gap-0.5 sm:gap-1 md:gap-[0.5vmin] rounded-full border border-white/20 bg-white/[0.08] h-5 w-5 sm:h-auto sm:w-auto p-0 sm:px-2 sm:py-1 md:px-[1.6vmin] md:py-[0.7vmin] text-[8px] sm:text-xs md:text-[1.35vmin] font-black text-white shadow-md transition-all hover:scale-[1.03] hover:border-white/40 hover:bg-white/[0.15] active:scale-95 cursor-pointer min-h-0"
                 title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
               >
-                <span className="text-[10px] sm:text-sm md:text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
+                <span className="text-[8px] sm:text-xs md:text-[1.4vmin]">{isFullscreen ? "⤢" : "⛶"}</span>
                 <span className="whitespace-nowrap tracking-wide hidden xs:inline">{isFullscreen ? "Exit" : "Fullscreen"}</span>
               </button>
 
@@ -4012,7 +4012,7 @@ export default function GameBoard() {
                 }
               >
                 <span
-                  className={`pointer-events-auto font-mono text-[9.5px] sm:text-xs md:text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
+                  className={`pointer-events-auto font-mono text-[9px] sm:text-xs md:text-[2.7vmin] font-black tracking-wider tabular-nums transition-all ${isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 10
                       ? "text-red-400 drop-shadow-[0_0_1.8vmin_rgba(239,68,68,0.85)] animate-pulse scale-105"
                       : isGameStarted && turnTimeLeft !== null && turnTimeLeft <= 30
                         ? "text-amber-400 drop-shadow-[0_0_1.5vmin_rgba(251,191,36,0.7)]"
@@ -4028,15 +4028,16 @@ export default function GameBoard() {
               </div>
 
               {/* Rightmost: LIVE connection indicator */}
-              <div className="z-10 flex shrink-0 items-center gap-0.5 sm:gap-1 md:gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-1.5 py-0.5 sm:px-2 md:px-[1.6vmin] md:py-[0.7vmin] shadow-md max-w-[28%] min-[380px]:max-w-[34%] sm:max-w-none">
+              <div className="z-10 flex shrink-0 items-center gap-0.5 sm:gap-1 md:gap-[0.7vmin] rounded-full border border-white/20 bg-white/[0.08] px-1 py-0.5 sm:px-1.5 md:px-[1.6vmin] md:py-[0.7vmin] shadow-md max-w-[28%] sm:max-w-none">
                 <div
-                  className={`h-1.5 w-1.5 sm:h-2 sm:w-2 md:h-[1vmin] md:w-[1vmin] shrink-0 rounded-full ${isConnected
-                      ? "animate-pulse bg-emerald-400 shadow-[0_0_1vmin_rgba(52,211,153,0.9)]"
-                      : "bg-red-500 shadow-[0_0_1vmin_rgba(239,68,68,0.9)]"
+                  className={`h-1 w-1 sm:h-1.5 sm:w-1.5 md:h-[1vmin] md:w-[1vmin] shrink-0 rounded-full ${isConnected
+                      ? "animate-pulse bg-emerald-400 shadow-[0_0_0.8vmin_rgba(52,211,153,0.9)]"
+                      : "bg-red-500 shadow-[0_0_0.8vmin_rgba(239,68,68,0.9)]"
                     }`}
                 />
-                <span className="truncate text-[8px] sm:text-xs md:text-[1.35vmin] font-extrabold tracking-wide text-white">
-                  {connectionLabel}
+                <span className="truncate text-[7px] min-[380px]:text-[7.5px] sm:text-xs md:text-[1.35vmin] font-extrabold tracking-wide text-white">
+                  <span className="sm:hidden">{isConnected ? "Live" : "Offline"}</span>
+                  <span className="hidden sm:inline">{connectionLabel}</span>
                 </span>
               </div>
             </div>
@@ -4044,7 +4045,7 @@ export default function GameBoard() {
             {/* Turn Phase Indicator - smaller and compact on mobile (320-414px) */}
             <div className="mt-0.5 mb-0.5 md:my-[0.3vmin]">
               <div
-                className={`mx-auto w-fit rounded-full border px-1.5 py-0.5 sm:px-2 sm:py-0.5 md:px-[1.8vmin] md:py-[0.4vmin] text-[7.5px] sm:text-[9px] md:text-[1.1vmin] font-black uppercase tracking-wider md:tracking-widest ${gamePhase === "YOUR TURN"
+                className={`mx-auto w-fit rounded-full border px-1.5 py-0.5 sm:px-2 sm:py-0.5 md:px-[1.8vmin] md:py-[0.4vmin] text-[6.5px] min-[380px]:text-[7.5px] sm:text-[9px] md:text-[1.1vmin] font-black uppercase tracking-wider md:tracking-widest ${gamePhase === "YOUR TURN"
                     ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
                     : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
                       ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
