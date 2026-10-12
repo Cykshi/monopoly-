@@ -1442,26 +1442,7 @@ export default function GameBoard() {
       // this, someone who joins after the host picked a colour would be shown a
       // fully-available palette until the next room:players broadcast.
       if (Array.isArray(data.state?.players)) {
-        const incoming = new Map(data.state!.players!.map((p) => [p.id, p]));
-        setPlayers((prev) =>
-          prev.map((p) => {
-            const next = incoming.get(p.id);
-            if (!next) return p;
-            return {
-              ...p,
-              name: next.name ?? p.name,
-              // Color is SERVER-owned: take its value verbatim, including null.
-              // Using `?? p.color` here would treat the server's "no colour yet"
-              // as "keep whatever we had", which can leave a player looking like
-              // they own a colour they don't — and stall the picker.
-              color: next.color,
-              hasSeat: next.hasSeat ?? p.hasSeat,
-              hasEntered: next.hasEntered ?? p.hasEntered,
-              inJail: typeof next.inJail === "boolean" ? next.inJail : p.inJail,
-              jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : p.jailTurns,
-            };
-          })
-        );
+        setPlayers((prev) => mergeServerRoster(data.state!.players!, prev));
       }
       if (typeof data.state?.isGameStarted === "boolean") setServerGameStarted(data.state.isGameStarted);
       if (typeof data.state?.maxPlayers === "number") setMaxPlayers(data.state.maxPlayers);
@@ -1511,26 +1492,7 @@ export default function GameBoard() {
       if (typeof data?.maxPlayers === "number") setMaxPlayers(data.maxPlayers);
       if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
       if (Array.isArray(data?.players)) {
-        setPlayers((prev) => {
-          // Keep our own money/position/etc. and only adopt identity fields, so a
-          // lobby broadcast can never clobber live game state mid-match.
-          const incoming = new Map(data.players!.map((p) => [p.id, p]));
-          return prev.map((p) => {
-            const next = incoming.get(p.id);
-            if (!next) return p;
-            return {
-              ...p,
-              name: next.name ?? p.name,
-              // Server-owned: take verbatim (including null) so a colour the
-              // server has cleared can't linger locally. See note above.
-              color: next.color,
-              hasSeat: next.hasSeat ?? p.hasSeat,
-              hasEntered: next.hasEntered ?? p.hasEntered,
-              inJail: typeof next.inJail === "boolean" ? next.inJail : p.inJail,
-              jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : p.jailTurns,
-            };
-          });
-        });
+        setPlayers((prev) => mergeServerRoster(data.players!, prev));
       }
       if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
 
