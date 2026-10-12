@@ -676,6 +676,10 @@ export default function GameBoard() {
 
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const alivePlayers = useMemo(() => players.filter((p) => !p.isBankrupt), [players]);
+  const myPlayer = useMemo(
+    () => (myPlayerId !== null ? players.find((p) => p.id === myPlayerId) : null) ?? currentPlayer,
+    [players, myPlayerId, currentPlayer]
+  );
 
   const normalizePlayerNames = (list: Player[]) =>
     list.map((p) => ({
@@ -2952,14 +2956,15 @@ export default function GameBoard() {
   // closes over.
   //
   // Dependencies are the individual VALUES the body reads, not the `activeAuction`
-  // / `currentPlayer` objects: those are rebuilt by useMemo on every roster or
+  // / `myPlayer` objects: those are rebuilt by useMemo on every roster or
   // auction update, so depending on the objects would rebuild this callback
   // constantly.
   const handlePlaceBid = useCallback(
     (increment: number): AuctionState | null => {
-      if (!activeAuction || !currentPlayer) return null;
+      const bidder = myPlayer;
+      if (!activeAuction || !bidder) return null;
       const { currentBid, highestBidderId, tileId } = activeAuction;
-      const { id: bidderId, name: bidderName, money } = currentPlayer;
+      const { id: bidderId, name: bidderName, money } = bidder;
 
       const newBidAmount = currentBid + increment;
 
@@ -2986,14 +2991,15 @@ export default function GameBoard() {
       // out of this function is what keeps it safe to reference from render.
       return updatedAuction;
     },
-    [activeAuction, currentPlayer, addLog]
+    [activeAuction, myPlayer, addLog]
   );
 
   const handlePassAuction = () => {
-    if (!activeAuction || !currentPlayer) return;
-    if (activeAuction.passedPlayerIds.includes(currentPlayer.id)) return;
+    const passer = myPlayer;
+    if (!activeAuction || !passer) return;
+    if (activeAuction.passedPlayerIds.includes(passer.id)) return;
 
-    const updatedPassed = [...activeAuction.passedPlayerIds, currentPlayer.id];
+    const updatedPassed = [...activeAuction.passedPlayerIds, passer.id];
     const updatedAuction: AuctionState = {
       ...activeAuction,
       passedPlayerIds: updatedPassed,
@@ -3001,7 +3007,7 @@ export default function GameBoard() {
 
     setActiveAuction(updatedAuction);
     socketRef.current?.emit("auction:pass", { auction: updatedAuction });
-    addLog(`❌ ${currentPlayer.name} passed on the auction.`);
+    addLog(`❌ ${passer.name} passed on the auction.`);
 
     const remainingActive = alivePlayers.filter((p) => !updatedPassed.includes(p.id));
     if (
@@ -6067,8 +6073,8 @@ export default function GameBoard() {
                 const tile = BOARD_TILES.find((t) => t.id === activeAuction.tileId);
                 if (!tile) return null;
                 const highestBidder = players.find((p) => p.id === activeAuction.highestBidderId);
-                const hasCurrentPassed = currentPlayer && activeAuction.passedPlayerIds.includes(currentPlayer.id);
-                const isCurrentHighest = currentPlayer && activeAuction.highestBidderId === currentPlayer.id;
+                const hasMyPassed = myPlayer && activeAuction.passedPlayerIds.includes(myPlayer.id);
+                const isMyHighest = myPlayer && activeAuction.highestBidderId === myPlayer.id;
 
                 return (
                   <div className="flex flex-col md:flex-row flex-1 overflow-y-auto p-3 sm:p-4 md:p-[2.4vmin] gap-3 md:gap-[2vmin]">
@@ -6110,9 +6116,9 @@ export default function GameBoard() {
                               key={inc}
                               increment={inc}
                               currentBid={activeAuction.currentBid}
-                              money={currentPlayer?.money ?? 0}
-                              hasCurrentPassed={Boolean(hasCurrentPassed)}
-                              isCurrentHighest={Boolean(isCurrentHighest)}
+                              money={myPlayer?.money ?? 0}
+                              hasCurrentPassed={Boolean(hasMyPassed)}
+                              isCurrentHighest={Boolean(isMyHighest)}
                               onBid={handleBidClick}
                             />
                           ))}
@@ -6121,14 +6127,15 @@ export default function GameBoard() {
 
                       {/* Status Note & Pass Button */}
                       <div className="flex flex-col gap-1 md:gap-[1vmin]">
-                        {isCurrentHighest ? (
+                        {isMyHighest ? (
                           <div className="flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-emerald-500/40 bg-emerald-950/30 py-2.5 px-3 md:py-[1vmin] text-center text-xs sm:text-sm md:text-[1.25vmin] font-bold text-emerald-300">
                             👑 You are currently the highest bidder!
                           </div>
                         ) : (
                           <button
                             onClick={handlePassAuction}
-                            className="w-full flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-red-500/40 bg-red-950/40 py-2.5 px-3 md:py-[1.2vmin] text-xs sm:text-sm md:text-[1.3vmin] font-black uppercase text-red-200 transition hover:bg-red-900/60 hover:text-white cursor-pointer active:scale-95"
+                            disabled={Boolean(hasMyPassed)}
+                            className="w-full flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-red-500/40 bg-red-950/40 py-2.5 px-3 md:py-[1.2vmin] text-xs sm:text-sm md:text-[1.3vmin] font-black uppercase text-red-200 transition hover:bg-red-900/60 hover:text-white cursor-pointer active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             Pass / Withdraw from Auction
                           </button>

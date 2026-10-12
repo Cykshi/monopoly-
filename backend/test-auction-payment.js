@@ -337,6 +337,92 @@ const cleanup = async (roomId) => {
     !!(unidentEnd && unidentEnd.ok === false && unidentEnd.code === 'NOT_IDENTIFIED'),
     JSON.stringify(unidentEnd));
 
+  // ================= 8. MULTI-PLAYER BIDDING, PASSING, INSUFFICIENT FUNDS & IDENTITY SPOOFING =================
+  console.log(`\n=== 8. AUCTION IDENTITY REGRESSION: 2 PLAYERS BIDDING, PASSING, INSUFFICIENT FUNDS & SPOOFING ===`);
+  state = await syncState(A);
+  const curTurn = state?.currentTurnPlayerId || 1;
+  const turnClient = curTurn === 1 ? A : B;
+  const nonTurnClient = curTurn === 1 ? B : A;
+  const nonTurnId = curTurn === 1 ? 2 : 1;
+  const turnId = curTurn === 1 ? 1 : 2;
+
+  // Start an auction on tile 15 (AIRPORT 2, ownable, unowned) by whoever currently has turn
+  const openAuc8 = await emitAck(turnClient, 'auction:start', {
+    playerId: turnId,
+    auction: { id: 'auc-reg-8', tileId: 15, currentBid: 0, highestBidderId: null, passedPlayerIds: [] },
+  });
+  check('regression: auction 8 started on tile 15', !!(openAuc8 && openAuc8.ok), JSON.stringify(openAuc8));
+
+  // Non-turn player places a legal opening bid of $50
+  const bidNonTurn8 = await emitAck(nonTurnClient, 'auction:bid', {
+    auction: { id: 'auc-reg-8', tileId: 15, currentBid: 50 },
+  });
+  check(`regression: Player ${nonTurnId} (non-turn player) successfully places bid of $50`,
+    !!(bidNonTurn8 && bidNonTurn8.ok && bidNonTurn8.bidderId === nonTurnId));
+
+  // Turn player tries to submit a bid spoofing non-turn player in data or auction
+  const spoofBidTurn = await emitAck(turnClient, 'auction:bid', {
+    playerId: nonTurnId,
+    auction: { id: 'auc-reg-8', tileId: 15, currentBid: 60, highestBidderId: nonTurnId },
+  });
+  check(`regression: Player ${turnId} cannot submit bid as Player ${nonTurnId}`,
+    (spoofBidTurn && spoofBidTurn.ok === false) ||
+    (spoofBidTurn && spoofBidTurn.ok && spoofBidTurn.bidderId === turnId),
+    `ack=${JSON.stringify(spoofBidTurn)}`);
+
+  // Turn player places a legal counter-bid of $70
+  const bidTurn8 = await emitAck(turnClient, 'auction:bid', {
+    auction: { id: 'auc-reg-8', tileId: 15, currentBid: 70 },
+  });
+  check(`regression: Player ${turnId} places legal counter-bid of $70`,
+    !!(bidTurn8 && bidTurn8.ok && bidTurn8.bidderId === turnId));
+
+  // Non-turn player attempts bid with insufficient funds ($999999) before passing
+  const brokeBid = await emitAck(nonTurnClient, 'auction:bid', {
+    auction: { id: 'auc-reg-8', tileId: 15, currentBid: 999999 },
+  });
+  check('regression: bid exceeding player funds is refused with INSUFFICIENT_FUNDS',
+    !!(brokeBid && brokeBid.ok === false && brokeBid.code === 'INSUFFICIENT_FUNDS'),
+    JSON.stringify(brokeBid));
+
+  // Non-turn player tries to submit pass spoofing turn player (ends up passing for nonTurn player)
+  const spoofPassNonTurn = await emitAck(nonTurnClient, 'auction:pass', {
+    playerId: turnId,
+    auction: { id: 'auc-reg-8', passedPlayerIds: [turnId] },
+  });
+  check(`regression: Player ${nonTurnId} cannot submit pass spoofing Player ${turnId}`,
+    (spoofPassNonTurn && spoofPassNonTurn.ok === false) ||
+    (spoofPassNonTurn && spoofPassNonTurn.ok && spoofPassNonTurn.passedPlayerIds && !spoofPassNonTurn.passedPlayerIds.includes(turnId)),
+    `ack=${JSON.stringify(spoofPassNonTurn)}`);
+
+  // Non-turn player pass recorded for non-turn player
+  check(`regression: Player ${nonTurnId} pass was recorded for self`,
+    !!(spoofPassNonTurn && spoofPassNonTurn.ok && spoofPassNonTurn.passedPlayerIds?.includes(nonTurnId)));
+
+  // Non-turn player cannot bid after passing
+  const postPassBid = await emitAck(nonTurnClient, 'auction:bid', {
+    auction: { id: 'auc-reg-8', tileId: 15, currentBid: 80 },
+  });
+  check(`regression: Player ${nonTurnId} cannot bid after passing (ALREADY_PASSED)`,
+    !!(postPassBid && postPassBid.ok === false && postPassBid.code === 'ALREADY_PASSED'),
+    JSON.stringify(postPassBid));
+
+  // Turn player ends the auction: Turn player wins tile 15 for $70
+  const turnMoneyBefore = playerIn(await syncState(A), turnId).money;
+  const endAuc8 = await emitAck(turnClient, 'auction:end', {
+    auction: { id: 'auc-reg-8' },
+    actionId: newActionId(),
+  });
+  check(`regression: auction ends with Player ${turnId} winning tile 15`,
+    !!(endAuc8 && endAuc8.ok && endAuc8.winnerId === turnId && endAuc8.currentBid === 70));
+
+  state = await syncState(A);
+  check(`regression: Player ${turnId} balance deducted by $70`,
+    playerIn(state, turnId).money === turnMoneyBefore - 70,
+    `before=${turnMoneyBefore} after=${playerIn(state, turnId).money}`);
+  check(`regression: Tile 15 assigned to Player ${turnId} in server state`,
+    state.propertyOwnership[15] === turnId, `owner=${state.propertyOwnership[15]}`);
+
   console.log(`\n${results.length - failed}/${results.length} checks passed`);
   await cleanup(roomId);
   process.exit(failed === 0 ? 0 : 1);
