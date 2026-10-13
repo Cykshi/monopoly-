@@ -70,6 +70,9 @@ function isActiveTurnPlayer(room, socket) {
 // never comes from a client-supplied balance. Returns a small description the
 // caller can broadcast (landed index, whether GO was passed).
 //
+// Jailed players cannot move. A caller must ensure a jailed player does not move
+// unless they have escaped (via doubles or paying bail).
+//
 // Deliberately does NOT handle the landing consequences (rent, card, tax):
 // those depend on the board module and stay in the transaction layer. Keeping
 // "move" and "what the square does" separate is what lets the tests drive a
@@ -200,7 +203,10 @@ function isTurnExpired(room, now = Date.now()) {
 //   * The client's idea of its position is never read. Only `steps` comes in;
 //     the new position is derived from the SERVER's `player.position`.
 //   * Landing consequences (rent, tax, cards) are NOT applied.
-function applyMovement(room, player, steps, boardSize) {
+function applyMovement(room, player, steps, boardSize, options = {}) {
+  if (player && player.inJail && !options.escaped) {
+    return { ok: false, code: 'IN_JAIL', error: 'Player is in jail and cannot move.' };
+  }
   if (!Number.isInteger(steps)) {
     return { ok: false, code: 'INVALID_STEPS', error: 'Movement must be a whole number.' };
   }

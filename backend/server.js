@@ -367,10 +367,12 @@ class GameRoom {
   // The previous roll is REPLACED, which is what makes a roll single-use: once a
   // new roll exists, the old one can no longer be spent (its `seq` is stale and
   // the new record is not yet consumed).
-  rollDiceFor(playerId, kind = 'dice', total = null) {
+  rollDiceFor(playerId, kind = 'dice', total = null, forcedDice = null) {
     const dice = kind === 'card'
       ? [total, 0]
-      : [rollD6(), rollD6()];
+      : (Array.isArray(forcedDice) && forcedDice.length === 2 && Number.isInteger(forcedDice[0]) && Number.isInteger(forcedDice[1])
+          ? [forcedDice[0], forcedDice[1]]
+          : [rollD6(), rollD6()]);
     const resolvedTotal = kind === 'card' ? total : dice[0] + dice[1];
     this.rollSeq += 1;
     this.lastRoll = {
@@ -1947,6 +1949,11 @@ io.on('connection', (socket) => {
       return reject(ack, 'PLAYER_OUT', 'You are out of the game.');
     }
 
+    // A jailed player cannot move unless released (paid bail or authorized escape).
+    if (player.inJail) {
+      return reject(ack, 'IN_JAIL', `Player ${player.id} is in jail and cannot move.`);
+    }
+
     // Replay gate: a movement may be retried by the client, but it must only
     // ever be applied once. Claimed before the position is written.
     const replayError = actionGate(room, ack, data.actionId);
@@ -1962,6 +1969,9 @@ io.on('connection', (socket) => {
     }
     if (roll.consumed === true) {
       return reject(ack, 'ROLL_ALREADY_USED', 'That roll has already been used to move.');
+    }
+    if (roll.authorizedMove === false) {
+      return reject(ack, 'IN_JAIL', 'Movement is not authorized on a failed jail roll.');
     }
     if (!Number.isInteger(roll.total) || roll.total <= 0) {
       return reject(ack, 'BAD_ROLL', 'The pending roll has no usable distance.');
@@ -2255,6 +2265,12 @@ io.on('connection', (socket) => {
     if (gateError) return gateError;
 
     const rollerId = actingPlayerId();
+    const actor = findPlayer(room, rollerId);
+    if (!actor) return reject(ack, 'UNKNOWN_PLAYER', `No player ${rollerId} in this room.`);
+
+    if (isOutOfGame(actor)) {
+      return reject(ack, 'PLAYER_OUT', 'You are out of the game.');
+    }
 
     // ===== ONE ROLL PER TURN =====
     // An unspent roll already belonging to this player means they are asking to
@@ -2266,8 +2282,11 @@ io.on('connection', (socket) => {
       return reject(ack, 'ROLL_ALREADY_PENDING', 'You have already rolled — move before rolling again.');
     }
 
+    const allowTestForced = process.env.ALLOW_TEST_FORCED_CARD === 'true' || process.env.NODE_ENV === 'test';
+    const forcedDice = (allowTestForced && Array.isArray(data && data._testForcedDice) && data._testForcedDice.length === 2 && Number.isInteger(data._testForcedDice[0]) && Number.isInteger(data._testForcedDice[1])) ? data._testForcedDice : null;
+
     // The server decides the dice. Nothing from `data` is read.
-    const roll = room.rollDiceFor(rollerId, 'dice');
+    const roll = room.rollDiceFor(rollerId, 'dice', null, forcedDice);
 
     // The first roll is the moment the game actually begins (the client flips
     // its own isGameStarted on the same press). Stamping it server-side is what
@@ -2308,19 +2327,123 @@ io.on('connection', (socket) => {
 
     console.log(`🎲 Room ${roomId}: Player ${rollerId} rolled ${roll.dice[0]} + ${roll.dice[1]} = ${roll.total} (seq ${roll.seq})`);
 
+    let jailOutcome = null;
+
+    if (actor.inJail) {
+      const isDoubles = roll.dice[0] === roll.dice[1];
+      if (isDoubles) {
+        // Roll doubles while jailed: release player, reset jailTurns, authorize movement by dice total.
+        actor.inJail = false;
+        actor.jailTurns = 0;
+        roll.authorizedMove = true;
+        roll.consumed = false;
+        persistRoom(room);
+        console.log(`🔓 Room ${roomId}: Player ${actor.id} rolled doubles (${roll.dice[0]} + ${roll.dice[1]}) and escaped JAIL!`);
+        jailOutcome = {
+          escaped: true,
+          inJail: false,
+          jailTurns: 0,
+        };
+      } else {
+        // Roll non-doubles: keep player in jail, increment jailTurns exactly once, do not authorize movement.
+        const nextJailTurns = (Number.isInteger(actor.jailTurns) ? actor.jailTurns : 0) + 1;
+        actor.jailTurns = nextJailTurns;
+        roll.authorizedMove = false;
+
+        if (nextJailTurns >= 3) {
+          // Third failed attempt: apply existing $100 forced-bail rule
+          const bailCost = board.JAIL_BAIL_COST || 100;
+          const currentMoney = Number.isFinite(actor.money) ? actor.money : 0;
+          if (currentMoney >= bailCost) {
+            actor.money = currentMoney - bailCost;
+            actor.inJail = false;
+            actor.jailTurns = 0;
+            roll.authorizedMove = false;
+            persistRoom(room);
+            console.log(`🔓 Room ${roomId}: Player ${actor.id} failed 3rd jail roll, paid forced bail $${bailCost} and was released (new balance $${actor.money})`);
+
+            const bailPayload = {
+              playerId: actor.id,
+              bail: bailCost,
+              money: actor.money,
+              inJail: false,
+              jailTurns: 0,
+              forced: true,
+            };
+            io.to(roomId).emit('jail:bail-paid', bailPayload);
+
+            jailOutcome = {
+              escaped: false,
+              forcedBail: true,
+              inJail: false,
+              jailTurns: 0,
+              bailPaid: bailCost,
+              money: actor.money,
+            };
+          } else {
+            // Player cannot pay forced bail: integrate existing bankruptcy rules safely
+            console.log(`💀 Room ${roomId}: Player ${actor.id} failed 3rd jail roll and cannot afford $${bailCost} bail (has $${currentMoney}) — bankrupt!`);
+            actor.isBankrupt = true;
+            actor.money = 0;
+            actor.inJail = false;
+            actor.jailTurns = 0;
+            roll.authorizedMove = false;
+
+            for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
+              if (ownerId === actor.id) {
+                delete room.propertyOwnership[tileId];
+                delete room.propertyHouses[tileId];
+              }
+            }
+
+            persistRoom(room);
+            io.to(roomId).emit('player:bankrupt', { playerId: actor.id, reason: 'forced-bail' });
+
+            const survivor = findSoleSurvivor(room);
+            if (survivor) {
+              declareWinner(room, io, survivor, 'last-player-standing');
+            } else {
+              room.beginTurn(io);
+            }
+
+            jailOutcome = {
+              escaped: false,
+              forcedBail: true,
+              isBankrupt: true,
+              inJail: false,
+              jailTurns: 0,
+              money: 0,
+            };
+          }
+        } else {
+          persistRoom(room);
+          console.log(`🔒 Room ${roomId}: Player ${actor.id} rolled non-doubles (${roll.dice[0]} + ${roll.dice[1]}), stays in JAIL (${actor.jailTurns}/3)`);
+          jailOutcome = {
+            escaped: false,
+            inJail: true,
+            jailTurns: actor.jailTurns,
+          };
+        }
+      }
+    }
+
     // ===== EVERYONE IS TOLD THE AUTHORITATIVE RESULT =====
     // Sent with io.to() (not socket.to()) so the ROLLER receives it too. That
     // matters now: the roller no longer generates its own dice locally, so this
     // broadcast is the only place it learns what it rolled. Clients are expected
     // to ignore the echo of their OWN roll for animation purposes (they already
     // animated it optimistically) but to adopt `dice`/`total` as truth.
-    io.to(roomId).emit('player:rolled', {
+    const rolledPayload = {
       playerId: rollerId,
       dice: roll.dice,
       total: roll.total,
       seq: roll.seq,
-    });
-    if (typeof ack === 'function') ack({ ok: true, dice: roll.dice, total: roll.total, seq: roll.seq });
+      inJail: actor.inJail ?? false,
+      jailTurns: actor.jailTurns ?? 0,
+      ...(jailOutcome || {}),
+    };
+    io.to(roomId).emit('player:rolled', rolledPayload);
+    if (typeof ack === 'function') ack({ ok: true, ...rolledPayload });
   }));
 
   // Skill card (Movement Card) usage. The card belongs to a PLAYER, so the user
@@ -2349,6 +2472,11 @@ io.on('connection', (socket) => {
     // other board-changing action.
     const gateError = turnGate(room, ack, data && data.playerId);
     if (gateError) return gateError;
+
+    // Movement cards cannot be played while in jail.
+    if (actor.inJail) {
+      return reject(ack, 'IN_JAIL', `Player ${actor.id} is in jail and cannot use movement cards.`);
+    }
 
     const movement = data && data.movement;
     // Bounded to a real card value: a whole number of tiles on a six-sided
@@ -2692,6 +2820,10 @@ io.on('connection', (socket) => {
     actor.money = currentMoney - bailCost;
     actor.inJail = false;
     actor.jailTurns = 0;
+
+    // Clear any unspent roll so the freed player is not blocked by ROLL_ALREADY_PENDING
+    // from a failed jail roll when they take their next turn/action.
+    room.clearRoll();
 
     persistRoom(room);
 

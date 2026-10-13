@@ -325,6 +325,34 @@ const cleanup = async () => {
     aliceSpoofBail && aliceSpoofBail.ok === false && aliceSpoofBail.code === 'NOT_YOUR_PLAYER',
     JSON.stringify(aliceSpoofBail));
 
+  // ============================================================================
+  // PART 4: JAIL BYPASS PREVENTION (MOVEMENT & SKILL-CARD BLOCKED WHILE JAILED)
+  // ============================================================================
+  console.log('\n=== 4. JAIL BYPASS PREVENTION ===');
+
+  // Alice is on turn and currently in jail.
+  // 4.1 Skill card attempt while in jail must be rejected with IN_JAIL
+  const aliceSkillCardInJail = await emitAck(A, 'player:skill-card', { movement: 3, playerId: 1 });
+  check('Alice using movement card while jailed is rejected (IN_JAIL)',
+    aliceSkillCardInJail && aliceSkillCardInJail.ok === false && aliceSkillCardInJail.code === 'IN_JAIL',
+    JSON.stringify(aliceSkillCardInJail));
+
+  // 4.2 Roll non-doubles dice while in jail, then attempt player:moved.
+  // Player is jailed, so player:moved must be rejected with IN_JAIL.
+  const aliceRollInJail = await emitAck(A, 'player:rolled', { playerId: 1, _testForcedDice: [1, 2] });
+  check('Alice roll in jail accepted on server', !!(aliceRollInJail && aliceRollInJail.ok), JSON.stringify(aliceRollInJail));
+
+  const aliceMoveWhileJailed = await emitAck(A, 'player:moved', { playerId: 1, actionId: newActionId() });
+  check('Alice player:moved while in jail is rejected (IN_JAIL)',
+    aliceMoveWhileJailed && aliceMoveWhileJailed.ok === false && aliceMoveWhileJailed.code === 'IN_JAIL',
+    JSON.stringify(aliceMoveWhileJailed));
+
+  // Verify Alice did NOT move on server
+  state = await syncState(A);
+  const aliceStillTile10 = playerIn(state, 1);
+  check('Alice position remains tile 10', aliceStillTile10 && aliceStillTile10.position === 10);
+  check('Alice remains inJail=true', aliceStillTile10 && aliceStillTile10.inJail === true);
+
   // ---- 3.4 Alice pays bail successfully ----
   console.log('\n--- 3.4 Alice Successful Bail Payment ---');
   state = await syncState(A);
@@ -368,6 +396,416 @@ const cleanup = async () => {
   check('Alice paying bail again is rejected (NOT_IN_JAIL)',
     secondBailAck && secondBailAck.ok === false && secondBailAck.code === 'NOT_IN_JAIL',
     JSON.stringify(secondBailAck));
+
+  // ---- 3.7 Valid Movement after Bail ----
+  console.log('\n--- 3.7 Valid Movement after Bail ---');
+  // Now that Alice has paid bail and is released (inJail=false), movement is authorized
+  const aliceMoveAfterBail = await emitAck(A, 'player:skill-card', { movement: 2, playerId: 1 });
+  check('Alice using movement card after bail succeeds', !!(aliceMoveAfterBail && aliceMoveAfterBail.ok), JSON.stringify(aliceMoveAfterBail));
+
+  const aliceMoveAck = await emitAck(A, 'player:moved', { playerId: 1, actionId: newActionId() });
+  check('Alice moves normally after bail', !!(aliceMoveAck && aliceMoveAck.ok && aliceMoveAck.position === 12), JSON.stringify(aliceMoveAck));
+
+  state = await syncState(A);
+  const aliceFree = playerIn(state, 1);
+  check('Alice authoritative position updated after bail movement', aliceFree && aliceFree.position === 12);
+  check('Alice authoritative inJail is false', aliceFree && aliceFree.inJail === false);
+
+  // ============================================================================
+  // HELPER FOR NEW ROOM CREATION & JAIL PLACEMENT
+  // ============================================================================
+  const setupFreshRoom = async (p1Name = 'Alice', p2Name = 'Bob') => {
+    const s1 = track(await connect());
+    const c1 = await emitAck(s1, 'room:create', { name: p1Name });
+    const roomId = c1.roomId;
+    const token1 = c1.token;
+
+    const s2 = track(await connect());
+    const c2 = await emitAck(s2, 'room:join', { roomId, name: p2Name });
+    const token2 = c2.token;
+
+    await emitAck(s1, 'player:identify', { roomId, token: token1, playerId: 1, name: p1Name });
+    await emitAck(s2, 'player:identify', { roomId, token: token2, playerId: 2, name: p2Name });
+
+    // Opening roll to start game
+    await emitAck(s1, 'player:rolled', { playerId: 1 });
+    await emitAck(s1, 'player:moved', { playerId: 1, actionId: newActionId() });
+
+    return { s1, s2, roomId, token1, token2 };
+  };
+
+  const walkAndJailPlayer = async (s1, s2, playerId = 1) => {
+    let s = await syncState(s1);
+    let pos = playerIn(s, playerId).position;
+    let dist = (14 - pos + 40) % 40;
+    while (dist > 0) {
+      const step = Math.min(dist, 6);
+      await emitAck(s1, 'player:skill-card', { movement: step, playerId });
+      await emitAck(s1, 'player:moved', { playerId, actionId: newActionId() });
+      dist -= step;
+      if (dist > 0) {
+        await emitAck(s1, 'turn:ended', { playerId });
+        await emitAck(s2, 'turn:ended', { playerId: 3 - playerId });
+      }
+    }
+    const drawRes = await emitAck(s1, 'card:draw', { playerId, actionId: newActionId(), _testForcedRoll: 1 });
+    return drawRes;
+  };
+
+  // ============================================================================
+  // PART 5: ROLL DOUBLES WHILE JAILED (ESCAPE & AUTHORIZED MOVEMENT)
+  // ============================================================================
+  console.log('\n=== 5. ROLL DOUBLES WHILE JAILED (ESCAPE & AUTHORIZED MOVEMENT) ===');
+  {
+    const { s1, s2, roomId } = await setupFreshRoom('AliceDoubles', 'BobDoubles');
+    const jailRes = await walkAndJailPlayer(s1, s2, 1);
+    check('Alice sent to jail via Go-To-Jail card', jailRes && jailRes.ok && jailRes.position === 10 && jailRes.inJail === true);
+
+    // End Alice's turn, then Bob's turn, so Alice starts fresh turn in jail
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    let s = await syncState(s1);
+    let p1 = playerIn(s, 1);
+    check('Alice is in jail at start of turn (pos 10, inJail=true, jailTurns=0)',
+      p1.position === 10 && p1.inJail === true && p1.jailTurns === 0);
+
+    // Bob listens for player:rolled broadcast
+    const bobRolledPromise = waitFor(s2, 'player:rolled');
+
+    // Alice rolls doubles [4, 4] while jailed
+    const rollAck = await emitAck(s1, 'player:rolled', { playerId: 1, _testForcedDice: [4, 4] });
+    check('doubles roll accepted on server', !!(rollAck && rollAck.ok), JSON.stringify(rollAck));
+    check('doubles roll returns inJail=false', rollAck && rollAck.inJail === false);
+    check('doubles roll returns jailTurns=0', rollAck && rollAck.jailTurns === 0);
+    check('doubles roll returns escaped=true', rollAck && rollAck.escaped === true);
+    check('doubles roll total is sum of dice (8)', rollAck && rollAck.total === 8);
+
+    const bobRolledEvt = await bobRolledPromise;
+    check('Bob received player:rolled broadcast with inJail=false on doubles',
+      bobRolledEvt && bobRolledEvt.inJail === false && bobRolledEvt.escaped === true);
+
+    // Authoritative state confirms Alice is freed
+    s = await syncState(s1);
+    check('server state confirms Alice inJail=false after doubles', playerIn(s, 1).inJail === false);
+    check('server state confirms Alice jailTurns=0 after doubles', playerIn(s, 1).jailTurns === 0);
+
+    // Re-rolling before moving is rejected
+    const rerollAck = await emitAck(s1, 'player:rolled', { playerId: 1 });
+    check('rolling again before moving is rejected (ROLL_ALREADY_PENDING)',
+      rerollAck && rerollAck.ok === false && rerollAck.code === 'ROLL_ALREADY_PENDING',
+      JSON.stringify(rerollAck));
+
+    // Bob listens for player:moved broadcast
+    const bobMovedPromise = waitFor(s2, 'player:moved');
+
+    // Alice moves: 10 + 8 = 18
+    const moveActionId = newActionId();
+    const moveAck = await emitAck(s1, 'player:moved', { playerId: 1, actionId: moveActionId });
+    check('Alice moves by dice total (10 + 8 = 18)', moveAck && moveAck.ok && moveAck.position === 18, JSON.stringify(moveAck));
+    check('Alice move ack confirms inJail=false', moveAck && moveAck.inJail === false);
+
+    const bobMovedEvt = await bobMovedPromise;
+    check('Bob received player:moved broadcast with position 18', bobMovedEvt && bobMovedEvt.position === 18);
+
+    // Replay protection: same actionId rejected
+    const replayAck = await emitAck(s1, 'player:moved', { playerId: 1, actionId: moveActionId });
+    check('replaying same movement actionId is rejected (DUPLICATE_ACTION)',
+      replayAck && replayAck.ok === false && replayAck.code === 'DUPLICATE_ACTION',
+      JSON.stringify(replayAck));
+
+    // Roll single-use: new actionId rejected because roll was already consumed
+    const reUseAck = await emitAck(s1, 'player:moved', { playerId: 1, actionId: newActionId() });
+    check('moving again with same roll is rejected (ROLL_ALREADY_USED)',
+      reUseAck && reUseAck.ok === false && reUseAck.code === 'ROLL_ALREADY_USED',
+      JSON.stringify(reUseAck));
+
+    // Turn flow: Alice ends turn, Bob is on turn
+    const endTurnAck = await emitAck(s1, 'turn:ended', { playerId: 1 });
+    check('Alice ends turn cleanly after doubles escape and move', endTurnAck && endTurnAck.ok && endTurnAck.currentTurnPlayerId === 2);
+  }
+
+  // ============================================================================
+  // PART 6: FIRST AND SECOND FAILED ATTEMPTS (INCREMENT JAIL TURNS, BLOCK MOVEMENT, TURN ADVANCE)
+  // ============================================================================
+  console.log('\n=== 6. FIRST AND SECOND FAILED ATTEMPTS (JAIL TURNS INCREMENT, BLOCK MOVEMENT) ===');
+  {
+    const { s1, s2, roomId } = await setupFreshRoom('AliceTurns', 'BobTurns');
+    await walkAndJailPlayer(s1, s2, 1);
+
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    let s = await syncState(s1);
+    check('Alice starts in jail (pos 10, inJail=true, jailTurns=0)',
+      playerIn(s, 1).position === 10 && playerIn(s, 1).inJail === true && playerIn(s, 1).jailTurns === 0);
+
+    // ----- ATTEMPT 1: Non-doubles [1, 2] -----
+    console.log('\n--- 6.1 Attempt 1: Non-doubles ---');
+    const bobAttempt1Promise = waitFor(s2, 'player:rolled');
+    const roll1 = await emitAck(s1, 'player:rolled', { playerId: 1, _testForcedDice: [1, 2] });
+    check('Attempt 1 roll accepted on server', !!(roll1 && roll1.ok), JSON.stringify(roll1));
+    check('Attempt 1 keeps inJail=true', roll1 && roll1.inJail === true);
+    check('Attempt 1 increments jailTurns to 1', roll1 && roll1.jailTurns === 1);
+    check('Attempt 1 escaped is false', roll1 && roll1.escaped === false);
+
+    const bobAttempt1Evt = await bobAttempt1Promise;
+    check('Bob received Attempt 1 broadcast with inJail=true, jailTurns=1',
+      bobAttempt1Evt && bobAttempt1Evt.inJail === true && bobAttempt1Evt.jailTurns === 1);
+
+    s = await syncState(s1);
+    check('authoritative state confirms jailTurns=1 after Attempt 1', playerIn(s, 1).jailTurns === 1 && playerIn(s, 1).inJail === true);
+
+    // Movement must NOT be authorized on failed roll
+    const move1Attempt = await emitAck(s1, 'player:moved', { playerId: 1, actionId: newActionId() });
+    check('movement rejected on Attempt 1 (IN_JAIL)',
+      move1Attempt && move1Attempt.ok === false && move1Attempt.code === 'IN_JAIL',
+      JSON.stringify(move1Attempt));
+
+    s = await syncState(s1);
+    check('Alice position remains tile 10 after rejected move', playerIn(s, 1).position === 10);
+
+    // Rolling again in same turn rejected
+    const rerollAttempt1 = await emitAck(s1, 'player:rolled', { playerId: 1 });
+    check('reroll in same turn rejected after failed Attempt 1 (ROLL_ALREADY_PENDING)',
+      rerollAttempt1 && rerollAttempt1.ok === false && rerollAttempt1.code === 'ROLL_ALREADY_PENDING');
+
+    // Turn flow: Alice ends turn, Bob takes and ends turn
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    // Verify jailTurns persists into Alice's next turn
+    s = await syncState(s1);
+    check('Alice begins Turn 2 in jail with jailTurns=1 preserved',
+      playerIn(s, 1).inJail === true && playerIn(s, 1).jailTurns === 1);
+
+    // ----- ATTEMPT 2: Non-doubles [2, 3] -----
+    console.log('\n--- 6.2 Attempt 2: Non-doubles ---');
+    const bobAttempt2Promise = waitFor(s2, 'player:rolled');
+    const roll2 = await emitAck(s1, 'player:rolled', { playerId: 1, _testForcedDice: [2, 3] });
+    check('Attempt 2 roll accepted on server', !!(roll2 && roll2.ok), JSON.stringify(roll2));
+    check('Attempt 2 keeps inJail=true', roll2 && roll2.inJail === true);
+    check('Attempt 2 increments jailTurns to 2', roll2 && roll2.jailTurns === 2);
+    check('Attempt 2 escaped is false', roll2 && roll2.escaped === false);
+
+    const bobAttempt2Evt = await bobAttempt2Promise;
+    check('Bob received Attempt 2 broadcast with inJail=true, jailTurns=2',
+      bobAttempt2Evt && bobAttempt2Evt.inJail === true && bobAttempt2Evt.jailTurns === 2);
+
+    s = await syncState(s1);
+    check('authoritative state confirms jailTurns=2 after Attempt 2', playerIn(s, 1).jailTurns === 2 && playerIn(s, 1).inJail === true);
+
+    // Movement must NOT be authorized on failed roll 2
+    const move2Attempt = await emitAck(s1, 'player:moved', { playerId: 1, actionId: newActionId() });
+    check('movement rejected on Attempt 2 (IN_JAIL)',
+      move2Attempt && move2Attempt.ok === false && move2Attempt.code === 'IN_JAIL',
+      JSON.stringify(move2Attempt));
+
+    // Turn flow: Alice ends turn, Bob takes and ends turn
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    s = await syncState(s1);
+    check('Alice begins Turn 3 in jail with jailTurns=2 preserved',
+      playerIn(s, 1).inJail === true && playerIn(s, 1).jailTurns === 2);
+
+    // ----- ATTEMPT 3: Third failed attempt with sufficient funds ($100 forced bail) -----
+    console.log('\n--- 6.3 Attempt 3: Third failed attempt with sufficient funds ---');
+    const moneyBeforeForced = playerIn(s, 1).money;
+    const bobForcedBailPromise = waitFor(s2, 'jail:bail-paid');
+    const bobAttempt3Promise = waitFor(s2, 'player:rolled');
+
+    const roll3 = await emitAck(s1, 'player:rolled', { playerId: 1, _testForcedDice: [3, 4] });
+    check('Attempt 3 roll accepted on server', !!(roll3 && roll3.ok), JSON.stringify(roll3));
+    check('Attempt 3 confirms forcedBail=true', roll3 && roll3.forcedBail === true);
+    check('Attempt 3 confirms inJail=false', roll3 && roll3.inJail === false);
+    check('Attempt 3 confirms jailTurns=0', roll3 && roll3.jailTurns === 0);
+    check('Attempt 3 deducted exactly $100 bail', roll3 && roll3.money === moneyBeforeForced - 100);
+
+    const bobForcedBailEvt = await bobForcedBailPromise;
+    check('Bob received jail:bail-paid broadcast for forced bail', !!bobForcedBailEvt, JSON.stringify(bobForcedBailEvt));
+    check('forced bail broadcast carries playerId=1', bobForcedBailEvt && bobForcedBailEvt.playerId === 1);
+    check('forced bail broadcast carries forced=true', bobForcedBailEvt && bobForcedBailEvt.forced === true);
+    check('forced bail broadcast carries bail=$100', bobForcedBailEvt && bobForcedBailEvt.bail === 100);
+
+    s = await syncState(s1);
+    const p1AfterForced = playerIn(s, 1);
+    check('authoritative state confirms Alice inJail=false after forced bail', p1AfterForced.inJail === false);
+    check('authoritative state confirms Alice jailTurns=0 after forced bail', p1AfterForced.jailTurns === 0);
+    check('authoritative state confirms Alice money deducted by $100', p1AfterForced.money === moneyBeforeForced - 100);
+
+    // "The player must not move on that failed roll."
+    const moveAfterForced = await emitAck(s1, 'player:moved', { playerId: 1, actionId: newActionId() });
+    check('player MUST NOT move on the failed roll that triggered forced bail',
+      moveAfterForced && moveAfterForced.ok === false && moveAfterForced.code === 'IN_JAIL',
+      JSON.stringify(moveAfterForced));
+
+    s = await syncState(s1);
+    check('Alice position remains tile 10 (did not move on failed roll)', playerIn(s, 1).position === 10);
+
+    // Cannot pay bail again now that player is free
+    const bailAgain = await emitAck(s1, 'jail:pay-bail', { playerId: 1, actionId: newActionId() });
+    check('paying bail again after forced bail is rejected (NOT_IN_JAIL)',
+      bailAgain && bailAgain.ok === false && bailAgain.code === 'NOT_IN_JAIL',
+      JSON.stringify(bailAgain));
+
+    // Turn flow: Alice ends turn, Bob ends turn, Alice is free on next turn
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    s = await syncState(s1);
+    check('Alice is completely free on next turn (inJail=false)', playerIn(s, 1).inJail === false);
+
+    // Alice rolls and moves normally on her next turn
+    const normalRoll = await emitAck(s1, 'player:rolled', { playerId: 1 });
+    check('Alice rolls normally on turn after forced bail', !!(normalRoll && normalRoll.ok));
+    const normalMove = await emitAck(s1, 'player:moved', { playerId: 1, actionId: newActionId() });
+    check('Alice moves normally on turn after forced bail', !!(normalMove && normalMove.ok));
+    s = await syncState(s1);
+    check('Alice moved away from tile 10', playerIn(s, 1).position !== 10);
+  }
+
+  // ============================================================================
+  // PART 7: THIRD FAILED ATTEMPT WITH INSUFFICIENT FUNDS (BANKRUPTCY INTEGRATION)
+  // ============================================================================
+  console.log('\n=== 7. THIRD FAILED ATTEMPT WITH INSUFFICIENT FUNDS (BANKRUPTCY INTEGRATION) ===');
+  {
+    const { s1, s2, roomId } = await setupFreshRoom('CharlieBroke', 'DaveRich');
+
+    // Transfer $1450 from Charlie to Dave via authoritative trade so Charlie has only $50 (< $100 bail)
+    const tradeObj = {
+      id: `trade-drain-${Date.now()}`,
+      initiatorId: 1,
+      targetId: 2,
+      initiatorPropertyIds: [],
+      targetPropertyIds: [],
+      initiatorMoney: 1450,
+      targetMoney: 0,
+    };
+    const propRes = await emitAck(s1, 'trade:created', tradeObj);
+    check('trade created to drain Charlie to $50', !!(propRes && propRes.ok), JSON.stringify(propRes));
+    const accRes = await emitAck(s2, 'trade:accepted', { trade: tradeObj, actionId: newActionId() });
+    check('trade accepted by Dave', !!(accRes && accRes.ok), JSON.stringify(accRes));
+
+    let s = await syncState(s1);
+    check('Charlie balance is exactly $50 (< $100 bail)', playerIn(s, 1).money === 50, `money=${playerIn(s, 1).money}`);
+
+    // Send Charlie to jail via card
+    await walkAndJailPlayer(s1, s2, 1);
+
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    s = await syncState(s1);
+    check('Charlie in jail with $50 (jailTurns=0)',
+      playerIn(s, 1).inJail === true && playerIn(s, 1).jailTurns === 0 && playerIn(s, 1).money === 50);
+
+    // Manual bail attempt with $50 must be refused with INSUFFICIENT_FUNDS
+    const manualBailRefused = await emitAck(s1, 'jail:pay-bail', { playerId: 1, actionId: newActionId() });
+    check('Charlie paying manual bail with $50 is REFUSED (INSUFFICIENT_FUNDS)',
+      manualBailRefused && manualBailRefused.ok === false && manualBailRefused.code === 'INSUFFICIENT_FUNDS',
+      JSON.stringify(manualBailRefused));
+
+    s = await syncState(s1);
+    check('Charlie balance remains $50 after refused bail (charged NOTHING)', playerIn(s, 1).money === 50);
+
+    // Attempt 1: non-doubles
+    await emitAck(s1, 'player:rolled', { playerId: 1, _testForcedDice: [1, 2] });
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    // Attempt 2: non-doubles
+    await emitAck(s1, 'player:rolled', { playerId: 1, _testForcedDice: [2, 3] });
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    s = await syncState(s1);
+    check('Charlie ready for Attempt 3 (jailTurns=2, money=50)',
+      playerIn(s, 1).jailTurns === 2 && playerIn(s, 1).money === 50);
+
+    // Dave listens for bankruptcy and game:over broadcasts
+    const daveBankruptPromise = waitFor(s2, 'player:bankrupt');
+    const daveGameOverPromise = waitFor(s2, 'game:over');
+
+    // Attempt 3: non-doubles roll when unable to pay $100 forced bail
+    const roll3Bankrupt = await emitAck(s1, 'player:rolled', { playerId: 1, _testForcedDice: [3, 4] });
+    check('Attempt 3 roll acknowledges bankruptcy',
+      roll3Bankrupt && roll3Bankrupt.ok && roll3Bankrupt.isBankrupt === true,
+      JSON.stringify(roll3Bankrupt));
+
+    // Verify peer received player:bankrupt broadcast
+    const daveBankruptEvt = await daveBankruptPromise;
+    check('Dave received player:bankrupt broadcast for Charlie', !!daveBankruptEvt, JSON.stringify(daveBankruptEvt));
+    check('bankruptcy broadcast carries playerId=1', daveBankruptEvt && daveBankruptEvt.playerId === 1);
+
+    // Verify game:over broadcast for last-player-standing
+    const daveGameOverEvt = await daveGameOverPromise;
+    check('Dave received game:over broadcast', !!daveGameOverEvt, JSON.stringify(daveGameOverEvt));
+    check('Dave is declared winner', daveGameOverEvt && daveGameOverEvt.winnerId === 2);
+
+    // Authoritative state checks: Charlie is bankrupt, balance is 0 (not negative!)
+    s = await syncState(s2);
+    const charlieAfter = playerIn(s, 1);
+    check('Charlie isBankrupt is true', charlieAfter && charlieAfter.isBankrupt === true);
+    check('Charlie balance is exactly $0 (NO negative money permitted)', charlieAfter && charlieAfter.money === 0);
+    check('Charlie properties released (none owned)',
+      !Object.values(s.propertyOwnership || {}).includes(1));
+
+    // Bankrupt player cannot act
+    const bankruptMove = await emitAck(s1, 'player:moved', { playerId: 1, actionId: newActionId() });
+    check('bankrupt player movement is rejected (PLAYER_OUT)',
+      bankruptMove && bankruptMove.ok === false && bankruptMove.code === 'PLAYER_OUT',
+      JSON.stringify(bankruptMove));
+  }
+
+  // ============================================================================
+  // PART 8: FORGED PAYLOADS & TAMPERING PREVENTION
+  // ============================================================================
+  console.log('\n=== 8. FORGED PAYLOADS & TAMPERING PREVENTION ===');
+  {
+    const { s1, s2, roomId } = await setupFreshRoom('AliceTamper', 'BobTamper');
+    await walkAndJailPlayer(s1, s2, 1);
+
+    await emitAck(s1, 'turn:ended', { playerId: 1 });
+    await emitAck(s2, 'turn:ended', { playerId: 2 });
+
+    // 8.1 Spoofed client-provided inJail=false or position on player:moved is ignored
+    const forgedMove = await emitAck(s1, 'player:moved', {
+      playerId: 1,
+      actionId: newActionId(),
+      inJail: false,
+      position: 25,
+      money: 999999,
+      dice: [6, 6],
+    });
+    check('forged player:moved claiming inJail=false/pos=25 is rejected (IN_JAIL)',
+      forgedMove && forgedMove.ok === false && forgedMove.code === 'IN_JAIL',
+      JSON.stringify(forgedMove));
+
+    // 8.2 Client-provided dice/total on player:rolled is ignored
+    const fakeDiceRoll = await emitAck(s1, 'player:rolled', {
+      playerId: 1,
+      dice: [6, 6],
+      total: 12,
+      _testForcedDice: [1, 2],
+    });
+    check('player:rolled ignores claimed dice: [6, 6] in favour of server dice',
+      fakeDiceRoll && fakeDiceRoll.dice[0] === 1 && fakeDiceRoll.dice[1] === 2 && fakeDiceRoll.total === 3);
+
+    // 8.3 Forged bail payload: price: 0, bail: 0, money: 999999 ignored on jail:pay-bail
+    const moneyBeforeForgedBail = playerIn(await syncState(s1), 1).money;
+    const forgedBail = await emitAck(s1, 'jail:pay-bail', {
+      playerId: 1,
+      actionId: newActionId(),
+      bail: 0,
+      price: 0,
+      money: 999999,
+    });
+    check('jail:pay-bail succeeds but charges OFFICIAL $100 (ignores claimed $0)',
+      forgedBail && forgedBail.ok && forgedBail.bail === 100);
+    check('authoritative money deducted by official $100, not claimed $0',
+      playerIn(await syncState(s1), 1).money === moneyBeforeForgedBail - 100);
+  }
 
   console.log(`\n${results.length - failed}/${results.length} checks passed`);
   await cleanup();
