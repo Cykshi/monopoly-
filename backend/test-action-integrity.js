@@ -267,12 +267,11 @@ const cleanup = async (roomId) => {
   // The old affordability test was `knownMoney > 0 && price > knownMoney`, so a
   // player with exactly $0 skipped the check and bought anything for free. Money
   // is now server-owned, so we cannot DIAL a balance to zero from the client —
-  // we spend it down legitimately and then assert the refusal.
+  // we transfer funds authoritatively via a trade so the player's balance is
+  // strictly less than the target tile's price, then assert the refusal.
   console.log('\n--- A PLAYER WHO CANNOT AFFORD A TILE IS REFUSED ---');
 
-  // Player 1 has spent $60 on Dhaka, and may have earned salary on the way.
-  // Buy the FIRST expensive tile we can reach, then keep going until a purchase
-  // is genuinely refused — that refusal is what this block exists to assert.
+  // Walk player 1 to an unowned ownable tile first.
   const spendOrder = [
     [39, 500], // Beijing
     [36, 480], // England
@@ -281,103 +280,62 @@ const cleanup = async (roomId) => {
     [33, 450], // Punjab
   ];
   const expensiveIds = spendOrder.map(([id]) => id);
-  const priceOf = Object.fromEntries(spendOrder);
-  let refusedAt = null;
-  // ===== THIS LOOP MUST TERMINATE ON ITS OWN, NOT BY EXHAUSTION =====
-  // Salary is now paid on every GO crossing, so a walker that laps the board keeps
-  // refilling the balance and a spend-down could run for a very long time. The
-  // budget below is a hard stop: if a genuine refusal has not been observed within
-  // it, the block falls through to the alternating INSUFFICIENT_FUNDS leg further
-  // down, which asserts the same rule without needing the balance driven to zero.
-  for (let attempt = 0; attempt < 5 && !refusedAt; attempt++) {
-    const stateNow = await syncState(A);
-    const unowned = expensiveIds.filter((id) => stateNow.propertyOwnership[id] === undefined);
-    if (!unowned.length) break;
-    const tileId = await walkToAny(A, 1, unowned, B, 2, 60);
-    if (tileId === null) break; // could not reach any expensive tile in the budget
-    const price = priceOf[tileId];
-    // ===== READ THE BALANCE, DO NOT SHADOW IT =====
-    // A local total decremented only by purchases assumes money can never go UP —
-    // which held only while passing GO paid nothing. Salary on a lap now adds to
-    // the balance mid-loop, so the authoritative balance is read before each buy
-    // and the DELTA is asserted against the board's price.
-    const preBuy = playerIn(await syncState(A), 1).money;
-    const res = await emitAck(A, 'property:bought', { tileId, playerId: 1, price: 0, actionId: newActionId() });
-    if (res && res.ok) {
-      const after = playerIn(await syncState(A), 1).money;
-      check(`buying tile ${tileId} charged the official $${price}`,
-        after === preBuy - price,
-        `before=${preBuy} money=${after} expected=${preBuy - price}`);
-    } else {
-      refusedAt = { tileId, price, res, balance: preBuy };
-    }
+  const stateBeforeWalk = await syncState(A);
+  const unownedTargets = expensiveIds.filter((id) => stateBeforeWalk.propertyOwnership[id] === undefined);
+  const targetTileId = await walkToAny(A, 1, unownedTargets, B, 2, 60);
+
+  // Authoritatively drain player 1's balance to $0 via trade to player 2.
+  const balBeforeDrain = playerIn(await syncState(A), 1).money;
+  if (balBeforeDrain > 0) {
+    const drainTrade = {
+      id: `trade-drain-${Date.now()}`,
+      initiatorId: 1,
+      targetId: 2,
+      initiatorPropertyIds: [],
+      targetPropertyIds: [],
+      initiatorMoney: balBeforeDrain,
+      targetMoney: 0,
+    };
+    await emitAck(A, 'trade:created', drainTrade);
+    await emitAck(B, 'trade:accepted', { trade: drainTrade, actionId: newActionId() });
   }
 
-  // If we could not reach any of the big tiles, assert the rule directly by
-  // walking to the cheapest ownable tile that is still unowned and buying until
-  // the balance can no longer cover it. Either way the INSUFFICIENT_FUNDS rule
-  // gets exercised rather than silently skipped.
-  if (!refusedAt) {
-    const cheapTiles = [[1, 60], [2, 100], [4, 140], [6, 180], [8, 220], [11, 260]];
-    const cheapPrice = Object.fromEntries(cheapTiles);
-    const stateNow = await syncState(A);
-    const balNow = playerIn(stateNow, 1).money;
-    // Only walk when there is a tile we can actually AFFORD but do not own — the
-    // case under test is "balance too low for this tile", so if every candidate is
-    // already unaffordable there is nothing to buy and the refusal below is the
-    // answer immediately (walking 60 rolls per tile to prove that is just slow).
-    const affordableUnowned = cheapTiles
-      .filter(([id, price]) => stateNow.propertyOwnership[id] === undefined && price <= balNow)
-      .map(([id]) => id);
-    for (let attempt = 0; attempt < 4 && !refusedAt; attempt++) {
-      const snapshot = await syncState(A);
-      const unownedCheap = affordableUnowned.filter((id) => snapshot.propertyOwnership[id] === undefined);
-      if (!unownedCheap.length) {
-        // Nothing affordable left to buy: the next purchase must be refused.
-        const anyUnowned = cheapTiles
-          .filter(([id]) => snapshot.propertyOwnership[id] === undefined)
-          .map(([id]) => id);
-        if (!anyUnowned.length) break;
-        const probeTile = await walkToAny(A, 1, anyUnowned, B, 2, 30);
-        if (probeTile === null) break;
-        const probeRes = await emitAck(A, 'property:bought', { tileId: probeTile, playerId: 1, price: 0, actionId: newActionId() });
-        if (probeRes && probeRes.code === 'INSUFFICIENT_FUNDS') {
-          refusedAt = { tileId: probeTile, price: cheapPrice[probeTile], res: probeRes, balance: balNow };
-        }
-        break;
-      }
-      const tileId = await walkToAny(A, 1, unownedCheap, B, 2, 30);
-      if (tileId === null) break;
-      // Read the authoritative balance immediately before the attempt: the walk
-      // above may have crossed GO and been paid a salary, so a shadowed total
-      // would be stale. The refused-purchase assertion below compares against the
-      // balance read at the moment of refusal, which is what "charged NOTHING"
-      // actually means.
-      const preBuyBalance = playerIn(await syncState(A), 1).money;
-      const res = await emitAck(A, 'property:bought', { tileId, playerId: 1, price: 0, actionId: newActionId() });
-      if (res && res.ok) {
-        // Bought it; nothing to record — the next iteration re-reads the balance.
-      } else if (res && res.code === 'INSUFFICIENT_FUNDS') {
-        refusedAt = { tileId, price: cheapPrice[tileId], res, balance: preBuyBalance };
-      }
-    }
-  }
+  const preBuyBalance = playerIn(await syncState(A), 1).money;
+  const res = await emitAck(A, 'property:bought', {
+    tileId: targetTileId,
+    playerId: 1,
+    price: 0,
+    actionId: newActionId(),
+  });
+
+  const refusedAt = (res && res.code === 'INSUFFICIENT_FUNDS')
+    ? { tileId: targetTileId, res, balance: preBuyBalance }
+    : null;
 
   check('a purchase the balance cannot cover is REFUSED with INSUFFICIENT_FUNDS',
     !!(refusedAt && refusedAt.res.code === 'INSUFFICIENT_FUNDS'),
     refusedAt
       ? JSON.stringify(refusedAt)
-      : 'no refusal observed: every reachable tile stayed affordable within the ' +
-        'budget (salary on passing GO keeps refilling the balance). The rule is ' +
-        'asserted directly by the INSUFFICIENT_FUNDS cases below.');
-  if (refusedAt) {
-    check('the refused purchase charged NOTHING',
-      playerIn(await syncState(A), 1).money === refusedAt.balance,
-      `money=${playerIn(await syncState(A), 1).money} expected=${refusedAt.balance}`);
-    check('the refused purchase granted NO ownership',
-      (await syncState(A)).propertyOwnership[refusedAt.tileId] === undefined,
-      `owner of tile ${refusedAt.tileId}=${(await syncState(A)).propertyOwnership[refusedAt.tileId]}`);
-  }
+      : 'no refusal observed: purchase was not rejected with INSUFFICIENT_FUNDS');
+  check('the refused purchase charged NOTHING',
+    playerIn(await syncState(A), 1).money === (refusedAt ? refusedAt.balance : preBuyBalance),
+    `money=${playerIn(await syncState(A), 1).money} expected=${refusedAt ? refusedAt.balance : preBuyBalance}`);
+  check('the refused purchase granted NO ownership',
+    (await syncState(A)).propertyOwnership[targetTileId] === undefined,
+    `owner of tile ${targetTileId}=${(await syncState(A)).propertyOwnership[targetTileId]}`);
+
+  // Restore funds to player 1 via trade from player 2 so subsequent fixtures have funds
+  const refundTrade = {
+    id: `trade-refund-${Date.now()}`,
+    initiatorId: 2,
+    targetId: 1,
+    initiatorPropertyIds: [],
+    targetPropertyIds: [],
+    initiatorMoney: balBeforeDrain,
+    targetMoney: 0,
+  };
+  await emitAck(B, 'trade:created', refundTrade);
+  await emitAck(A, 'trade:accepted', { trade: refundTrade, actionId: newActionId() });
 
   // ===== THE INSUFFICIENT_FUNDS RULE, ASSERTED DIRECTLY =====
   // Driving a real balance to zero is now expensive: every lap of the board pays
