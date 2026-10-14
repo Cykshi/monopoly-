@@ -56,6 +56,11 @@ interface RentPaidEvent {
   tileId: number;
   payerMoney: number;
   ownerMoney: number;
+  amount?: number;
+  isBankrupt?: boolean;
+  creditorId?: number;
+  propertyOwnership?: Record<number, number>;
+  propertyHouses?: Record<number, number>;
 }
 
 interface PlayersSwappedEvent {
@@ -934,6 +939,7 @@ export default function GameBoard() {
     setActiveAuction(next.activeAuction as AuctionState | null);
     if (next.myPlayerId !== null) setMyPlayerId(next.myPlayerId);
     if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
+    if (restored.kickVotes) setKickVotes(restored.kickVotes);
     // Adopt the server's turn clock so the rejoin repaints the correct turn and
     // countdown immediately, rather than waiting for the next turn:changed.
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
@@ -985,6 +991,7 @@ export default function GameBoard() {
     if (next.trades) setTrades(next.trades);
     if (next.chatMessages) setChatMessages(next.chatMessages);
     if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
+    if (restored.kickVotes) setKickVotes(restored.kickVotes);
     setActiveAuction(next.activeAuction as AuctionState | null);
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
     if (next.currentTurnPlayerId !== null) {
@@ -1130,11 +1137,17 @@ export default function GameBoard() {
     newSocket.on("rent:paid", (data: RentPaidEvent) => {
       setPlayers((prev) =>
         prev.map((p) => {
-          if (p.id === data.payerId) return { ...p, money: data.payerMoney };
+          if (p.id === data.payerId) return { ...p, money: data.payerMoney, isBankrupt: data.isBankrupt ?? p.isBankrupt };
           if (p.id === data.ownerId) return { ...p, money: data.ownerMoney };
           return p;
         })
       );
+      if (data.propertyOwnership) {
+        setPropertyOwnership(data.propertyOwnership);
+      }
+      if (data.propertyHouses) {
+        setPropertyHouses(data.propertyHouses);
+      }
     });
     // Server-authoritative position swap (Surprise card). Apply both players'
     // new positions from the server's single broadcast.
@@ -1281,7 +1294,7 @@ export default function GameBoard() {
     });
     // Server-forced elimination (e.g. a turn timeout). Apply it locally so the
     // eliminated player's board state clears for everyone, not just the server.
-    newSocket.on("player:bankrupt", (data: { playerId: number; reason?: string }) => {
+    newSocket.on("player:bankrupt", (data: { playerId: number; reason?: string; creditorId?: number | null }) => {
       if (!data || typeof data.playerId !== "number") return;
       const p = playersRef.current.find((x) => x.id === data.playerId);
       const pName = p?.name?.trim() || `Player ${data.playerId}`;
@@ -1289,6 +1302,17 @@ export default function GameBoard() {
         addLog(`⏰ TIME EXPIRED! ${pName} failed to play in time and is ELIMINATED!`);
       } else if (data.reason === "left") {
         addLog(`🚪 ${pName} left the game and is out.`);
+      } else if (data.reason === "rent") {
+        const creditor = playersRef.current.find((x) => x.id === data.creditorId);
+        addLog(`${pName} went BANKRUPT — ${creditor?.name || `Player ${data.creditorId}`} seized their properties.`);
+      } else if (data.reason === "vote-kick") {
+        addLog(`🚨 ${pName} was vote-kicked out of the game!`);
+      } else if (data.reason === "kicked") {
+        addLog(`👢 ${pName} was kicked from the game.`);
+      } else if (data.reason === "tax") {
+        addLog(`${pName} went BANKRUPT on taxes — properties returned to the bank.`);
+      } else if (data.reason === "club") {
+        addLog(`${pName} went BANKRUPT on club fees — properties returned to the bank.`);
       }
       setPlayers((prev) =>
         prev.map((x) => (x.id === data.playerId ? { ...x, isBankrupt: true, money: 0, isCurrentPlayer: false } : x))
@@ -1296,17 +1320,73 @@ export default function GameBoard() {
       setPropertyOwnership((prev) => {
         const next = { ...prev };
         for (const [tileId, ownerId] of Object.entries(next)) {
-          if (ownerId === data.playerId) delete next[Number(tileId)];
+          if (ownerId === data.playerId) {
+            if (data.creditorId) {
+              next[Number(tileId)] = data.creditorId;
+            } else {
+              delete next[Number(tileId)];
+            }
+          }
         }
         return next;
       });
       setPropertyHouses((prev) => {
         const next = { ...prev };
         for (const [tileId, ownerId] of Object.entries(propertyOwnershipRef.current)) {
-          if (ownerId === data.playerId) delete next[Number(tileId)];
+          if (ownerId === data.playerId) {
+            next[Number(tileId)] = 0;
+          }
         }
         return next;
       });
+      setKickVotes((prev) => {
+        const next: Record<number, number[]> = {};
+        for (const [key, voters] of Object.entries(prev)) {
+          const tId = Number(key);
+          if (tId === data.playerId) continue;
+          const filtered = voters.filter((id) => id !== data.playerId);
+          if (filtered.length > 0) next[tId] = filtered;
+        }
+        return next;
+      });
+      setSelectedPlayerId((prev) => (prev === data.playerId ? null : prev));
+    });
+
+    newSocket.on("player:kick-vote", (data: { targetId: number; voterId: number; voted: boolean; voters: number[]; voteCount: number; threshold: number; kickVotes?: Record<number, number[]> }) => {
+      if (!data) return;
+      if (data.kickVotes) {
+        setKickVotes(data.kickVotes);
+      } else if (typeof data.targetId === "number" && Array.isArray(data.voters)) {
+        setKickVotes((prev) => ({ ...prev, [data.targetId]: data.voters }));
+      }
+      const voter = playersRef.current.find((p) => p.id === data.voterId);
+      const target = playersRef.current.find((p) => p.id === data.targetId);
+      const voterName = voter?.name || `Player ${data.voterId}`;
+      const targetName = target?.name || `Player ${data.targetId}`;
+      if (data.voted) {
+        addLog(`🗳️ ${voterName} voted to kick ${targetName} (${data.voteCount}/${data.threshold})`);
+      } else {
+        addLog(`🗳️ ${voterName} withdrew vote to kick ${targetName} (${data.voteCount}/${data.threshold})`);
+      }
+    });
+
+    newSocket.on("player:kicked", (data: { playerId: number; targetId?: number; kickedBy?: string | number; reason?: string; kickVotes?: Record<number, number[]> }) => {
+      if (!data) return;
+      const targetId = data.targetId ?? data.playerId;
+      if (typeof targetId !== "number") return;
+      const target = playersRef.current.find((p) => p.id === targetId);
+      const targetName = target?.name || `Player ${targetId}`;
+      addLog(`🚨 ${targetName} was removed from the game!`);
+      if (data.kickVotes) {
+        setKickVotes(data.kickVotes);
+      } else {
+        setKickVotes((prev) => {
+          const next = { ...prev };
+          delete next[targetId];
+          return next;
+        });
+      }
+      declareBankruptcy(targetId);
     });
     newSocket.on("property:bought", (data: PropertyBoughtEvent) => {
       setPropertyOwnership((prev) => ({ ...prev, [data.tileId]: data.playerId }));
@@ -2015,11 +2095,18 @@ export default function GameBoard() {
     declareBankruptcy(playerId);
   };
 
-  const togglePlayerKickVote = (targetId: number, voterId: number) => {
+  const togglePlayerKickVote = (targetId: number, voterId?: number) => {
     if (winner) return;
     const target = playersRef.current.find((p) => p.id === targetId && !p.isBankrupt);
-    const voter = playersRef.current.find((p) => p.id === voterId && !p.isBankrupt);
-    if (!target || !voter || targetId === voterId) return;
+    if (!target) return;
+
+    if (socketRef.current?.connected) {
+      socketRef.current.emit("player:kick-vote", { targetId, actionId: newActionId() });
+      return;
+    }
+
+    const voter = playersRef.current.find((p) => p.id === (voterId ?? currentPlayer?.id) && !p.isBankrupt);
+    if (!voter || targetId === voter.id) return;
 
     const otherAlive = playersRef.current.filter((p) => !p.isBankrupt && p.id !== targetId);
     const totalOthers = otherAlive.length;
@@ -2027,15 +2114,15 @@ export default function GameBoard() {
 
     setKickVotes((prev) => {
       const currentVoters = prev[targetId] || [];
-      const alreadyVoted = currentVoters.includes(voterId);
+      const alreadyVoted = currentVoters.includes(voter.id);
 
       let nextVoters: number[];
       if (alreadyVoted) {
-        nextVoters = currentVoters.filter((id) => id !== voterId);
+        nextVoters = currentVoters.filter((id) => id !== voter.id);
         addLog(`🗳️ ${voter.name} withdrew vote to kick ${target.name} (${nextVoters.length}/${totalOthers})`);
       } else {
         // Enforce: one player can only vote other player once!
-        nextVoters = [...currentVoters, voterId];
+        nextVoters = [...currentVoters, voter.id];
         addLog(`🗳️ ${voter.name} voted to kick ${target.name} (${nextVoters.length}/${totalOthers})`);
       }
 
@@ -2047,7 +2134,6 @@ export default function GameBoard() {
             delete copy[targetId];
             return copy;
           });
-          socketRef.current?.emit("player:kicked", { targetId });
           declareBankruptcy(targetId);
         }, 150);
       }
@@ -2399,6 +2485,29 @@ export default function GameBoard() {
           ? calculateRent(tile, houses)
           : calculateUtilityRent(tile, ownerId);
 
+        if (broadcast && socketRef.current?.connected) {
+          socketRef.current.emit(
+            "rent:paid",
+            { payerId: playerId, ownerId, tileId: tile.id, actionId: newActionId() },
+            (res: { ok: boolean; isBankrupt?: boolean; paid?: number; amount?: number; payerMoney?: number; ownerMoney?: number; propertyOwnership?: Record<number, number>; error?: string } | null) => {
+              if (res && res.ok && res.isBankrupt) {
+                declareBankruptcy(playerId, ownerId);
+              }
+            }
+          );
+          if (player.money >= rent) {
+            setPlayers((prev) =>
+              prev.map((p) => {
+                if (p.id === playerId) return { ...p, money: Math.max(0, p.money - rent), mood: "flat" };
+                if (p.id === ownerId) return { ...p, money: p.money + rent };
+                return p;
+              })
+            );
+            addLog(`${player.name} paid -$${rent} rent to ${owner?.name} (+$${rent}) on ${tile.name}.`);
+          }
+          return;
+        }
+
         if (player.money < rent) {
           declareBankruptcy(playerId, ownerId);
           return;
@@ -2411,13 +2520,6 @@ export default function GameBoard() {
             return p;
           })
         );
-        // Two-sided rent: player:moved's turnGate only lets a socket report its
-        // OWN seat, so this goes through the server-authoritative rent:paid
-        // event, which applies and broadcasts both balances (the backend also
-        // verifies ownerId really owns tileId before applying).
-        if (broadcast) {
-          socketRef.current?.emit("rent:paid", { payerId: playerId, ownerId, tileId: tile.id, actionId: newActionId() });
-        }
         addLog(`${player.name} paid -$${rent} rent to ${owner?.name} (+$${rent}) on ${tile.name}.`);
       } else {
         setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));

@@ -223,7 +223,7 @@ function loadComputeRestoredState() {
   // on — the board gives them no houseCost. This fixture builds 3 houses below, so
   // it must own a genuine PROPERTY, otherwise the build is correctly refused with
   // BAD_BUILD and the mapped house count comes back 0.
-  const OWNABLE = [1, 2, 4, 6, 8, 11, 12, 13, 16, 17, 19, 21, 22, 26, 27, 29, 31, 32, 33, 36, 39];
+  const OWNABLE = [1, 2, 4, 6, 8, 11, 13, 16, 17, 19, 21, 22, 26, 27, 29];
   const owned = [];
   let lastBuyError = null;
   for (let i = 0; i < 12 && owned.length < 2; i++) {

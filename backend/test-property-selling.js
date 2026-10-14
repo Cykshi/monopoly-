@@ -113,6 +113,7 @@ const observe = (socket, event) => {
   assert.equal(house.refund, board.sellRefund(1, 4));
   assert.equal(house.houses, 3);
   assert.equal(house.money, hotel.money + house.refund);
+  if (houseSpy.received.length < 2) await new Promise((r) => setTimeout(r, 50));
   assert.equal(houseSpy.received.length, 2);
   assert.equal((await ack(A, 'house:upgraded', { tileId: 1, playerId: 1, houses: 0, actionId: actionId() })).code, 'BAD_BUILD');
   assert.equal((await sync(A)).propertyHouses[1], 3);
@@ -127,6 +128,7 @@ const observe = (socket, event) => {
   assert.equal(state.propertyOwnership[1], undefined);
   assert.equal(state.propertyHouses[1], undefined);
   assert.equal(money(state), sold.money);
+  if (spy.received.length < 1) await new Promise((r) => setTimeout(r, 50));
   assert.equal(spy.received.length, 1);
   assert.deepEqual({ money: spy.received[0].money, houses: spy.received[0].houses, ownerId: spy.received[0].ownerId },
     { money: sold.money, houses: 0, ownerId: null });

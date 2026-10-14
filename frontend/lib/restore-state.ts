@@ -63,6 +63,7 @@ export interface PlayerRestoreState {
   // Authoritative pot value stored on the server.
   pot?: number;
   restHousePot?: number;
+  kickVotes?: Record<number, number[]>;
   // Whether the server considers the game started. Durable server fact, used to
   // lock name/colour editing; absent on older payloads, hence optional.
   isGameStarted?: boolean;

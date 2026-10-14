@@ -100,6 +100,7 @@ class GameRoom {
     this.chatMessages = [];      // Array of ChatMessage
     this.activeAuction = null;   // AuctionState | null
     this.auctionTimer = null;
+    this.kickVotes = {};         // targetId -> Set<number> of voterIds
     // ===== AUTHORITATIVE REST HOUSE POT =====
     // The accumulated shared pot (fines, fees, etc.). Rest House pays this out;
     // Club fees accumulate into it.
@@ -566,6 +567,131 @@ const TURN_TIME_LIMIT_MS = Number(process.env.TURN_TIME_LIMIT_MS) || 120 * 1000;
 // long game would grow the room's memory without limit.
 const MAX_ACTION_ID_LEN = 80;
 const MAX_REMEMBERED_ACTIONS = 512;
+
+// ===== CENTRALIZED ELIMINATION & VOTE KICK HELPERS =====
+function findPlayer(room, playerId) {
+  if (!room || !Array.isArray(room.players)) return null;
+  return room.players.find((p) => p.id === playerId) || null;
+}
+
+function serializeKickVotes(room) {
+  const result = {};
+  if (!room || !room.kickVotes) return result;
+  for (const [targetId, voters] of Object.entries(room.kickVotes)) {
+    const arr = voters instanceof Set ? Array.from(voters) : Array.isArray(voters) ? voters : [];
+    if (arr.length > 0) {
+      result[Number(targetId)] = arr;
+    }
+  }
+  return result;
+}
+
+// Centralized player elimination handler.
+// Used across all elimination paths: voluntary bankruptcy, rent bankruptcy,
+// tax/club bankruptcy, turn timeout, forced bail failure, disconnect, and room leave.
+function eliminatePlayer(room, io, player, { reason = 'bankrupt', creditorId = null, wasCurrentTurn = false } = {}) {
+  if (!room || !player) return null;
+  if (!rooms.has(room.roomId)) return null;
+
+  player.isBankrupt = true;
+  player.money = 0;
+
+  // Creditor property transfer or property release to bank:
+  const creditor = creditorId ? findPlayer(room, creditorId) : null;
+  for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
+    if (ownerId === player.id) {
+      if (creditor && !creditor.isBankrupt) {
+        room.propertyOwnership[tileId] = creditor.id;
+      } else {
+        delete room.propertyOwnership[tileId];
+      }
+      delete room.propertyHouses[tileId];
+    }
+  }
+
+  // Pending trades involving this player are canceled:
+  if (Array.isArray(room.trades)) {
+    const affectedTrades = room.trades.filter(
+      (t) => t.initiatorId === player.id || t.targetId === player.id
+    );
+    if (affectedTrades.length > 0) {
+      room.trades = room.trades.filter(
+        (t) => t.initiatorId !== player.id && t.targetId !== player.id
+      );
+      for (const t of affectedTrades) {
+        io.to(room.roomId).emit('trade:cancelled', { tradeId: t.id });
+      }
+    }
+  }
+
+  // Active auction cleanup:
+  if (room.activeAuction) {
+    const live = room.activeAuction;
+    const passed = Array.isArray(live.passedPlayerIds) ? live.passedPlayerIds : [];
+    if (!passed.includes(player.id)) {
+      live.passedPlayerIds = [...passed, player.id];
+    }
+
+    if (live.highestBidderId === player.id) {
+      live.highestBidderId = null;
+      live.currentBid = 0;
+    }
+
+    const alive = room.players.filter((p) => !p.isBankrupt);
+    const nonPassed = alive.filter((p) => !live.passedPlayerIds.includes(p.id));
+
+    if (alive.length <= 1 || nonPassed.length === 0) {
+      room.settleAuction(io);
+    } else {
+      io.to(room.roomId).emit('auction:bid', { auction: live });
+    }
+  }
+
+  // Vote-kick cleanup:
+  if (room.kickVotes) {
+    delete room.kickVotes[player.id];
+    for (const [tId, set] of Object.entries(room.kickVotes)) {
+      if (set instanceof Set) {
+        set.delete(player.id);
+      }
+    }
+  }
+
+  // Broadcast bankruptcy event:
+  io.to(room.roomId).emit('player:bankrupt', {
+    playerId: player.id,
+    reason,
+    creditorId: creditor ? creditor.id : null,
+  });
+
+  // Turn progression: advance turn exactly once if the eliminated player owned it
+  if (wasCurrentTurn) {
+    room.beginTurn(io);
+  }
+
+  // Sole survivor / abandoned win condition evaluation:
+  const stillSeated = room.players.filter(
+    (p) => !p.isBankrupt && room.tokens.has(p.sessionToken || '')
+  );
+  if (stillSeated.length === 0) {
+    room.isGameOver = true;
+    room.winnerId = null;
+    room.winnerReason = 'abandoned';
+    room.clearTurnTimer();
+    room.clearAuctionTimer();
+    persistRoom(room);
+    io.to(room.roomId).emit('game:over', { winnerId: null, winnerName: null, reason: 'abandoned' });
+  } else {
+    const survivor = findSoleSurvivor(room);
+    if (survivor) {
+      declareWinner(room, io, survivor, 'last-player-standing');
+    }
+  }
+
+  persistRoom(room);
+  return player;
+}
+
 // ===== TURN TIMEOUT (SERVER-ENFORCED) =====
 // Fires when a player lets their turn clock expire. Matches the client's
 // existing timeout behaviour: the idle player is ELIMINATED (bankrupted) and the
@@ -583,55 +709,7 @@ function handleTurnTimeout(room, io) {
   if (room.isGameOver) return;
 
   console.log(`⏰ Room ${room.roomId}: Player ${player.id} timed out — eliminated`);
-
-  // Eliminate the idle player, exactly as the client's timeout did: mark
-  // bankrupt and release their properties/houses. Done BEFORE advancing so
-  // advanceTurn() skips them and hands the turn to a live player.
-  player.isBankrupt = true;
-  player.money = 0;
-  for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
-    if (ownerId === player.id) {
-      delete room.propertyOwnership[tileId];
-      delete room.propertyHouses[tileId];
-    }
-  }
-
-  // Tell everyone about the elimination, then advance via the shared path.
-  io.to(room.roomId).emit('player:bankrupt', { playerId: player.id, reason: 'timeout' });
-
-  // ADVANCE FIRST, THEN EVALUATE THE WIN CONDITION.
-  //
-  // Order matters and is the whole point of this block. beginTurn() is what
-  // recomputes the authoritative turn from the roster AFTER the elimination, so
-  // the turn must move before we ask "is the game over?". Doing it the other way
-  // round is a real bug: with two players, eliminating one leaves exactly one
-  // "active" player, which reads as last-player-standing and ends the game —
-  // even though the survivor is still owed the rest of the match. The survivor
-  // would win by timeout rather than by play, and currentTurnPlayerId would be
-  // left pointing at the bankrupt seat, so every subsequent action was rejected
-  // as NOT_YOUR_TURN (and the eliminated player's own actions still accepted).
-  room.beginTurn(io);
-
-  // LAST PLAYER STANDING, evaluated on the post-advance roster. Only a game
-  // where literally nobody else can take a turn is over. `room.tokens` is what
-  // separates "left the game" from "still playing": a disconnected player's
-  // token is dropped from the room, so a seat that vanished can't keep a
-  // one-sided game alive forever.
-  const activePlayers = room.players.filter(
-    p => !p.isBankrupt && room.tokens.has(p.sessionToken || '')
-  );
-  if (activePlayers.length === 1) {
-    declareWinner(room, io, activePlayers[0], 'last-player-standing');
-  } else if (activePlayers.length === 0) {
-    // Nobody holds a seat any more — nobody left to win.
-    room.isGameOver = true;
-    room.winnerId = null;
-    room.winnerReason = 'abandoned';
-    room.clearTurnTimer();
-    room.clearAuctionTimer();
-    persistRoom(room);
-    io.to(room.roomId).emit('game:over', { winnerId: null, winnerName: null, reason: 'abandoned' });
-  }
+  eliminatePlayer(room, io, player, { reason: 'timeout', wasCurrentTurn: true });
 }
 // Tear a room down completely: stop every timer it owns, invalidate its session
 // tokens (so a stale localStorage token can't resurrect it), and drop it from
@@ -641,6 +719,7 @@ function teardownRoom(room) {
   room.clearAuctionTimer();
   room.clearEmptyTimer();
   room.clearTurnTimer();
+  room.kickVotes = {};
   for (const token of room.tokens) sessions.delete(token);
   rooms.delete(room.roomId);
   // Retention: a normally-finished (or abandoned past the empty-room TTL) game
@@ -1032,6 +1111,7 @@ function serializeRoomState(room) {
     trades: room.trades,
     chatMessages: room.chatMessages,
     activeAuction: room.activeAuction,
+    kickVotes: serializeKickVotes(room),
     pot: room.pot ?? 0,
     restHousePot: room.pot ?? 0
   };
@@ -1077,6 +1157,7 @@ function serializePlayerState(room, player) {
     turnDeadline: room.turnDeadline,
     trades: myTrades,
     activeAuction: auction,
+    kickVotes: serializeKickVotes(room),
     chatMessages: room.chatMessages,
     pot: room.pot ?? 0,
     restHousePot: room.pot ?? 0
@@ -1402,40 +1483,8 @@ io.on('connection', (socket) => {
 
       const leaver = room.players.find(p => p.id === leaverId);
       if (leaver && !leaver.isBankrupt) {
-        leaver.isBankrupt = true;
-        leaver.money = 0;
-        for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
-          if (ownerId === leaver.id) {
-            delete room.propertyOwnership[tileId];
-            delete room.propertyHouses[tileId];
-          }
-        }
-        io.to(room.roomId).emit('player:bankrupt', { playerId: leaver.id, reason: 'left' });
-        persistRoom(room);
-
-        // Nobody left to play: the game is over with no winner. Tearing the
-        // clocks down here reuses the same teardown path as a real win.
-        const stillSeated = room.players.filter(
-          p => !p.isBankrupt && room.tokens.has(p.sessionToken || '')
-        );
-        if (stillSeated.length === 0) {
-          room.isGameOver = true;
-          room.winnerId = null;
-          room.winnerReason = 'abandoned';
-          room.clearTurnTimer();
-          room.clearAuctionTimer();
-          persistRoom(room);
-          io.to(room.roomId).emit('game:over', {
-            winnerId: null,
-            winnerName: null,
-            reason: 'abandoned'
-          });
-          console.log(`🏳️ Room ${room.roomId}: every player left — game over (abandoned)`);
-        } else {
-          // Otherwise the normal last-player-standing rule may now be satisfied.
-          const survivor = findSoleSurvivor(room);
-          if (survivor) declareWinner(room, io, survivor, 'last-player-standing');
-        }
+        const wasCurrentTurn = (room.currentTurnPlayerId === leaver.id);
+        eliminatePlayer(room, io, leaver, { reason: 'left', wasCurrentTurn });
       }
     }
   });
@@ -2115,22 +2164,79 @@ io.on('connection', (socket) => {
     // Debit the payer and credit the owner, both by the SERVER's amount. The
     // payer cannot go below zero (the existing rule), so the transfer is capped
     // at what they actually hold — which also stops a negative balance.
+    const isBankrupt = payer.money < amount;
     const paid = Math.min(amount, Math.max(0, payer.money));
-    payer.money = Math.max(0, payer.money - paid);
-    owner.money += paid;
-    // A rent payment changes two balances: a meaningful state change, persist it.
-    persistRoom(room);
-    console.log(`💰 Room ${roomId}: Player ${payer.id} paid $${paid} rent to Player ${owner.id} (tile ${data.tileId}, official $${amount})`);
-    socket.to(roomId).emit('rent:paid', {
-      payerId: payer.id,
-      ownerId: owner.id,
-      tileId: data.tileId,
-      // The SERVER's amount, so every peer renders what was actually charged.
-      amount: paid,
-      payerMoney: payer.money,
-      ownerMoney: owner.money,
-    });
-    if (typeof ack === 'function') ack({ ok: true });
+    const wasCurrentTurn = (room.currentTurnPlayerId === payer.id);
+
+    if (isBankrupt) {
+      payer.money = 0;
+      owner.money += paid;
+
+      eliminatePlayer(room, io, payer, {
+        reason: 'rent',
+        creditorId: owner.id,
+        wasCurrentTurn,
+      });
+
+      console.log(`💰 Room ${roomId}: Player ${payer.id} went bankrupt paying $${paid} rent to Player ${owner.id} (tile ${data.tileId}, official $${amount})`);
+
+      io.to(roomId).emit('rent:paid', {
+        payerId: payer.id,
+        ownerId: owner.id,
+        tileId: data.tileId,
+        amount: paid,
+        officialAmount: amount,
+        payerMoney: 0,
+        ownerMoney: owner.money,
+        isBankrupt: true,
+        creditorId: owner.id,
+        propertyOwnership: room.propertyOwnership,
+        propertyHouses: room.propertyHouses,
+        currentTurnPlayerId: room.currentTurnPlayerId,
+        turnDeadline: room.turnDeadline,
+      });
+
+      if (typeof ack === 'function') {
+        ack({
+          ok: true,
+          isBankrupt: true,
+          paid,
+          amount,
+          payerMoney: 0,
+          ownerMoney: owner.money,
+          creditorId: owner.id,
+          propertyOwnership: room.propertyOwnership,
+          propertyHouses: room.propertyHouses,
+          currentTurnPlayerId: room.currentTurnPlayerId,
+          turnDeadline: room.turnDeadline,
+        });
+      }
+    } else {
+      payer.money = Math.max(0, payer.money - paid);
+      owner.money += paid;
+      persistRoom(room);
+      console.log(`💰 Room ${roomId}: Player ${payer.id} paid $${paid} rent to Player ${owner.id} (tile ${data.tileId}, official $${amount})`);
+
+      socket.to(roomId).emit('rent:paid', {
+        payerId: payer.id,
+        ownerId: owner.id,
+        tileId: data.tileId,
+        amount: paid,
+        payerMoney: payer.money,
+        ownerMoney: owner.money,
+        isBankrupt: false,
+      });
+
+      if (typeof ack === 'function') {
+        ack({
+          ok: true,
+          isBankrupt: false,
+          paid,
+          payerMoney: payer.money,
+          ownerMoney: owner.money,
+        });
+      }
+    }
   }));
 
   // Two-player position swap (Surprise card "swap places"). Same reasoning as
@@ -2383,28 +2489,11 @@ io.on('connection', (socket) => {
           } else {
             // Player cannot pay forced bail: integrate existing bankruptcy rules safely
             console.log(`💀 Room ${roomId}: Player ${actor.id} failed 3rd jail roll and cannot afford $${bailCost} bail (has $${currentMoney}) — bankrupt!`);
-            actor.isBankrupt = true;
-            actor.money = 0;
             actor.inJail = false;
             actor.jailTurns = 0;
             roll.authorizedMove = false;
 
-            for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
-              if (ownerId === actor.id) {
-                delete room.propertyOwnership[tileId];
-                delete room.propertyHouses[tileId];
-              }
-            }
-
-            persistRoom(room);
-            io.to(roomId).emit('player:bankrupt', { playerId: actor.id, reason: 'forced-bail' });
-
-            const survivor = findSoleSurvivor(room);
-            if (survivor) {
-              declareWinner(room, io, survivor, 'last-player-standing');
-            } else {
-              room.beginTurn(io);
-            }
+            eliminatePlayer(room, io, actor, { reason: 'forced-bail', wasCurrentTurn: true });
 
             jailOutcome = {
               escaped: false,
@@ -2888,18 +2977,16 @@ io.on('connection', (socket) => {
     room.pot = (room.pot || 0) + paid;
     room.restHousePot = room.pot;
 
-    if (isBankrupt) {
-      actor.isBankrupt = true;
-      actor.money = 0;
-      for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
-        if (ownerId === actor.id) {
-          delete room.propertyOwnership[tileId];
-          delete room.propertyHouses[tileId];
-        }
-      }
-    }
+    const wasCurrentTurn = (room.currentTurnPlayerId === actor.id);
 
-    persistRoom(room);
+    if (isBankrupt) {
+      eliminatePlayer(room, io, actor, {
+        reason: 'club',
+        wasCurrentTurn,
+      });
+    } else {
+      persistRoom(room);
+    }
 
     console.log(`🥂 Room ${roomId}: Player ${actor.id} paid $${paid} at CLUB (${cardCount} card + ${houseCount} houses). Room pot is now $${room.pot}.`);
 
@@ -2913,16 +3000,13 @@ io.on('connection', (socket) => {
       restHousePot: room.pot,
       money: actor.money,
       isBankrupt: !!actor.isBankrupt,
+      currentTurnPlayerId: room.currentTurnPlayerId,
+      turnDeadline: room.turnDeadline,
     };
 
     socket.to(roomId).emit('club:paid', resultPayload);
     if (typeof ack === 'function') {
       ack({ ok: true, ...resultPayload });
-    }
-
-    if (isBankrupt) {
-      const survivor = findSoleSurvivor(room);
-      if (survivor) declareWinner(room, io, survivor, 'last-player-standing');
     }
   });
 
@@ -3045,18 +3129,16 @@ io.on('connection', (socket) => {
     room.pot = (room.pot || 0) + paid;
     room.restHousePot = room.pot;
 
-    if (isBankrupt) {
-      actor.isBankrupt = true;
-      actor.money = 0;
-      for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
-        if (ownerId === actor.id) {
-          delete room.propertyOwnership[tileId];
-          delete room.propertyHouses[tileId];
-        }
-      }
-    }
+    const wasCurrentTurn = (room.currentTurnPlayerId === actor.id);
 
-    persistRoom(room);
+    if (isBankrupt) {
+      eliminatePlayer(room, io, actor, {
+        reason: 'tax',
+        wasCurrentTurn,
+      });
+    } else {
+      persistRoom(room);
+    }
 
     console.log(`📉 Room ${roomId}: Player ${actor.id} paid $${paid} tax on tile ${actor.position} (due $${tax}). Room pot is now $${room.pot}.`);
 
@@ -3069,16 +3151,13 @@ io.on('connection', (socket) => {
       restHousePot: room.pot,
       money: actor.money,
       isBankrupt: !!actor.isBankrupt,
+      currentTurnPlayerId: room.currentTurnPlayerId,
+      turnDeadline: room.turnDeadline,
     };
 
     socket.to(roomId).emit('tax:paid', resultPayload);
     if (typeof ack === 'function') {
       ack({ ok: true, ...resultPayload });
-    }
-
-    if (isBankrupt) {
-      const survivor = findSoleSurvivor(room);
-      if (survivor) declareWinner(room, io, survivor, 'last-player-standing');
     }
   });
 
@@ -3102,37 +3181,28 @@ io.on('connection', (socket) => {
     }
     const p = actor;
 
+    if (p.isBankrupt) {
+      return reject(ack, 'ALREADY_BANKRUPT', 'Player is already bankrupt.');
+    }
+
     // Replay gate: elimination releases the player's whole property portfolio,
     // so it must happen exactly once per player.
     const replayError = actionGate(room, ack, data.actionId);
     if (replayError) return replayError;
 
-    p.isBankrupt = true;
-    p.money = 0;
-    // Clear owned properties
-    for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
-      if (ownerId === data.playerId) {
-        delete room.propertyOwnership[tileId];
-        delete room.propertyHouses[tileId];
-      }
-    }
-    // An elimination changes the roster + board permanently — persist it.
-    persistRoom(room);
-    socket.to(roomId).emit('player:bankrupt', data);
+    const wasCurrentTurn = (room.currentTurnPlayerId === p.id);
+    eliminatePlayer(room, io, p, {
+      reason: data.reason || 'voluntary',
+      wasCurrentTurn,
+    });
 
-    // LAST PLAYER STANDING: reuses the SAME win path as the timeout elimination,
-    // so a game can end by either route through one implementation.
-    const survivor = findSoleSurvivor(room);
-    if (survivor) declareWinner(room, io, survivor, 'last-player-standing');
-
-    if (typeof ack === 'function') ack({ ok: true });
+    if (typeof ack === 'function') ack({ ok: true, currentTurnPlayerId: room.currentTurnPlayerId });
   }));
 
-  // Kick. AUTHORIZATION: only the HOST may kick, and only a player who is
-  // actually in this room. The event used to be an unvalidated pass-through —
-  // any client could emit it naming any target, and every peer would apply it.
-  // The requester is now the authenticated socket and the authority is the room's
-  // host token, which is the project's existing authority model.
+  // Kick. Direct host-authorized kick and democratic vote-kick.
+  // AUTHORIZATION: only the HOST may execute a direct player:kicked removal.
+  // Democratic kick is cast via player:kick-vote and executed automatically by the
+  // server when the vote threshold is met.
   socket.on('player:kicked', withRoom((room, roomId, data, ack) => {
     const { actor, error } = requireActor(room, ack);
     if (error) return error;
@@ -3143,7 +3213,7 @@ io.on('connection', (socket) => {
       return reject(ack, 'NOT_HOST', 'Only the host can remove a player.');
     }
 
-    const targetId = data && data.playerId;
+    const targetId = data && (data.playerId !== undefined ? data.playerId : data.targetId);
     if (targetId === undefined || targetId === null) {
       return reject(ack, 'BAD_PAYLOAD', 'player:kicked needs the target playerId.');
     }
@@ -3157,12 +3227,129 @@ io.on('connection', (socket) => {
       return reject(ack, 'CANNOT_KICK_SELF', 'Use room:leave to leave the room.');
     }
 
+    if (target.isBankrupt) {
+      return reject(ack, 'ALREADY_BANKRUPT', 'Player is already out of the game.');
+    }
+
+    const wasCurrentTurn = (room.currentTurnPlayerId === target.id);
+    eliminatePlayer(room, io, target, {
+      reason: 'kicked',
+      wasCurrentTurn,
+    });
+
     // Stamp the real requester so peers can't be told the kick came from
     // someone else.
-    const clean = { ...data, playerId: target.id, kickedBy: actor.id };
-    console.log(`👢 Room ${roomId}: Player ${actor.id} removed Player ${target.id}`);
+    const clean = {
+      ...data,
+      playerId: target.id,
+      targetId: target.id,
+      kickedBy: actor.id,
+      kickVotes: serializeKickVotes(room),
+    };
+    console.log(`👢 Room ${roomId}: Host (Player ${actor.id}) removed Player ${target.id}`);
     io.to(roomId).emit('player:kicked', clean);
-    if (typeof ack === 'function') ack({ ok: true, playerId: target.id });
+    if (typeof ack === 'function') ack({ ok: true, playerId: target.id, targetId: target.id });
+  }));
+
+  // Server-authoritative democratic vote kick.
+  socket.on('player:kick-vote', withRoom((room, roomId, data, ack) => {
+    const { actor, error } = requireActor(room, ack);
+    if (error) return error;
+
+    if (actor.isBankrupt) {
+      return reject(ack, 'PLAYER_OUT', 'You are out of the game.');
+    }
+
+    const targetId = data && (data.targetId !== undefined ? data.targetId : data.playerId);
+    if (targetId === undefined || targetId === null) {
+      return reject(ack, 'BAD_PAYLOAD', 'player:kick-vote needs a targetId.');
+    }
+
+    const target = findPlayer(room, targetId);
+    if (!target) {
+      return reject(ack, 'UNKNOWN_PLAYER', `No player ${targetId} in this room.`);
+    }
+
+    if (target.id === actor.id) {
+      return reject(ack, 'CANNOT_VOTE_SELF', 'You cannot vote to kick yourself.');
+    }
+
+    if (target.isBankrupt) {
+      return reject(ack, 'ALREADY_BANKRUPT', 'Target player is already out of the game.');
+    }
+
+    const activePlayers = room.players.filter(p => !p.isBankrupt);
+    if (activePlayers.length < 3) {
+      return reject(ack, 'NOT_ENOUGH_PLAYERS', 'Vote kick requires at least 3 active players.');
+    }
+
+    const otherAlive = activePlayers.filter(p => p.id !== target.id);
+    const threshold = otherAlive.length;
+
+    if (!room.kickVotes) room.kickVotes = {};
+    if (!room.kickVotes[target.id]) room.kickVotes[target.id] = new Set();
+    const targetVotes = room.kickVotes[target.id];
+
+    let voted = false;
+    if (data.vote === true) {
+      targetVotes.add(actor.id);
+      voted = true;
+    } else if (data.vote === false) {
+      targetVotes.delete(actor.id);
+      voted = false;
+    } else {
+      if (targetVotes.has(actor.id)) {
+        targetVotes.delete(actor.id);
+        voted = false;
+      } else {
+        targetVotes.add(actor.id);
+        voted = true;
+      }
+    }
+
+    const currentVoters = Array.from(targetVotes);
+    const votePayload = {
+      targetId: target.id,
+      playerId: target.id,
+      voterId: actor.id,
+      voted,
+      voters: currentVoters,
+      voteCount: currentVoters.length,
+      threshold,
+      kickVotes: serializeKickVotes(room),
+    };
+
+    io.to(roomId).emit('player:kick-vote', votePayload);
+
+    // If threshold met, execute removal exactly once authoritatively on the server!
+    if (currentVoters.length >= threshold) {
+      delete room.kickVotes[target.id];
+      const wasCurrentTurn = (room.currentTurnPlayerId === target.id);
+      eliminatePlayer(room, io, target, {
+        reason: 'vote-kick',
+        wasCurrentTurn,
+      });
+
+      console.log(`🚨 Room ${roomId}: Player ${target.id} was vote-kicked by all other active players!`);
+      io.to(roomId).emit('player:kicked', {
+        playerId: target.id,
+        targetId: target.id,
+        reason: 'vote-kick',
+        kickedBy: 'vote',
+        kickVotes: serializeKickVotes(room),
+      });
+    }
+
+    if (typeof ack === 'function') {
+      ack({
+        ok: true,
+        targetId: target.id,
+        voted,
+        voteCount: currentVoters.length,
+        threshold,
+        kickVotes: serializeKickVotes(room),
+      });
+    }
   }));
 
   // Trading System Events
@@ -3427,6 +3614,10 @@ io.on('connection', (socket) => {
     const { actor, error } = requireActor(room, ack);
     if (error) return error;
 
+    if (actor.isBankrupt) {
+      return reject(ack, 'PLAYER_OUT', 'You are out of the game.');
+    }
+
     const live = room.activeAuction;
     if (!live) return reject(ack, 'NO_AUCTION', 'There is no active auction.');
 
@@ -3479,6 +3670,10 @@ io.on('connection', (socket) => {
     }
     const { actor, error } = requireActor(room, ack);
     if (error) return error;
+
+    if (actor.isBankrupt) {
+      return reject(ack, 'PLAYER_OUT', 'You are out of the game.');
+    }
 
     const live = room.activeAuction;
     if (!live) return reject(ack, 'NO_AUCTION', 'There is no active auction.');
@@ -3606,34 +3801,8 @@ io.on('connection', (socket) => {
 
       const leaver = room.players.find(p => p.id === leaverId);
       if (leaver && !leaver.isBankrupt) {
-        leaver.isBankrupt = true;
-        leaver.money = 0;
-        for (const [tileId, ownerId] of Object.entries(room.propertyOwnership)) {
-          if (ownerId === leaver.id) {
-            delete room.propertyOwnership[tileId];
-            delete room.propertyHouses[tileId];
-          }
-        }
-        io.to(room.roomId).emit('player:bankrupt', { playerId: leaver.id, reason: 'disconnected' });
-        persistRoom(room);
-
-        // Nobody left holding a seat: the game is over with no winner.
-        const stillSeated = room.players.filter(
-          p => !p.isBankrupt && room.tokens.has(p.sessionToken || '')
-        );
-        if (stillSeated.length === 0) {
-          room.isGameOver = true;
-          room.winnerId = null;
-          room.winnerReason = 'abandoned';
-          room.clearTurnTimer();
-          room.clearAuctionTimer();
-          persistRoom(room);
-          io.to(room.roomId).emit('game:over', { winnerId: null, winnerName: null, reason: 'abandoned' });
-          console.log(`🏳️ Room ${room.roomId}: every player disconnected — game over (abandoned)`);
-        } else {
-          const survivor = findSoleSurvivor(room);
-          if (survivor) declareWinner(room, io, survivor, 'last-player-standing');
-        }
+        const wasCurrentTurn = (room.currentTurnPlayerId === leaver.id);
+        eliminatePlayer(room, io, leaver, { reason: 'disconnected', wasCurrentTurn });
       }
     }
   });

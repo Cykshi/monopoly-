@@ -79,6 +79,7 @@ const ONLINE_SUITES = [
   'test-jail-entry.js',
   'test-pot-authority.js',
   'test-tax-authority.js',
+  'test-bankruptcy-votekick.js',
 ];
 
 const onlyOffline = process.argv.includes('--offline');
@@ -128,6 +129,25 @@ function runSuite(file, env) {
 }
 
 // Wait until the spawned server answers its health endpoint (or give up).
+function waitForPortFree(port, timeoutMs = 5000) {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const attempt = () => {
+      const sock = net.connect(port, '127.0.0.1');
+      sock.once('connect', () => {
+        sock.destroy();
+        if (Date.now() - started > timeoutMs) resolve(false);
+        else setTimeout(attempt, 200);
+      });
+      sock.once('error', () => {
+        sock.destroy();
+        resolve(true);
+      });
+    };
+    attempt();
+  });
+}
+
 function waitForServer(port, timeoutMs = 15000) {
   const started = Date.now();
   return new Promise((resolve) => {
@@ -159,6 +179,7 @@ function waitForServer(port, timeoutMs = 15000) {
   }
 
   // ---- start a private server for the live suites ----
+  await waitForPortFree(PORT);
   console.log(`\n${'='.repeat(64)}\n▶ starting test server on :${PORT} (turn clock ${TURN_MS}ms)\n${'='.repeat(64)}`);
   const server = spawn(NODE, ['server.js'], {
     cwd: HERE,

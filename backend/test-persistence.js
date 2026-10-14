@@ -242,7 +242,7 @@ function stopServer(child) {
   // This fixture goes on to build 3 houses, so it must own a genuine PROPERTY.
   // Building on a utility is now correctly refused (BAD_BUILD), which is exactly
   // what the board table says; picking the right tile is the fixture's job.
-  const OWNABLE = [1, 2, 4, 6, 8, 11, 12, 13, 16, 17, 19, 21, 22, 26, 27, 29, 31, 32, 33, 36, 39];
+  const OWNABLE = [1, 2, 4, 6, 8, 11, 13, 16, 17, 19, 21, 22, 26, 27, 29];
   const owned = [];
   let lastBuyError = null;
   for (let i = 0; i < 12 && owned.length < 2; i++) {

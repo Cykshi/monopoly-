@@ -206,7 +206,7 @@ const syncNow = (socket) =>
   // on — the board gives them no houseCost. This fixture builds 3 houses below, so
   // it must own a genuine PROPERTY or the build is correctly refused with
   // BAD_BUILD and the restored house count comes back 0.
-  const OWNABLE = [1, 2, 4, 6, 8, 11, 12, 13, 16, 17, 19, 21, 22, 26, 27, 29, 31, 32, 33, 36, 39];
+  const OWNABLE = [1, 2, 4, 6, 8, 11, 13, 16, 17, 19, 21, 22, 26, 27, 29];
   const owned = [];
   for (let i = 0; i < 12 && owned.length < 2; i++) {
     // Exclude tiles we already own: the walker may still be STANDING on the tile
