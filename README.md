@@ -6,17 +6,9 @@ A real-time multiplayer board game built with Next.js, React, TypeScript, Three.
 
 ---
 
-## Gameplay & Screenshots
+## Gameplay
 
-### Desktop View
-![Monopoly Online Desktop Gameplay](docs/images/desktop-gameplay.png)
-
-### Mobile & Responsive View
-<p align="center">
-  <img src="docs/images/mobile-gameplay.png" alt="Monopoly Online Mobile Gameplay" width="360" />
-</p>
-
-*Additional captures, layout audits, and responsive viewports are preserved in [`docs/images/`](docs/images/).*
+![Monopoly Online Gameplay](docs/images/gameplay.png)
 
 ---
 
@@ -100,7 +92,7 @@ monopoly-/
 │   ├── lib/                     # Client state helpers and restoration utilities
 │   └── public/                  # Static assets and sounds
 ├── docs/
-│   └── images/                  # Game screenshots, desktop/mobile captures, and assets
+│   └── images/                  # Gameplay screenshot and media assets
 ├── scripts/                     # Standalone developer tools, BOM cleaners, and verification scripts
 │   ├── README.md                # Documentation of development tools and scripts
 │   ├── check-state.js           # UI layout marker diagnostic tool

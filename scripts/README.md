@@ -10,8 +10,8 @@ This directory contains standalone utility, diagnostic, and end-to-end browser v
 |---|---|---|---|
 | `check-state.js` | Diagnostic (Node.js) | Scans `frontend/app/page.tsx` for required UI state markers (lobby modal, full-screen gate, navigation classes). Safe to run from root or `scripts/`. | `node scripts/check-state.js` |
 | `strip-bom.js` | Utility (Node.js) | Inspects and strips leading UTF-8 Byte Order Marks (BOM) from target files without altering other bytes. | `node scripts/strip-bom.js <path-to-file>` |
-| `run-suite-current.mjs` | Browser Verification (Playwright / Patchright) | Tests responsive layout rendering across 8 standard viewports (320px, 360px, 375px, 390px, 414px, 768px, 1280px, 1920px). Saves 375px mobile screenshot to `docs/images/screenshot-375.png`. | `node scripts/run-suite-current.mjs` |
-| `test-mobile-ui-check.mjs` | Browser Verification (Playwright / Patchright) | Automates mobile (375×667) and desktop (1280×800) verification: room creation, color selection, floating chat toggling, tab switching, and indicator geometry. Saves verified captures to `docs/images/mobile-gameplay.png` and `docs/images/desktop-gameplay.png`. | `node scripts/test-mobile-ui-check.mjs` |
+| `run-suite-current.mjs` | Browser Verification (Playwright / Patchright) | Tests responsive layout rendering across 8 standard viewports (320px, 360px, 375px, 390px, 414px, 768px, 1280px, 1920px). | `node scripts/run-suite-current.mjs` |
+| `test-mobile-ui-check.mjs` | Browser Verification (Playwright / Patchright) | Automates mobile (375×667) and desktop (1280×800) verification: room creation, color selection, floating chat toggling, tab switching, and indicator geometry. | `node scripts/test-mobile-ui-check.mjs` |
 | `test-chat-btn.mjs` | Browser Verification (Playwright / Patchright) | Verifies computed bounding box, visibility, and layout position of the mobile floating chat button across tabs. | `node scripts/test-chat-btn.mjs` |
 | `test-probe.mjs` | Browser Verification (Playwright / Patchright) | Fast browser probe verifying frontend connectivity and document title. | `node scripts/test-probe.mjs` |
 
