@@ -2,14 +2,11 @@
 
 A real-time multiplayer board game built with Next.js, TypeScript, Node.js, Express, and Socket.IO. The application supports multiplayer rooms, property management, auctions, trading, and server-authoritative game actions.
 
-<img width="959" height="471" alt="image" src="https://github.com/user-attachments/assets/80d29338-9fca-4243-8d14-184434ba3b91" />
-
-
 **[Live Demo](https://monopoly-pied-seven.vercel.app/) · [Source Code](https://github.com/Cykshi/monopoly-) · [Report an Issue](https://github.com/Cykshi/monopoly-/issues)**
 
 ## Gameplay
 
-![Monopoly Online Gameplay](docs/images/gameplay.png)
+<img width="959" height="471" alt="image" src="https://github.com/user-attachments/assets/80d29338-9fca-4243-8d14-184434ba3b91" />
 
 ## Key Features
 
