@@ -5,6 +5,7 @@ import { io, Socket } from "socket.io-client";
 import Flag from "react-world-flags";
 import DiceScene from "@/app/dice";
 import { computeRestoredState, type PlayerRestoreState } from "@/lib/restore-state";
+import { computeIsMyTurn, computeTurnControls } from "@/lib/turn-state";
 
 interface Tile {
   id: number;
@@ -686,9 +687,10 @@ export default function GameBoard() {
   const currentPlayer = useMemo(() => players.find((p) => p.isCurrentPlayer), [players]);
   const alivePlayers = useMemo(() => players.filter((p) => !p.isBankrupt), [players]);
   const myPlayer = useMemo(
-    () => (myPlayerId !== null ? players.find((p) => p.id === myPlayerId) : null) ?? currentPlayer,
-    [players, myPlayerId, currentPlayer]
+    () => (myPlayerId !== null ? players.find((p) => p.id === myPlayerId) ?? null : null),
+    [players, myPlayerId]
   );
+  const isMyTurn = computeIsMyTurn(roomId, myPlayerId, currentPlayer?.id);
 
   const normalizePlayerNames = (list: Player[]) =>
     list.map((p) => ({
@@ -952,6 +954,7 @@ export default function GameBoard() {
         jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : (local.jailTurns ?? 0),
         isBankrupt: local.isBankrupt ?? next.isBankrupt,
         isResting: local.isResting ?? next.isResting,
+        isCurrentPlayer: typeof next.isCurrentPlayer === "boolean" ? next.isCurrentPlayer : (local.isCurrentPlayer ?? false),
       };
     });
   };
@@ -971,10 +974,18 @@ export default function GameBoard() {
       // Merge, not replace: the server's roster is money-stubbed to $0 and must
       // never clobber a live balance (see mergeServerRoster).
       const merged = mergeServerRoster(next.players, playersRef.current);
-      setPlayers(merged);
+      if (next.currentTurnPlayerId !== null) {
+        const turnId = next.currentTurnPlayerId;
+        setPlayers(merged.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
+      } else {
+        setPlayers(merged);
+      }
       // NOTE: no manual `playersRef.current = merged` here. The ref is kept in
       // sync by a single effect watching `players` (see below), so writing it
       // from a handler as well was redundant and a way for the two to drift.
+    } else if (next.currentTurnPlayerId !== null) {
+      const turnId = next.currentTurnPlayerId;
+      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
@@ -987,10 +998,9 @@ export default function GameBoard() {
     // Adopt the server's turn clock so the rejoin repaints the correct turn and
     // countdown immediately, rather than waiting for the next turn:changed.
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
-    if (next.currentTurnPlayerId !== null) {
-      const turnId = next.currentTurnPlayerId;
-      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
-    }
+    setGamePhase("YOUR TURN");
+    setIsRolling(false);
+    setIsMoving(false);
 
     // A restored (i.e.-started) room means the game is in progress.
     setIsGameStarted(next.isGameStarted);
@@ -1027,8 +1037,16 @@ export default function GameBoard() {
       // Merge so board facts get corrected WITHOUT resetting balances to the
       // server's money stub.
       const merged = mergeServerRoster(next.players, playersRef.current);
-      setPlayers(merged);
+      if (next.currentTurnPlayerId !== null) {
+        const turnId = next.currentTurnPlayerId;
+        setPlayers(merged.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
+      } else {
+        setPlayers(merged);
+      }
       // Ref synced by the `players` effect, as above.
+    } else if (next.currentTurnPlayerId !== null) {
+      const turnId = next.currentTurnPlayerId;
+      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
@@ -1038,10 +1056,6 @@ export default function GameBoard() {
     if (restored.kickVotes) setKickVotes(restored.kickVotes);
     setActiveAuction(next.activeAuction as AuctionState | null);
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
-    if (next.currentTurnPlayerId !== null) {
-      const turnId = next.currentTurnPlayerId;
-      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
-    }
     // deliberately NOT touching myPlayerId or isGameStarted here — this is a
     // drift correction for an already-known player, not an identity restore.
     // The one exception is the server's game-started flag, which is a monotonic
@@ -1308,7 +1322,16 @@ export default function GameBoard() {
     newSocket.on("turn:changed", (data: { currentTurnPlayerId: number | null; turnDeadline?: number | null }) => {
       if (typeof data?.turnDeadline === "number") setTurnDeadline(data.turnDeadline);
       if (typeof data?.currentTurnPlayerId !== "number") return;
-      setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === data.currentTurnPlayerId })));
+      setPlayers((prev) => {
+        const prevTurnId = prev.find((p) => p.isCurrentPlayer)?.id;
+        const turnChanged = prevTurnId !== data.currentTurnPlayerId;
+        if (turnChanged) {
+          setGamePhase("YOUR TURN");
+          setIsRolling(false);
+          setIsMoving(false);
+        }
+        return prev.map((p) => ({ ...p, isCurrentPlayer: p.id === data.currentTurnPlayerId }));
+      });
     });
     // The server's authoritative game-over. Reuses the EXISTING `winner` state
     // and overlay rather than adding a second win UI — the local
@@ -1564,7 +1587,7 @@ export default function GameBoard() {
 
     // Room membership: the server is the source of truth for the code, the
     // host/guest role and how many peers are currently connected.
-    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; token?: string; connectedCount?: number; playerState?: PlayerRestoreState | null; state?: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null } }) => {
+    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; token?: string; connectedCount?: number; playerState?: PlayerRestoreState | null; state?: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null; currentTurnPlayerId?: number | null; turnDeadline?: number | null } }) => {
       setRoomId(data.roomId);
       setRoomRole(data.role);
       setPeerCount(data.connectedCount ?? 1);
@@ -1572,11 +1595,18 @@ export default function GameBoard() {
       // what makes a late joiner see colours and names already taken — without
       // this, someone who joins after the host picked a colour would be shown a
       // fully-available palette until the next room:players broadcast.
+      const turnId = typeof data.state?.currentTurnPlayerId === "number" ? data.state.currentTurnPlayerId : null;
       if (Array.isArray(data.state?.players)) {
-        setPlayers((prev) => mergeServerRoster(data.state!.players!, prev));
+        setPlayers((prev) => {
+          const merged = mergeServerRoster(data.state!.players!, prev);
+          return turnId !== null ? merged.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })) : merged;
+        });
+      } else if (turnId !== null) {
+        setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
       }
       if (typeof data.state?.isGameStarted === "boolean") setServerGameStarted(data.state.isGameStarted);
       if (typeof data.state?.maxPlayers === "number") setMaxPlayers(data.state.maxPlayers);
+      if (typeof data.state?.turnDeadline === "number") setTurnDeadline(data.state.turnDeadline);
       // Persist the server-issued session token keyed by room code so a refresh
       // can rejoin the same player instead of becoming a stranger.
       if (data.token) saveSessionToken(data.roomId, data.token);
@@ -1620,11 +1650,18 @@ export default function GameBoard() {
     // re-renders its picker from it, which is how a swatch greys out the instant
     // someone else claims it. It also carries isGameStarted, so the lock arrives
     // from the server rather than being inferred locally.
-    newSocket.on("room:players", (data: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null }) => {
+    newSocket.on("room:players", (data: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null; currentTurnPlayerId?: number | null; turnDeadline?: number | null }) => {
       if (typeof data?.maxPlayers === "number") setMaxPlayers(data.maxPlayers);
       if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
+      if (typeof data?.turnDeadline === "number") setTurnDeadline(data.turnDeadline);
+      const turnId = typeof data?.currentTurnPlayerId === "number" ? data.currentTurnPlayerId : null;
       if (Array.isArray(data?.players)) {
-        setPlayers((prev) => mergeServerRoster(data.players!, prev));
+        setPlayers((prev) => {
+          const merged = mergeServerRoster(data.players!, prev);
+          return turnId !== null ? merged.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })) : merged;
+        });
+      } else if (turnId !== null) {
+        setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
       }
       if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
 
@@ -2680,7 +2717,7 @@ export default function GameBoard() {
   };
 
   const rollDice = () => {
-    if (isRolling || isMoving || gamePhase !== "YOUR TURN" || winner) return;
+    if (!isMyTurn || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner) return;
     if (currentPlayer?.isResting) {
       addLog(`${currentPlayer.name} is resting and cannot play this turn.`);
       return;
@@ -2708,8 +2745,8 @@ export default function GameBoard() {
     // will move the player by — a client cannot "roll" a 12 any more than it can
     // move itself. The optimistic local roll that used to sit here was the hole
     // this closes.
-    const roller = currentPlayer;
-    if (!roller) return;
+    const roller = myPlayer;
+    if (!roller || roller.id !== currentPlayer?.id) return;
 
     setIsRolling(true);
     setGamePhase("ROLLING...");
@@ -2801,7 +2838,7 @@ export default function GameBoard() {
   };
 
   const payBail = () => {
-    if (!currentPlayer || currentPlayer.isResting || !currentPlayer.inJail || gamePhase !== "YOUR TURN" || winner) return;
+    if (!isMyTurn || !currentPlayer || currentPlayer.isResting || !currentPlayer.inJail || gamePhase !== "YOUR TURN" || winner) return;
     const bail = 100;
     if (currentPlayer.money < bail) {
       addLog(`${currentPlayer.name} can't afford the $${bail} bail.`);
@@ -2841,13 +2878,13 @@ export default function GameBoard() {
   };
 
   const openSkillCard = () => {
-    if (!enableMovementCards || !hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner || currentPlayer?.inJail || currentPlayer?.isResting) return;
+    if (!isMyTurn || !enableMovementCards || !hasSkillCard || isRolling || isMoving || gamePhase !== "YOUR TURN" || winner || currentPlayer?.inJail || currentPlayer?.isResting) return;
     setShowCardSelector(true);
     setSelectedCardValue(null);
   };
 
   const confirmSkillCard = () => {
-    if (!selectedCardValue || !hasSkillCard) return;
+    if (!isMyTurn || !selectedCardValue || !hasSkillCard) return;
     if (!isGameStarted) {
       // Same rule as the explicit Start button and the roll path: the card use
       // would open the game, so a lone player must not be able to start it.
@@ -2872,14 +2909,14 @@ export default function GameBoard() {
   };
 
   const endTurn = () => {
-    if (winner) return;
+    if (!isMyTurn || winner) return;
     if (gamePhase !== "ACTION" && gamePhase !== "END TURN") return;
 
     // Tell the server our turn is over. The SERVER decides whether that's legal
     // (only the player on turn may end it) and advances the authoritative turn
     // itself, broadcasting turn:changed so everyone repaints from truth. We do
     // NOT trust our local flag to decide who plays next.
-    socketRef.current?.emit("turn:ended", { playerId: currentPlayer?.id });
+    socketRef.current?.emit("turn:ended", { playerId: myPlayer?.id ?? currentPlayer?.id });
 
     setPlayers((prev) => {
       const currentIdx = prev.findIndex((p) => p.isCurrentPlayer);
@@ -4296,76 +4333,101 @@ export default function GameBoard() {
             </div>
 
             {/* Turn Phase Indicator - smaller and compact on mobile (320-414px) */}
-            <div className="mt-0.5 mb-0.5 md:my-[0.3vmin]">
-              <div
-                className={`mx-auto w-fit rounded-full border px-1.5 py-0.5 sm:px-2 sm:py-0.5 md:px-[1.8vmin] md:py-[0.4vmin] text-[6.5px] min-[380px]:text-[7.5px] sm:text-[9px] md:text-[1.1vmin] font-black uppercase tracking-wider md:tracking-widest ${gamePhase === "YOUR TURN"
-                    ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
-                    : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
-                      ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
-                      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                  }`}
-              >
-                {gamePhase}
-              </div>
-            </div>
-
-            {/* 3D Dice - back to its original size */}
-            <div className="-mt-1 mb-1 md:-mt-2 md:mb-2 flex justify-center">
-              <DiceScene dice={dice} rollTrigger={rollTrigger} onSettled={handleDiceSettled} />
-            </div>
-
-            {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
-            <div className="flex h-11 sm:h-14 md:h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-2 sm:px-3 md:px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center md:-translate-y-[3.5vmin]">
-              <div className="w-full overflow-hidden">
-                {actionLog.slice(0, 3).map((msg, i) => (
-                  <p key={i} className={`w-full overflow-hidden text-[10px] sm:text-xs md:text-[1.55vmin] leading-snug truncate ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
-                    {renderLogMessage(msg)}
-                  </p>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex w-full max-w-[44vmin] gap-1 sm:gap-1.5 md:gap-[1.2vmin] md:-translate-y-[3.5vmin]">
-              {gamePhase === "YOUR TURN" ? (
+            {(() => {
+              const turnControls = computeTurnControls({
+                isMyTurn,
+                gamePhase,
+                isRolling,
+                isMoving,
+                currentPlayerName: currentPlayer?.name,
+                currentPlayerId: currentPlayer?.id,
+                hasWinner: Boolean(winner),
+              });
+              return (
                 <>
-                  {currentPlayer?.inJail && (
-                    <button
-                      onClick={payBail}
-                      disabled={(currentPlayer.money ?? 0) < 100}
-                      className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-1 sm:py-2 md:py-[1.6vmin] px-1 sm:px-2 md:px-2 text-[10px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  <div className="mt-0.5 mb-0.5 md:my-[0.3vmin]">
+                    <div
+                      className={`mx-auto w-fit rounded-full border px-1.5 py-0.5 sm:px-2 sm:py-0.5 md:px-[1.8vmin] md:py-[0.4vmin] text-[6.5px] min-[380px]:text-[7.5px] sm:text-[9px] md:text-[1.1vmin] font-black uppercase tracking-wider md:tracking-widest ${
+                        !isMyTurn
+                          ? "border-white/10 bg-white/5 text-gray-400"
+                          : gamePhase === "YOUR TURN"
+                            ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
+                            : gamePhase === "MOVING..." || gamePhase === "ROLLING..."
+                              ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+                              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      }`}
                     >
-                      🔓 Pay $100
-                    </button>
-                  )}
+                      {turnControls.badgeText}
+                    </div>
+                  </div>
 
-                  <button
-                    onClick={rollDice}
-                    disabled={isRolling || isMoving}
-                    className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-                  >
-                    {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll 2x" : "🎲 Roll"}
-                  </button>
+                  {/* 3D Dice - back to its original size */}
+                  <div className="-mt-1 mb-1 md:-mt-2 md:mb-2 flex justify-center">
+                    <DiceScene dice={dice} rollTrigger={rollTrigger} onSettled={handleDiceSettled} />
+                  </div>
 
-                  {!currentPlayer?.inJail && enableMovementCards && (
-                    <button
-                      onClick={openSkillCard}
-                      disabled={!hasSkillCard || isRolling || isMoving}
-                      className="no-touch-target relative flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-                    >
-                      {hasSkillCard ? "🃏 Card" : "Exhausted"}
-                    </button>
-                  )}
+                  {/* Action Log - money amounts highlighted: +$ gains green, -$ losses red */}
+                  <div className="flex h-11 sm:h-14 md:h-[8.5vmin] w-full max-w-[42vmin] flex-col items-center justify-start overflow-hidden rounded-[1vmin] border border-white/5 bg-black/40 px-2 sm:px-3 md:px-[1.5vmin] pb-[0.3vmin] pt-[0.3vmin] text-center md:-translate-y-[3.5vmin]">
+                    <div className="w-full overflow-hidden">
+                      {actionLog.slice(0, 3).map((msg, i) => (
+                        <p key={i} className={`w-full overflow-hidden text-[10px] sm:text-xs md:text-[1.55vmin] leading-snug truncate ${i === 0 ? "text-gray-100" : "text-gray-500"}`}>
+                          {renderLogMessage(msg)}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex w-full max-w-[44vmin] gap-1 sm:gap-1.5 md:gap-[1.2vmin] md:-translate-y-[3.5vmin]">
+                    {turnControls.showRollButton ? (
+                      <>
+                        {currentPlayer?.inJail && (
+                          <button
+                            onClick={payBail}
+                            disabled={(currentPlayer.money ?? 0) < 100}
+                            className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-1 sm:py-2 md:py-[1.6vmin] px-1 sm:px-2 md:px-2 text-[10px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                          >
+                            🔓 Pay $100
+                          </button>
+                        )}
+
+                        <button
+                          onClick={rollDice}
+                          disabled={!turnControls.canRoll}
+                          className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-indigo-600 to-purple-600 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                        >
+                          {isRolling ? "Rolling..." : currentPlayer?.inJail ? "🎲 Roll 2x" : "🎲 Roll"}
+                        </button>
+
+                        {!currentPlayer?.inJail && enableMovementCards && (
+                          <button
+                            onClick={openSkillCard}
+                            disabled={!hasSkillCard || isRolling || isMoving}
+                            className="no-touch-target relative flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                          >
+                            {hasSkillCard ? "🃏 Card" : "Exhausted"}
+                          </button>
+                        )}
+                      </>
+                    ) : turnControls.showEndTurnButton ? (
+                      <button
+                        onClick={endTurn}
+                        disabled={!turnControls.canEndTurn}
+                        className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/15 bg-white/10 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
+                      >
+                        End Turn
+                      </button>
+                    ) : (
+                      <button
+                        disabled
+                        className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/10 bg-white/5 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-gray-400 cursor-not-allowed opacity-60"
+                      >
+                        {turnControls.waitingText}
+                      </button>
+                    )}
+                  </div>
                 </>
-              ) : (
-                <button
-                  onClick={endTurn}
-                  disabled={gamePhase !== "ACTION" && gamePhase !== "END TURN"}
-                  className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/15 bg-white/10 py-1 sm:py-2 md:py-[1.6vmin] px-1.5 sm:px-2 md:px-2 text-[11px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-gray-300 transition hover:bg-white/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
-                >
-                  End Turn
-                </button>
-              )}
-            </div>
+              );
+            })()}
           </div>
 
           {/* ================= PROPERTY MODAL ================= */}
