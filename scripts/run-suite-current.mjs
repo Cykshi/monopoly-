@@ -1,6 +1,14 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const imagesDir = join(__dirname, '../docs/images');
+if (!existsSync(imagesDir)) {
+  mkdirSync(imagesDir, { recursive: true });
+}
 
 const req = createRequire(join(homedir(), '.vscode/extensions/danielsanmedium.dscodegpt-3.24.77/standalone/'));
 const { chromium } = req('patchright');
@@ -85,7 +93,7 @@ async function testAllViewports() {
       const docW = document.documentElement.scrollWidth;
       const winW = window.innerWidth;
       const bodyW = document.body.scrollWidth;
-      
+
       const elements = Array.from(document.querySelectorAll('*'));
       const overflowing = [];
       for (const el of elements) {
@@ -143,7 +151,7 @@ async function testAllViewports() {
 
     // Take screenshot for visual inspection on 375px
     if (vp.width === 375) {
-      await page.screenshot({ path: 'screenshot-375-current.png' });
+      await page.screenshot({ path: join(imagesDir, 'screenshot-375.png') });
     }
 
     console.log(`=== VIEWPORT: ${vp.name} (${vp.width}x${vp.height}) ===`);

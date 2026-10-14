@@ -1,6 +1,12 @@
 // Report which markers of which UI state are present in page.tsx.
 const fs = require('fs');
-const s = fs.readFileSync('frontend/app/page.tsx', 'utf8');
+const path = require('path');
+
+const targetPath = fs.existsSync('frontend/app/page.tsx')
+  ? 'frontend/app/page.tsx'
+  : path.resolve(__dirname, '../frontend/app/page.tsx');
+
+const s = fs.readFileSync(targetPath, 'utf8');
 
 const checks = [
   ['full-screen lobby GATE (fixed inset-0)', 'fixed inset-0 z-[9999] flex items-center justify-center'],

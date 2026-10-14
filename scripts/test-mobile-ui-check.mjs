@@ -1,6 +1,14 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const imagesDir = join(__dirname, '../docs/images');
+if (!existsSync(imagesDir)) {
+  mkdirSync(imagesDir, { recursive: true });
+}
 
 const req = createRequire(join(homedir(), '.vscode/extensions/danielsanmedium.dscodegpt-3.24.77/standalone/'));
 const { chromium } = req('patchright');
@@ -118,8 +126,9 @@ async function runMobileVerification() {
   await page.waitForTimeout(400);
 
   // Take screenshot
-  await page.screenshot({ path: 'screenshot-mobile-verified.png' });
-  console.log('Saved mobile screenshot: screenshot-mobile-verified.png');
+  const mobileShot = join(imagesDir, 'mobile-gameplay.png');
+  await page.screenshot({ path: mobileShot });
+  console.log(`Saved mobile screenshot: ${mobileShot}`);
   await context.close();
 
   // Desktop check
@@ -149,8 +158,9 @@ async function runMobileVerification() {
   });
 
   console.log('Desktop layout check:', dMetrics);
-  await dPage.screenshot({ path: 'screenshot-desktop-verified.png' });
-  console.log('Saved desktop screenshot: screenshot-desktop-verified.png');
+  const desktopShot = join(imagesDir, 'desktop-gameplay.png');
+  await dPage.screenshot({ path: desktopShot });
+  console.log(`Saved desktop screenshot: ${desktopShot}`);
   await dContext.close();
 
   await browser.close();
