@@ -86,3 +86,42 @@ body::-webkit-scrollbar {
     max-height: calc(100dvh - 16px);
   }
 }
+
+/* Game settings panel custom scrollbar */
+.settings-scrollbar,
+.bg-\[\#0d1b22\] > .overflow-y-auto,
+div[class*="bg-[#0d1b22]"] > div[class*="overflow-y-auto"] {
+  scrollbar-width: thin;
+  scrollbar-color: #0891b2 #0d1b22;
+}
+
+.settings-scrollbar::-webkit-scrollbar,
+.bg-\[\#0d1b22\] > .overflow-y-auto::-webkit-scrollbar,
+div[class*="bg-[#0d1b22]"] > div[class*="overflow-y-auto"]::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings-scrollbar::-webkit-scrollbar-track,
+.bg-\[\#0d1b22\] > .overflow-y-auto::-webkit-scrollbar-track,
+div[class*="bg-[#0d1b22]"] > div[class*="overflow-y-auto"]::-webkit-scrollbar-track {
+  background: #0d1b22;
+  border-radius: 9999px;
+}
+
+.settings-scrollbar::-webkit-scrollbar-thumb,
+.bg-\[\#0d1b22\] > .overflow-y-auto::-webkit-scrollbar-thumb,
+div[class*="bg-[#0d1b22]"] > div[class*="overflow-y-auto"]::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #0891b2, #0d9488);
+  border-radius: 9999px;
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  box-shadow: 0 0 6px rgba(34, 211, 238, 0.35);
+}
+
+.settings-scrollbar::-webkit-scrollbar-thumb:hover,
+.bg-\[\#0d1b22\] > .overflow-y-auto::-webkit-scrollbar-thumb:hover,
+div[class*="bg-[#0d1b22]"] > div[class*="overflow-y-auto"]::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #06b6d4, #14b8a6);
+  border-color: rgba(34, 211, 238, 0.8);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.7);
+}
+
