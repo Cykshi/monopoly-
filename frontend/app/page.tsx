@@ -1,4 +1,4 @@
-﻿"use client";
+﻿﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
@@ -517,6 +517,10 @@ export default function GameBoard() {
   const isConnectedRef = useRef(false);
   const [connectionLabel, setConnectionLabel] = useState("Connecting...");
   const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copyLinkFailed, setCopyLinkFailed] = useState(false);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const autoJoinAttemptedRef = useRef(false);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomRole, setRoomRole] = useState<"host" | "guest" | null>(null);
   const [peerCount, setPeerCount] = useState(1);
@@ -828,24 +832,64 @@ export default function GameBoard() {
   // that did not exist yet.
   const SESSION_STORAGE_PREFIX = "monopoly:session:";
   const LAST_ROOM_KEY = "monopoly:last-room";
+  const PLAYER_NAME_KEY = "monopoly:player-name";
 
-  // On first mount, remember the last room code so the socket effect below can
-  // ATTEMPT a player:rejoin as soon as it connects. We deliberately do NOT set
-  // roomId here: being "in a room" is only true once the server accepts us, and
-  // assuming it up front briefly shows a room the server may have already ended.
-  // If the rejoin is refused, the app stays cleanly at the lobby.
+  // Reflect room code in the browser URL query parameter without triggering full page reload.
+  const updateBrowserUrlWithRoom = useCallback((code: string | null) => {
+    if (typeof window === "undefined") return;
+    try {
+      const url = new URL(window.location.href);
+      if (code) {
+        url.searchParams.set("room", code);
+      } else {
+        url.searchParams.delete("room");
+        url.searchParams.delete("code");
+        url.searchParams.delete("join");
+      }
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const savePlayerName = (name: string) => {
+    try {
+      window.localStorage.setItem(PLAYER_NAME_KEY, name);
+    } catch {
+      // ignore
+    }
+  };
+
+  // On first mount:
+  // 1. Remember the last room code so the socket effect can attempt player:rejoin.
+  // 2. Pre-fill any saved player name from previous sessions.
+  // 3. Detect and validate invite parameters from the URL (?room=... / ?code=... / ?join=...).
   useEffect(() => {
     try {
       const lastRoom = window.localStorage.getItem(LAST_ROOM_KEY);
       if (lastRoom) socketRoomRef.current = lastRoom;
+      const savedName = window.localStorage.getItem(PLAYER_NAME_KEY);
+      if (savedName) setEntryName((prev) => prev || savedName.slice(0, PLAYER_NAME_MAX));
     } catch {
       // ignore
     }
-    // Runs ONCE on mount by design: this only restores the room code the socket
-    // effect should attempt a rejoin against. LAST_ROOM_KEY is a module-level
-    // constant, so listing it is stable and satisfies exhaustive-deps without a
-    // suppression comment.
-  }, [LAST_ROOM_KEY]);
+
+    if (typeof window !== "undefined") {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const raw = params.get("room") || params.get("code") || params.get("join");
+        if (raw) {
+          const clean = raw.trim().toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6);
+          if (clean) {
+            setJoinCode(clean);
+            setInviteCode(clean);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }, [LAST_ROOM_KEY, PLAYER_NAME_KEY]);
 
   const rememberLastRoom = (room: string) => {
     try {
@@ -1039,6 +1083,8 @@ export default function GameBoard() {
     setIsRolling(false);
     setIsMoving(false);
     setGamePhase("YOUR TURN");
+    updateBrowserUrlWithRoom(null);
+    setInviteCode(null);
   };
 
   useEffect(() => {
@@ -1091,6 +1137,7 @@ export default function GameBoard() {
               // it here too so state is repainted even if event ordering varies.
               if (res.playerState) applyRestoredState(res.playerState);
               setConnectionLabel("Connected • Rejoined room");
+              updateBrowserUrlWithRoom(currentRoom);
               // Supplement (not replace) player:rejoin: the rejoin restores our
               // identity; a follow-up sync makes the board/ownership/turn state
               // match the server even if some broadcast was missed mid-session.
@@ -1534,6 +1581,7 @@ export default function GameBoard() {
       // can rejoin the same player instead of becoming a stranger.
       if (data.token) saveSessionToken(data.roomId, data.token);
       rememberLastRoom(data.roomId);
+      updateBrowserUrlWithRoom(data.roomId);
       // On a rejoin the server also hands back this player's live state —
       // repaint the board from it rather than keeping the blank defaults.
       if (data.playerState) applyRestoredState(data.playerState);
@@ -1711,41 +1759,83 @@ export default function GameBoard() {
         setLobbyError(res?.error || "Could not create a room.");
         return;
       }
-      if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
+      if (res.roomId && res.token) {
+        saveSessionToken(res.roomId, res.token);
+        rememberLastRoom(res.roomId);
+        updateBrowserUrlWithRoom(res.roomId);
+      }
+      savePlayerName(name);
       // Straight into the colour step — no colour is held yet. The picker is
       // shown because our own colour is still null, not because of a flag.
     });
   };
 
-  const handleJoinRoom = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const s = socketRef.current;
-    if (!s) {
-      setLobbyError("Not connected to the server yet. Please wait a moment.");
-      return;
-    }
-    const wanted = joinCode.trim().toUpperCase();
-    if (!wanted) {
-      setLobbyError("Enter a room code to join.");
-      return;
-    }
-    const name = entryName.trim().slice(0, PLAYER_NAME_MAX);
-    if (!name) {
-      setLobbyError("Enter your name first.");
-      return;
-    }
-    setLobbyBusy(true);
-    setLobbyError(null);
-    s.emit("room:join", { roomId: wanted, name }, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
-      setLobbyBusy(false);
-      if (!res || !res.ok) {
-        setLobbyError(res?.error || `No room found with code ${wanted}.`);
+  const handleJoinRoom = useCallback(
+    (e?: React.FormEvent, roomCodeOverride?: string, playerNameOverride?: string) => {
+      if (e) e.preventDefault();
+      const s = socketRef.current;
+      if (!s) {
+        setLobbyError("Not connected to the server yet. Please wait a moment.");
         return;
       }
-      if (res.roomId && res.token) saveSessionToken(res.roomId, res.token);
-      setJoinCode("");
-    });
-  };
+      const wanted = (roomCodeOverride || joinCode).trim().toUpperCase();
+      if (!wanted) {
+        setLobbyError("Enter a room code to join.");
+        return;
+      }
+      const name = (playerNameOverride || entryName).trim().slice(0, PLAYER_NAME_MAX);
+      if (!name) {
+        setLobbyError("Enter your name first.");
+        return;
+      }
+      setLobbyBusy(true);
+      setLobbyError(null);
+      s.emit("room:join", { roomId: wanted, name }, (res: { ok: boolean; roomId?: string; token?: string; error?: string }) => {
+        setLobbyBusy(false);
+        if (!res || !res.ok) {
+          setLobbyError(res?.error || `No room found with code ${wanted}.`);
+          return;
+        }
+        if (res.roomId && res.token) {
+          saveSessionToken(res.roomId, res.token);
+          rememberLastRoom(res.roomId);
+          updateBrowserUrlWithRoom(res.roomId);
+        }
+        savePlayerName(name);
+        setJoinCode("");
+      });
+    },
+    [joinCode, entryName, updateBrowserUrlWithRoom]
+  );
+
+  // If arrived via invite link with confirmed room code and saved player name,
+  // automatically proceed to join once socket connection is ready.
+  useEffect(() => {
+    if (
+      autoJoinAttemptedRef.current ||
+      !inviteCode ||
+      roomId ||
+      lobbyBusy ||
+      !isConnected ||
+      !entryName.trim()
+    ) {
+      return;
+    }
+
+    const existingToken = loadSessionToken(inviteCode);
+    if (existingToken) {
+      // Reconnect handled via player:rejoin in handleConnect
+      return;
+    }
+
+    const currentRoom = socketRoomRef.current;
+    if (currentRoom && currentRoom !== inviteCode && loadSessionToken(currentRoom)) {
+      return;
+    }
+
+    autoJoinAttemptedRef.current = true;
+    handleJoinRoom(undefined, inviteCode, entryName);
+  }, [inviteCode, roomId, lobbyBusy, isConnected, entryName, handleJoinRoom]);
 
   // Ask the server to take a colour. The server is the authority: it refuses a
   // colour someone else already holds (COLOR_TAKEN), which is the ONLY correct
@@ -1837,16 +1927,61 @@ export default function GameBoard() {
   // not hoisted, so defining it after the effect left the effect closing over a
   // binding that did not exist yet when the callback ran.
 
+  const getInviteUrl = useCallback((code: string): string => {
+    if (typeof window === "undefined") return "";
+    return `${window.location.origin}/?room=${encodeURIComponent(code)}`;
+  }, []);
+
   const handleCopyRoomCode = async () => {
     if (!roomId) return;
     try {
-      await navigator.clipboard.writeText(roomId);
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(roomId);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = roomId;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const success = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!success) throw new Error("Copy failed");
+      }
       setCopiedCode(true);
       window.setTimeout(() => setCopiedCode(false), 1600);
     } catch {
       // Clipboard access can be blocked (insecure origin / denied permission).
       // The code is displayed on screen regardless, so this is non-fatal.
       setCopiedCode(false);
+    }
+  };
+
+  const handleCopyInviteLink = async () => {
+    if (!roomId) return;
+    const url = getInviteUrl(roomId);
+    if (!url) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = url;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const success = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!success) throw new Error("Copy failed");
+      }
+      setCopiedLink(true);
+      setCopyLinkFailed(false);
+      window.setTimeout(() => setCopiedLink(false), 2000);
+    } catch {
+      setCopyLinkFailed(true);
+      setCopiedLink(false);
+      window.setTimeout(() => setCopyLinkFailed(false), 2500);
     }
   };
 
@@ -1863,6 +1998,8 @@ export default function GameBoard() {
     // Full wipe, not a partial one: leaving ends this session, so the next room
     // must not inherit our old players/colour/game flags.
     resetToFreshSession();
+    updateBrowserUrlWithRoom(null);
+    setInviteCode(null);
     setConnectionLabel("Connected • Choose a room");
   };
 
@@ -3435,10 +3572,39 @@ export default function GameBoard() {
               <span className="h-[1px] md:h-[0.1vmin] flex-1 bg-white/12" />
             </div>
 
+            {inviteCode && (
+              <div className="mb-2.5 md:mb-[1.2vmin] flex items-center justify-between rounded-xl border border-cyan-400/50 bg-cyan-500/15 px-3 py-2 md:px-[1.4vmin] md:py-[1vmin] text-cyan-200 shadow-[0_0_15px_rgba(34,211,238,0.2)]">
+                <div className="flex items-center gap-1.5 md:gap-[0.6vmin]">
+                  <span className="text-base md:text-[1.8vmin]">🎮</span>
+                  <span className="text-xs md:text-[1.15vmin] font-bold">
+                    Invited to Room <span className="font-mono font-black text-white">{inviteCode}</span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInviteCode(null);
+                    setJoinCode("");
+                    updateBrowserUrlWithRoom(null);
+                  }}
+                  title="Clear invite and enter a different room"
+                  className="text-[10px] md:text-[0.9vmin] font-bold text-gray-400 hover:text-white underline cursor-pointer"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+
             <form onSubmit={handleJoinRoom} className="flex gap-2 md:gap-[0.8vmin]">
               <input
                 value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 6))}
+                onChange={(e) => {
+                  const val = e.target.value.toUpperCase().slice(0, 6);
+                  setJoinCode(val);
+                  if (inviteCode && val !== inviteCode) {
+                    setInviteCode(null);
+                  }
+                }}
                 placeholder="ROOM CODE"
                 maxLength={6}
                 className="min-w-0 flex-1 rounded-xl md:rounded-[1vmin] border border-white/15 bg-black/50 px-3 py-2.5 md:px-[1.4vmin] md:py-[1.2vmin] text-center font-mono text-base md:text-[1.7vmin] font-black uppercase tracking-wider text-cyan-200 placeholder:text-xs md:placeholder:text-[1.2vmin] placeholder:tracking-normal placeholder:text-gray-600 focus:border-cyan-400/70 focus:outline-none"
@@ -3448,7 +3614,7 @@ export default function GameBoard() {
                 disabled={!isConnected || lobbyBusy || !joinCode.trim() || !entryName.trim()}
                 className="shrink-0 flex items-center justify-center min-h-[44px] rounded-xl md:rounded-[1vmin] border border-cyan-400/60 bg-cyan-500/20 px-5 py-2.5 md:px-[2vmin] md:py-[1.2vmin] text-sm md:text-[1.4vmin] font-black uppercase tracking-wide text-cyan-100 shadow-[0_0_2.2vmin_rgba(34,211,238,0.7),0_0_5.5vmin_rgba(34,211,238,0.35)] transition-all hover:scale-[1.02] hover:bg-cyan-500/35 hover:shadow-[0_0_3vmin_rgba(34,211,238,0.9),0_0_8vmin_rgba(34,211,238,0.5)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
               >
-                Join
+                {inviteCode && joinCode.trim() === inviteCode ? "Join Invited Room" : "Join"}
               </button>
             </form>
 
@@ -3476,7 +3642,24 @@ export default function GameBoard() {
             <p className="mt-1 md:mt-[0.6vmin] text-center text-xs md:text-[1.15vmin] font-bold uppercase tracking-widest text-gray-400">
               {entryName.trim() || "Player"} • Room {roomId}
             </p>
-            <p className="mt-0.5 md:mt-[0.5vmin] text-center text-[11px] md:text-[1vmin] font-semibold text-gray-500">
+            <div className="mt-2 md:mt-[0.8vmin] flex justify-center">
+              <button
+                type="button"
+                onClick={handleCopyInviteLink}
+                title="Copy shareable invite link with room code"
+                className={`flex items-center gap-1.5 px-3 py-1.5 md:px-[1.2vmin] md:py-[0.6vmin] rounded-xl border text-xs md:text-[1.1vmin] font-bold transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                  copiedLink
+                    ? "border-emerald-400 bg-emerald-500/20 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.4)]"
+                    : copyLinkFailed
+                    ? "border-amber-400 bg-amber-500/20 text-amber-200"
+                    : "border-purple-400/50 bg-purple-500/15 text-purple-200 hover:border-purple-300 hover:bg-purple-500/25"
+                }`}
+              >
+                <span>{copiedLink ? "✓" : copyLinkFailed ? "⚠️" : "🔗"}</span>
+                <span>{copiedLink ? "Invite Link Copied!" : copyLinkFailed ? "Copy Failed" : "Copy Invite Link"}</span>
+              </button>
+            </div>
+            <p className="mt-1.5 md:mt-[0.8vmin] text-center text-[11px] md:text-[1vmin] font-semibold text-gray-500">
               Greyed-out colours are already taken. Your choice is permanent.
             </p>
 
@@ -5170,30 +5353,52 @@ export default function GameBoard() {
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 md:gap-[0.8vmin]">
-                <button
-                  onClick={handleCopyRoomCode}
-                  title="Copy room code to share"
-                  className="flex min-w-0 flex-1 items-center justify-center gap-1.5 md:gap-[0.8vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] border border-cyan-400/60 bg-cyan-500/15 px-3 py-2 md:px-[1.4vmin] md:py-[1vmin] shadow-md transition-all hover:scale-[1.02] hover:border-cyan-300 hover:bg-cyan-500/25 active:scale-95 cursor-pointer"
-                >
-                  <span className="text-sm md:text-[1.6vmin] leading-none">{copiedCode ? "✓" : "🔑"}</span>
-                  <span className="font-mono text-base md:text-[2vmin] font-black uppercase tracking-wider text-cyan-200">
-                    {copiedCode ? "COPIED" : roomId}
-                  </span>
-                </button>
+              <div className="flex flex-col gap-2 md:gap-[0.7vmin]">
+                <div className="flex items-center gap-2 md:gap-[0.8vmin]">
+                  <button
+                    onClick={handleCopyRoomCode}
+                    title="Copy room code to clipboard"
+                    className="flex min-w-0 flex-1 items-center justify-center gap-1.5 md:gap-[0.8vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] border border-cyan-400/60 bg-cyan-500/15 px-3 py-2 md:px-[1.4vmin] md:py-[1vmin] shadow-md transition-all hover:scale-[1.02] hover:border-cyan-300 hover:bg-cyan-500/25 active:scale-95 cursor-pointer"
+                  >
+                    <span className="text-sm md:text-[1.6vmin] leading-none">{copiedCode ? "✓" : "🔑"}</span>
+                    <span className="font-mono text-base md:text-[2vmin] font-black uppercase tracking-wider text-cyan-200">
+                      {copiedCode ? "COPIED" : roomId}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={handleLeaveRoom}
+                    title="Leave this room and return to the lobby"
+                    className="flex shrink-0 items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] border border-red-400/70 bg-gradient-to-r from-red-500/35 to-red-600/20 px-3.5 py-2 md:px-[1.6vmin] md:py-[1vmin] text-xs md:text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.6vmin_rgba(239,68,68,0.5)] transition-all hover:scale-[1.04] hover:border-red-300 hover:from-red-500/60 hover:to-red-600/40 hover:shadow-[0_0_2.4vmin_rgba(239,68,68,0.85)] active:scale-95 cursor-pointer"
+                  >
+                    <span className="text-sm md:text-[1.7vmin] leading-none">🚪</span>
+                    <span>Leave</span>
+                  </button>
+                </div>
 
                 <button
-                  onClick={handleLeaveRoom}
-                  title="Leave this room and return to the lobby"
-                  className="flex shrink-0 items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] border border-red-400/70 bg-gradient-to-r from-red-500/35 to-red-600/20 px-3.5 py-2 md:px-[1.6vmin] md:py-[1vmin] text-xs md:text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.6vmin_rgba(239,68,68,0.5)] transition-all hover:scale-[1.04] hover:border-red-300 hover:from-red-500/60 hover:to-red-600/40 hover:shadow-[0_0_2.4vmin_rgba(239,68,68,0.85)] active:scale-95 cursor-pointer"
+                  type="button"
+                  onClick={handleCopyInviteLink}
+                  title="Copy shareable invite link with room code"
+                  className={`flex w-full items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[40px] rounded-xl md:rounded-[1vmin] border px-3 py-2 text-xs md:text-[1.2vmin] font-black uppercase tracking-wider transition-all hover:scale-[1.02] active:scale-95 cursor-pointer ${
+                    copiedLink
+                      ? "border-emerald-400 bg-emerald-500/25 text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.5)]"
+                      : copyLinkFailed
+                      ? "border-amber-400 bg-amber-500/25 text-amber-200"
+                      : "border-purple-400/60 bg-gradient-to-r from-purple-600/30 to-indigo-600/30 text-purple-200 shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:border-purple-300 hover:from-purple-600/45 hover:to-indigo-600/45"
+                  }`}
                 >
-                  <span className="text-sm md:text-[1.7vmin] leading-none">🚪</span>
-                  <span>Leave</span>
+                  <span className="text-sm md:text-[1.4vmin] leading-none">
+                    {copiedLink ? "✓" : copyLinkFailed ? "⚠️" : "🔗"}
+                  </span>
+                  <span>
+                    {copiedLink ? "Invite Link Copied!" : copyLinkFailed ? "Copy Failed — Share Code" : "Copy Invite Link"}
+                  </span>
                 </button>
               </div>
 
               <span className="px-1 md:px-[0.3vmin] text-[10px] md:text-[0.95vmin] text-gray-500">
-                Tap the code to copy it and share with friends
+                Share the code or invite link with friends to play together
               </span>
             </div>
           )}

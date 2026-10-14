@@ -149,6 +149,35 @@ const cleanup = async (roomId) => {
   const pl = await peerLeft;
   check('A is told when B leaves the room', !!pl, pl ? JSON.stringify(pl.data) : 'no event');
 
+  // ---- Invite link & room join regression checks ----
+  // 1. Room existence endpoint for active room
+  const existsA = await fetch(`${URL}/api/room/${codeA}/exists`).then((r) => r.json()).catch(() => null);
+  check('REST existence endpoint finds active room', !!(existsA && existsA.exists === true && existsA.roomId === codeA), JSON.stringify(existsA));
+
+  // 2. Room existence endpoint for bogus room code
+  const existsBogus = await fetch(`${URL}/api/room/NOPE99/exists`).then((r) => r.json()).catch(() => null);
+  check('REST existence endpoint returns false for non-existent room', !!(existsBogus && existsBogus.exists === false), JSON.stringify(existsBogus));
+
+  // 3. Joining via invite link code (lowercase query parameter format)
+  const codeLower = codeA.toLowerCase();
+  const joinedD = waitFor(D, 'room:joined');
+  const ackD = await new Promise((resolve) => {
+    D.emit('room:join', { roomId: codeLower, name: 'GuestInvite' }, resolve);
+    setTimeout(() => resolve(null), 2500);
+  });
+  check('D: room:join with lowercase invite parameter acks ok', !!(ackD && ackD.ok && ackD.roomId === codeA), JSON.stringify(ackD));
+  const dEvt = await joinedD;
+  check('D: receives room:joined with normalized uppercase room code', !!(dEvt && dEvt.data && dEvt.data.roomId === codeA));
+
+  // 4. Duplicate room:join while socket is already in a room is rejected
+  const dupJoinD = await new Promise((resolve) => {
+    D.emit('room:join', { roomId: codeA, name: 'GuestInviteDup' }, resolve);
+    setTimeout(() => resolve(null), 2500);
+  });
+  check('D: duplicate room:join is REJECTED with ALREADY_IN_ROOM', !!(dupJoinD && dupJoinD.ok === false && dupJoinD.code === 'ALREADY_IN_ROOM'), JSON.stringify(dupJoinD));
+
+  D.emit('room:leave');
+
   [A, B, C, D].forEach((s) => s.disconnect());
 
   console.log(`\n${results.length - failed}/${results.length} checks passed`);
