@@ -49,6 +49,8 @@ interface PlayerMovedEvent {
   money: number;
   inJail?: boolean;
   jailTurns?: number;
+  consecutiveDoubles?: number;
+  hasExtraTurn?: boolean;
 }
 
 interface RentPaidEvent {
@@ -632,6 +634,9 @@ export default function GameBoard() {
   // can start with any count from 2 up to this, and once this many players have
   // joined the server refuses further joins. Enforced server-side too.
   const [maxPlayers, setMaxPlayers] = useState(6);
+  // Authoritative doubles state
+  const [consecutiveDoubles, setConsecutiveDoubles] = useState(0);
+  const [hasExtraTurn, setHasExtraTurn] = useState(false);
   // Turn Timer state. The AUTHORITATIVE clock lives on the server now: the
   // client only renders a countdown derived from the deadline the server sends
   // (in room:joined / turn:changed). turnTimeLeft is a display value; the client
@@ -1020,6 +1025,8 @@ export default function GameBoard() {
     if (next.trades) setTrades(next.trades);
     if (next.chatMessages) setChatMessages(next.chatMessages);
     setActiveAuction(next.activeAuction as AuctionState | null);
+    if (typeof next.consecutiveDoubles === "number") setConsecutiveDoubles(next.consecutiveDoubles);
+    if (typeof next.hasExtraTurn === "boolean") setHasExtraTurn(next.hasExtraTurn);
     if (next.myPlayerId !== null) setMyPlayerId(next.myPlayerId);
     if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
     if (restored.kickVotes) setKickVotes(restored.kickVotes);
@@ -1104,6 +1111,8 @@ export default function GameBoard() {
       if (typeof next.settings.enableAuction === "boolean") setEnableAuction(next.settings.enableAuction);
       if (typeof next.settings.enableMovementCards === "boolean") setEnableMovementCards(next.settings.enableMovementCards);
     }
+    if (typeof next.consecutiveDoubles === "number") setConsecutiveDoubles(next.consecutiveDoubles);
+    if (typeof next.hasExtraTurn === "boolean") setHasExtraTurn(next.hasExtraTurn);
     setActiveAuction(next.activeAuction as AuctionState | null);
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
     // deliberately NOT touching myPlayerId or isGameStarted here — this is a
@@ -1130,6 +1139,8 @@ export default function GameBoard() {
     setRoomRole(null);
     setPeerCount(1);
     setMyPlayerId(null);
+    setConsecutiveDoubles(0);
+    setHasExtraTurn(false);
     setSessionToken(null);
     sessionTokenRef.current = null;
     // Identity choices, so the picker starts clean.
@@ -1229,6 +1240,8 @@ export default function GameBoard() {
     };
 
     newSocket.on("player:moved", (data: PlayerMovedEvent) => {
+      if (typeof data.consecutiveDoubles === "number") setConsecutiveDoubles(data.consecutiveDoubles);
+      if (typeof data.hasExtraTurn === "boolean") setHasExtraTurn(data.hasExtraTurn);
       setPlayers((prev) =>
         prev.map((p) =>
           p.id === data.playerId
@@ -1353,8 +1366,31 @@ export default function GameBoard() {
     //
     // The `dice`/`total` in this payload are the SERVER's values; they are the
     // only dice the client ever sees now (rollDice no longer rolls locally).
-    newSocket.on("player:rolled", (data: { playerId?: number; dice?: [number, number]; total?: number; seq?: number }) => {
+    newSocket.on("player:rolled", (data: { playerId?: number; dice?: [number, number]; total?: number; seq?: number; isDoubles?: boolean; consecutiveDoubles?: number; hasExtraTurn?: boolean; speeding?: boolean; inJail?: boolean; jailTurns?: number }) => {
       if (!data || !Array.isArray(data.dice) || data.dice.length !== 2) return;
+      if (typeof data.consecutiveDoubles === "number") setConsecutiveDoubles(data.consecutiveDoubles);
+      if (typeof data.hasExtraTurn === "boolean") setHasExtraTurn(data.hasExtraTurn);
+
+      if (data.speeding) {
+        const pId = data.playerId;
+        const player = playersRef.current.find((p) => p.id === pId);
+        const name = player?.name || `Player ${pId}`;
+        addLog(`🚨 ${name} rolled 3 consecutive doubles! Sent straight to JAIL for speeding.`);
+        setPlayers((prev) =>
+          prev.map((p) =>
+            p.id === pId ? { ...p, position: 10, inJail: true, jailTurns: 0, mood: "flat" } : p
+          )
+        );
+        setIsRolling(false);
+        setIsMoving(false);
+        setHasExtraTurn(false);
+        setConsecutiveDoubles(0);
+        if (pId === myPlayerIdRef.current) {
+          setGamePhase("ACTION");
+        }
+        return;
+      }
+
       // Our own roll: the ack already set the dice and triggered the animation,
       // so applying this echo would restart it. Ignore it.
       if (data.playerId === myPlayerIdRef.current) return;
@@ -1369,8 +1405,12 @@ export default function GameBoard() {
     // and adopt the server's turn deadline for the countdown. This is the SAME
     // event whether the turn ended normally or the server forced it on a timeout,
     // so there's nothing to special-case here.
-    newSocket.on("turn:changed", (data: { currentTurnPlayerId: number | null; turnDeadline?: number | null }) => {
+    newSocket.on("turn:changed", (data: { currentTurnPlayerId: number | null; turnDeadline?: number | null; consecutiveDoubles?: number; hasExtraTurn?: boolean }) => {
       if (typeof data?.turnDeadline === "number") setTurnDeadline(data.turnDeadline);
+      if (typeof data?.consecutiveDoubles === "number") setConsecutiveDoubles(data.consecutiveDoubles);
+      else setConsecutiveDoubles(0);
+      if (typeof data?.hasExtraTurn === "boolean") setHasExtraTurn(data.hasExtraTurn);
+      else setHasExtraTurn(false);
       if (typeof data?.currentTurnPlayerId !== "number") return;
       setPlayers((prev) => {
         const prevTurnId = prev.find((p) => p.isCurrentPlayer)?.id;
@@ -1379,6 +1419,8 @@ export default function GameBoard() {
           setGamePhase("YOUR TURN");
           setIsRolling(false);
           setIsMoving(false);
+          setConsecutiveDoubles(0);
+          setHasExtraTurn(false);
         }
         return prev.map((p) => ({ ...p, isCurrentPlayer: p.id === data.currentTurnPlayerId }));
       });
@@ -1665,6 +1707,12 @@ export default function GameBoard() {
       } else if (turnId !== null) {
         setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
       }
+      if (typeof (data.state as { consecutiveDoubles?: number })?.consecutiveDoubles === "number") {
+        setConsecutiveDoubles((data.state as { consecutiveDoubles?: number }).consecutiveDoubles!);
+      }
+      if (typeof (data.state as { hasExtraTurn?: boolean })?.hasExtraTurn === "boolean") {
+        setHasExtraTurn((data.state as { hasExtraTurn?: boolean }).hasExtraTurn!);
+      }
       if (typeof data.state?.isGameStarted === "boolean") setServerGameStarted(data.state.isGameStarted);
       if (typeof data.state?.maxPlayers === "number") setMaxPlayers(data.state.maxPlayers);
       if (typeof data.state?.turnDeadline === "number") setTurnDeadline(data.state.turnDeadline);
@@ -1733,6 +1781,12 @@ export default function GameBoard() {
         });
       } else if (turnId !== null) {
         setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
+      }
+      if (typeof (data as { consecutiveDoubles?: number })?.consecutiveDoubles === "number") {
+        setConsecutiveDoubles((data as { consecutiveDoubles?: number }).consecutiveDoubles!);
+      }
+      if (typeof (data as { hasExtraTurn?: boolean })?.hasExtraTurn === "boolean") {
+        setHasExtraTurn((data as { hasExtraTurn?: boolean }).hasExtraTurn!);
       }
       if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
 
@@ -2196,10 +2250,12 @@ export default function GameBoard() {
           socketRef.current?.emit(
             "player:moved",
             { playerId: player.id, actionId: newActionId() },
-            (res: { ok: boolean; position?: number; from?: number; passedGo?: boolean; code?: string; error?: string; inJail?: boolean; jailTurns?: number } | null) => {
+            (res: { ok: boolean; position?: number; from?: number; passedGo?: boolean; code?: string; error?: string; inJail?: boolean; jailTurns?: number; consecutiveDoubles?: number; hasExtraTurn?: boolean } | null) => {
               // Adopt the server's computed destination. The local walk is only
               // an animation; this is where the token actually is.
               if (res && res.ok && typeof res.position === "number") {
+                if (typeof res.consecutiveDoubles === "number") setConsecutiveDoubles(res.consecutiveDoubles);
+                if (typeof res.hasExtraTurn === "boolean") setHasExtraTurn(res.hasExtraTurn);
                 setPlayers((prev) =>
                   prev.map((p) =>
                     p.id === player.id
@@ -2840,7 +2896,7 @@ export default function GameBoard() {
     socketRef.current?.emit(
       "player:rolled",
       { playerId: roller.id },
-      (res: { ok: boolean; dice?: [number, number]; total?: number; code?: string; error?: string } | null) => {
+      (res: { ok: boolean; dice?: [number, number]; total?: number; isDoubles?: boolean; consecutiveDoubles?: number; hasExtraTurn?: boolean; speeding?: boolean; inJail?: boolean; jailTurns?: number; code?: string; error?: string } | null) => {
         if (!res || !res.ok || !Array.isArray(res.dice)) {
           // The server refused the roll (not our turn, already rolled, etc.).
           // Unwind the optimistic UI so the player is not stuck in "Rolling...".
@@ -2850,6 +2906,24 @@ export default function GameBoard() {
           addLog(`⚠️ Roll refused: ${res?.error || res?.code || "no response"}`);
           return;
         }
+        if (typeof res.consecutiveDoubles === "number") setConsecutiveDoubles(res.consecutiveDoubles);
+        if (typeof res.hasExtraTurn === "boolean") setHasExtraTurn(res.hasExtraTurn);
+
+        if (res.speeding) {
+          addLog(`🚨 ${roller.name} rolled 3 consecutive doubles! Sent straight to JAIL for speeding.`);
+          setPlayers((prev) =>
+            prev.map((p) =>
+              p.id === roller.id ? { ...p, position: 10, inJail: true, jailTurns: 0, mood: "flat" } : p
+            )
+          );
+          setIsRolling(false);
+          setIsMoving(false);
+          setHasExtraTurn(false);
+          setConsecutiveDoubles(0);
+          setGamePhase("ACTION");
+          return;
+        }
+
         // Animate the SERVER's dice.
         setDice([res.dice[0], res.dice[1]]);
         setRollTrigger((value) => value + 1);
@@ -2901,7 +2975,11 @@ export default function GameBoard() {
       return;
     }
 
-    addLog(`Rolled ${total} (${first} + ${second})`);
+    if (isDoubles) {
+      addLog(`Rolled ${total} (${first} + ${second}) — doubles! Extra roll granted.`);
+    } else {
+      addLog(`Rolled ${total} (${first} + ${second})`);
+    }
     animateMovement(total, player.id, broadcast);
   };
 
@@ -2995,6 +3073,9 @@ export default function GameBoard() {
   const endTurn = () => {
     if (!isMyTurn || winner) return;
     if (gamePhase !== "ACTION" && gamePhase !== "END TURN") return;
+
+    setConsecutiveDoubles(0);
+    setHasExtraTurn(false);
 
     // Tell the server our turn is over. The SERVER decides whether that's legal
     // (only the player on turn may end it) and advances the authoritative turn
@@ -4426,6 +4507,8 @@ export default function GameBoard() {
                 currentPlayerName: currentPlayer?.name,
                 currentPlayerId: currentPlayer?.id,
                 hasWinner: Boolean(winner),
+                hasExtraTurn,
+                consecutiveDoubles,
               });
               return (
                 <>

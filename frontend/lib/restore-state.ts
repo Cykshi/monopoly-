@@ -75,6 +75,8 @@ export interface PlayerRestoreState {
   restHousePot?: number;
   kickVotes?: Record<number, number[]>;
   settings?: RestoredRoomSettings;
+  consecutiveDoubles?: number;
+  hasExtraTurn?: boolean;
   // Whether the server considers the game started. Durable server fact, used to
   // lock name/colour editing; absent on older payloads, hence optional.
   isGameStarted?: boolean;
@@ -105,6 +107,8 @@ export interface ComputedRestoredState<
   pot: number | null;
   restHousePot: number | null;
   settings: RestoredRoomSettings | null;
+  consecutiveDoubles: number;
+  hasExtraTurn: boolean;
   isGameStarted: boolean;
   logMessage: string;
 }
@@ -138,6 +142,8 @@ export function computeRestoredState<
     pot: typeof p.pot === "number" ? p.pot : (typeof p.restHousePot === "number" ? p.restHousePot : null),
     restHousePot: typeof p.restHousePot === "number" ? p.restHousePot : (typeof p.pot === "number" ? p.pot : null),
     settings: p.settings ?? null,
+    consecutiveDoubles: typeof p.consecutiveDoubles === "number" ? p.consecutiveDoubles : 0,
+    hasExtraTurn: Boolean(p.hasExtraTurn),
     // A restored payload IS by definition a started game (that's why there was
     // state to restore), so default to true when the server didn't say.
     isGameStarted: p.isGameStarted ?? true,

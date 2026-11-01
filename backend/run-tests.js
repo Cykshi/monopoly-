@@ -82,6 +82,7 @@ const ONLINE_SUITES = [
   'test-bankruptcy-votekick.js',
   'test-turn-synchronization.js',
   'test-game-settings.js',
+  'test-doubles-authority.js',
 ];
 
 const onlyOffline = process.argv.includes('--offline');

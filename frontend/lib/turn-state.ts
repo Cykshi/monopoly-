@@ -21,6 +21,8 @@ export interface TurnControlsParams {
   currentPlayerName?: string | null;
   currentPlayerId?: number | null;
   hasWinner?: boolean;
+  hasExtraTurn?: boolean;
+  consecutiveDoubles?: number;
 }
 
 export interface TurnControlsResult {
@@ -42,6 +44,8 @@ export function computeTurnControls(params: TurnControlsParams): TurnControlsRes
     currentPlayerName,
     currentPlayerId,
     hasWinner = false,
+    hasExtraTurn = false,
+    consecutiveDoubles = 0,
   } = params;
 
   if (!isMyTurn) {
@@ -74,26 +78,34 @@ export function computeTurnControls(params: TurnControlsParams): TurnControlsRes
   // Active player's turn
   if (gamePhase === "YOUR TURN" || gamePhase === "ROLLING..." || gamePhase === "MOVING...") {
     const canRoll = !isRolling && !isMoving && !hasWinner && gamePhase === "YOUR TURN";
+    const badgeText = (consecutiveDoubles > 0 && gamePhase === "YOUR TURN")
+      ? `DOUBLES x${consecutiveDoubles}! ROLL AGAIN`
+      : gamePhase;
     return {
       canRoll,
       canEndTurn: false,
       showRollButton: true,
       showEndTurnButton: false,
       showWaitingState: false,
-      badgeText: gamePhase,
+      badgeText,
       waitingText: "",
     };
   }
 
   // ACTION or END TURN phase
+  const canRollAgain = !hasWinner && !isRolling && !isMoving && hasExtraTurn;
   const canEndTurn = !hasWinner && (gamePhase === "ACTION" || gamePhase === "END TURN");
+  const badgeText = canRollAgain
+    ? (consecutiveDoubles > 0 ? `DOUBLES x${consecutiveDoubles}! ROLL AGAIN` : "DOUBLES! ROLL AGAIN")
+    : gamePhase;
+
   return {
-    canRoll: false,
+    canRoll: canRollAgain,
     canEndTurn,
-    showRollButton: false,
-    showEndTurnButton: true,
+    showRollButton: canRollAgain,
+    showEndTurnButton: !canRollAgain,
     showWaitingState: false,
-    badgeText: gamePhase,
+    badgeText,
     waitingText: "",
   };
 }

@@ -87,6 +87,7 @@ const STARTING_MONEY = 1500;
 const PASS_START_BONUS = 200;
 const LAND_START_BONUS = 300;
 const JAIL_BAIL_COST = 100;
+const JAIL_TILE_ID = 10;
 const CLUB_FEE_PER_CARD = 50;
 const CLUB_FEE_PER_HOUSE = 100;
 const REST_HOUSE_TILE_ID = 20;
@@ -271,6 +272,7 @@ module.exports = {
   CLUB_FEE_PER_HOUSE,
   REST_HOUSE_TILE_ID,
   CLUB_TILE_ID,
+  JAIL_TILE_ID,
   getTile,
   isValidTileId,
   isOwnableTile,

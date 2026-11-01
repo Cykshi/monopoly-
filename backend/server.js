@@ -169,6 +169,9 @@ class GameRoom {
     this.maxPlayers = MAX_PLAYERS_DEFAULT;
     // Authoritative room settings. Initialized with defaults, editable by host in lobby only.
     this.settings = { ...DEFAULT_ROOM_SETTINGS };
+    // Authoritative consecutive doubles counter and extra-turn flag (Monopoly doubles rule)
+    this.consecutiveDoubles = 0;
+    this.hasExtraTurn = false;
     // Set when the game is over and who won. `isGameOver` is the single flag the
     // turn clock checks, so a finished game can never keep ticking.
     this.winnerId = null;
@@ -444,6 +447,8 @@ class GameRoom {
       if (cand && !cand.isBankrupt) {
         this.currentTurnPlayerId = cand.id;
         this.syncTurnFlags();
+        this.consecutiveDoubles = 0;
+        this.hasExtraTurn = false;
         // A roll belongs to the turn it was made in. Moving the turn on retires
         // it, so the outgoing player can no longer spend it and the incoming
         // player cannot spend someone else's. Cleared here — the single place a
@@ -539,7 +544,9 @@ class GameRoom {
     this.nextTurnDeadline = undefined;
     io.to(this.roomId).emit('turn:changed', {
       currentTurnPlayerId: nextId,
-      turnDeadline: deadline
+      turnDeadline: deadline,
+      consecutiveDoubles: 0,
+      hasExtraTurn: false
     });
     return nextId;
   }
@@ -597,6 +604,11 @@ function eliminatePlayer(room, io, player, { reason = 'bankrupt', creditorId = n
 
   player.isBankrupt = true;
   player.money = 0;
+
+  if (wasCurrentTurn || room.currentTurnPlayerId === player.id) {
+    room.consecutiveDoubles = 0;
+    room.hasExtraTurn = false;
+  }
 
   // Creditor property transfer or property release to bank:
   const creditor = creditorId ? findPlayer(room, creditorId) : null;
@@ -814,6 +826,8 @@ function rehydrateRoom(data) {
     ? Math.min(MAX_PLAYERS_LIMIT, Math.max(MIN_PLAYERS, data.maxPlayers))
     : MAX_PLAYERS_DEFAULT;
   room.settings = normalizeRoomSettings(data.settings, DEFAULT_ROOM_SETTINGS);
+  room.consecutiveDoubles = Number.isInteger(data.consecutiveDoubles) ? data.consecutiveDoubles : 0;
+  room.hasExtraTurn = Boolean(data.hasExtraTurn);
   room.isGameOver = !!data.isGameOver;
   room.winnerId = data.winnerId ?? null;
   room.winnerReason = data.winnerReason ?? null;
@@ -1145,6 +1159,8 @@ function serializeRoomState(room) {
     // when the room is full without guessing.
     maxPlayers: room.maxPlayers ?? MAX_PLAYERS_DEFAULT,
     settings: room.settings ?? { ...DEFAULT_ROOM_SETTINGS },
+    consecutiveDoubles: room.consecutiveDoubles ?? 0,
+    hasExtraTurn: room.hasExtraTurn === true,
     // When the current turn times out (epoch ms), so the UI countdown is driven
     // by the server's clock rather than a client-side guess.
     turnDeadline: room.turnDeadline,
@@ -1200,6 +1216,8 @@ function serializePlayerState(room, player) {
     kickVotes: serializeKickVotes(room),
     chatMessages: room.chatMessages,
     settings: room.settings ?? { ...DEFAULT_ROOM_SETTINGS },
+    consecutiveDoubles: room.consecutiveDoubles ?? 0,
+    hasExtraTurn: room.hasExtraTurn === true,
     pot: room.pot ?? 0,
     restHousePot: room.pot ?? 0
   };
@@ -2122,6 +2140,10 @@ io.on('connection', (socket) => {
       player.money = (Number.isFinite(player.money) ? player.money : 0) + salary;
       // Money moved, so the new balance is worth persisting with the position.
     }
+
+    if (room.hasExtraTurn) {
+      room.startTurnTimer((r) => handleTurnTimeout(r, io));
+    }
     persistRoom(room);
 
     // ===== MONEY IS STILL NOT TAKEN FROM THE CLIENT =====
@@ -2139,6 +2161,9 @@ io.on('connection', (socket) => {
       money: player.money,
       inJail: player.inJail ?? false,
       jailTurns: player.jailTurns ?? 0,
+      consecutiveDoubles: room.consecutiveDoubles ?? 0,
+      hasExtraTurn: room.hasExtraTurn === true,
+      turnDeadline: room.turnDeadline,
     });
     if (typeof ack === 'function') {
       ack({
@@ -2151,6 +2176,9 @@ io.on('connection', (socket) => {
         money: player.money,
         inJail: player.inJail ?? false,
         jailTurns: player.jailTurns ?? 0,
+        consecutiveDoubles: room.consecutiveDoubles ?? 0,
+        hasExtraTurn: room.hasExtraTurn === true,
+        turnDeadline: room.turnDeadline,
       });
     }
   }));
@@ -2410,6 +2438,11 @@ io.on('connection', (socket) => {
       return reject(ack, outcome?.code || 'CARD_ERROR', outcome?.error || 'Failed to resolve card.');
     }
 
+    if (player.inJail) {
+      room.consecutiveDoubles = 0;
+      room.hasExtraTurn = false;
+    }
+
     persistRoom(room);
 
     console.log(`🎴 Room ${roomId}: Player ${player.id} drew ${outcome.kind} card (${outcome.card.id}) roll=${outcome.roll} pos=${outcome.position} money=${outcome.money}`);
@@ -2508,15 +2541,18 @@ io.on('connection', (socket) => {
     console.log(`🎲 Room ${roomId}: Player ${rollerId} rolled ${roll.dice[0]} + ${roll.dice[1]} = ${roll.total} (seq ${roll.seq})`);
 
     let jailOutcome = null;
+    const isDoubles = (roll.kind === 'dice' && roll.dice[0] === roll.dice[1]);
 
     if (actor.inJail) {
-      const isDoubles = roll.dice[0] === roll.dice[1];
+      room.consecutiveDoubles = 0;
+      room.hasExtraTurn = false;
       if (isDoubles) {
         // Roll doubles while jailed: release player, reset jailTurns, authorize movement by dice total.
         actor.inJail = false;
         actor.jailTurns = 0;
         roll.authorizedMove = true;
         roll.consumed = false;
+        roll.hasExtraTurn = false;
         persistRoom(room);
         console.log(`🔓 Room ${roomId}: Player ${actor.id} rolled doubles (${roll.dice[0]} + ${roll.dice[1]}) and escaped JAIL!`);
         jailOutcome = {
@@ -2588,6 +2624,47 @@ io.on('connection', (socket) => {
           };
         }
       }
+    } else {
+      // Normal play (not in jail)
+      if (isDoubles) {
+        room.consecutiveDoubles = (Number.isInteger(room.consecutiveDoubles) ? room.consecutiveDoubles : 0) + 1;
+        if (room.consecutiveDoubles >= 3) {
+          // Speeding! 3 consecutive doubles in the same turn sends player directly to jail.
+          actor.position = board.JAIL_TILE_ID;
+          actor.inJail = true;
+          actor.jailTurns = 0;
+          room.consecutiveDoubles = 0;
+          room.hasExtraTurn = false;
+          roll.authorizedMove = false;
+          roll.consumed = true; // Third roll must not execute normal movement or landing effects
+          roll.speeding = true;
+          roll.hasExtraTurn = false;
+          persistRoom(room);
+          console.log(`🚨 Room ${roomId}: Player ${actor.id} rolled 3 consecutive doubles (${roll.dice[0]} + ${roll.dice[1]}) — sent straight to JAIL for speeding!`);
+          jailOutcome = {
+            speeding: true,
+            inJail: true,
+            jailTurns: 0,
+            position: board.JAIL_TILE_ID,
+          };
+        } else {
+          // 1st or 2nd double: extra roll granted!
+          room.hasExtraTurn = true;
+          roll.authorizedMove = true;
+          roll.consumed = false;
+          roll.hasExtraTurn = true;
+          room.startTurnTimer((r) => handleTurnTimeout(r, io));
+          persistRoom(room);
+          console.log(`🎲 Room ${roomId}: Player ${actor.id} rolled doubles (${roll.dice[0]} + ${roll.dice[1]}) [consecutive: ${room.consecutiveDoubles}] — extra roll granted!`);
+        }
+      } else {
+        // Non-double: resets consecutive-doubles count, no extra roll
+        room.consecutiveDoubles = 0;
+        room.hasExtraTurn = false;
+        roll.authorizedMove = true;
+        roll.consumed = false;
+        roll.hasExtraTurn = false;
+      }
     }
 
     // ===== EVERYONE IS TOLD THE AUTHORITATIVE RESULT =====
@@ -2601,8 +2678,12 @@ io.on('connection', (socket) => {
       dice: roll.dice,
       total: roll.total,
       seq: roll.seq,
+      isDoubles,
+      consecutiveDoubles: room.consecutiveDoubles ?? 0,
+      hasExtraTurn: room.hasExtraTurn === true,
       inJail: actor.inJail ?? false,
       jailTurns: actor.jailTurns ?? 0,
+      turnDeadline: room.turnDeadline,
       ...(jailOutcome || {}),
     };
     io.to(roomId).emit('player:rolled', rolledPayload);
@@ -2661,6 +2742,10 @@ io.on('connection', (socket) => {
       return reject(ack, 'ROLL_ALREADY_PENDING', 'Move with your current roll before using a card.');
     }
 
+    // Playing a movement card resets consecutive doubles and cancels any extra roll
+    room.consecutiveDoubles = 0;
+    room.hasExtraTurn = false;
+
     // The card becomes the authoritative roll for this player, so the movement
     // it produces is derived server-side by player:moved.
     const roll = room.rollDiceFor(actor.id, 'card', movement);
@@ -2678,12 +2763,16 @@ io.on('connection', (socket) => {
     const gateError = turnGate(room, ack, data && data.playerId);
     if (gateError) return gateError;
 
+    // Ending turn resets consecutive doubles and cancels extra rolls
+    room.consecutiveDoubles = 0;
+    room.hasExtraTurn = false;
+
     // Advance through the shared turn path: this cancels the outgoing turn
     // clock, advances the turn, re-arms the clock for the new player, and
     // broadcasts turn:changed — identical to what a timeout produces.
     const nextId = room.beginTurn(io);
     console.log(`⏭️  Room ${roomId}: turn ended — now Player ${nextId}'s turn`);
-    if (typeof ack === 'function') ack({ ok: true, currentTurnPlayerId: nextId, turnDeadline: room.turnDeadline });
+    if (typeof ack === 'function') ack({ ok: true, currentTurnPlayerId: nextId, turnDeadline: room.turnDeadline, consecutiveDoubles: 0, hasExtraTurn: false });
   }));
 
   // Property & Upgrade Events
