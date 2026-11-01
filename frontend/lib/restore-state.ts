@@ -44,6 +44,16 @@ export interface RestoredChatMessage {
   [key: string]: unknown;
 }
 
+export interface RestoredRoomSettings {
+  fastMode?: boolean;
+  restHouseMode?: "pot" | "rest";
+  enableTrading?: boolean;
+  enableMortgage?: boolean;
+  jailCollectsRent?: boolean;
+  enableAuction?: boolean;
+  enableMovementCards?: boolean;
+}
+
 // Shape of the `playerState` object the server attaches on a successful rejoin
 // (see serializePlayerState() in backend/server.js).
 export interface PlayerRestoreState {
@@ -64,6 +74,7 @@ export interface PlayerRestoreState {
   pot?: number;
   restHousePot?: number;
   kickVotes?: Record<number, number[]>;
+  settings?: RestoredRoomSettings;
   // Whether the server considers the game started. Durable server fact, used to
   // lock name/colour editing; absent on older payloads, hence optional.
   isGameStarted?: boolean;
@@ -93,6 +104,7 @@ export interface ComputedRestoredState<
   turnDeadline: number | null;
   pot: number | null;
   restHousePot: number | null;
+  settings: RestoredRoomSettings | null;
   isGameStarted: boolean;
   logMessage: string;
 }
@@ -125,6 +137,7 @@ export function computeRestoredState<
     turnDeadline: typeof p.turnDeadline === "number" ? p.turnDeadline : null,
     pot: typeof p.pot === "number" ? p.pot : (typeof p.restHousePot === "number" ? p.restHousePot : null),
     restHousePot: typeof p.restHousePot === "number" ? p.restHousePot : (typeof p.pot === "number" ? p.pot : null),
+    settings: p.settings ?? null,
     // A restored payload IS by definition a started game (that's why there was
     // state to restore), so default to true when the server didn't say.
     isGameStarted: p.isGameStarted ?? true,

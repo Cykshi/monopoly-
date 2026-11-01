@@ -160,6 +160,13 @@ function stopServer(child) {
   await emitAck(A, 'player:identify', { roomId, token: tokenA, playerId: 1 });
   await emitAck(B, 'player:identify', { roomId, token: tokenB, playerId: 2 });
 
+  // Update room settings in lobby before starting game
+  const settingsUpdate = await emitAck(A, 'room:update-settings', {
+    settings: { fastMode: true, restHouseMode: 'rest', enableAuction: false }
+  });
+  check('round 1: host updated settings before start',
+    !!(settingsUpdate && settingsUpdate.ok && settingsUpdate.settings && settingsUpdate.settings.fastMode === true));
+
   // Meaningful state: move, buy two tiles, build on one, open a trade.
   //
   // MOVEMENT IS SERVER-DERIVED. The client can no longer name a destination, so
@@ -300,6 +307,17 @@ function stopServer(child) {
   const fileForAbandoned = path.join(dataDir, `${abandonedId}.json`);
   check('round 1: abandoned room is persisted to disk', fs.existsSync(fileForAbandoned), fileForAbandoned);
 
+  // Write a legacy room on disk without settings to verify backwards compatibility on load
+  const legacyRoomId = 'LEGACY';
+  fs.writeFileSync(path.join(dataDir, `${legacyRoomId}.json`), JSON.stringify({
+    roomId: legacyRoomId,
+    players: [],
+    propertyOwnership: {},
+    propertyHouses: {},
+    isGameStarted: false,
+    maxPlayers: 6
+  }));
+
   // ---- RESTART: kill A, boot B against the SAME data dir ----
   console.log('\n--- RESTART (kill server, boot fresh against same data dir) ---');
   A.disconnect();
@@ -307,6 +325,7 @@ function stopServer(child) {
   Z.disconnect();
   await stopServer(server.child);
   check('restart: server A stopped', true);
+  await sleep(500);
 
   server = registerServer(await startServer(port, dataDir));
   check('restart: server B boots and reloads persisted rooms', !!server.url);
@@ -350,8 +369,22 @@ function stopServer(child) {
   check('round 2: restored roster is complete (2 players)',
     !!(ps && Array.isArray(ps.players) && ps.players.length === 2),
     ps ? `players=${ps.players.length}` : 'no ps');
+  check('round 2: restored settings survive restart',
+    !!(ps && ps.settings && ps.settings.fastMode === true && ps.settings.restHouseMode === 'rest' && ps.settings.enableAuction === false),
+    ps ? JSON.stringify(ps.settings) : 'no ps');
 
   C.disconnect();
+
+  // Legacy room without settings rehydrates with correct defaults
+  const L = track(await connect(server.url));
+  let legacyJoined = null;
+  L.once('room:joined', (d) => { legacyJoined = d; });
+  const lJoin = await emitAck(L, 'room:join', { roomId: legacyRoomId, name: 'LegacyPlayer' });
+  check('round 2: legacy room without settings loaded and joined', !!(lJoin && lJoin.ok));
+  check('round 2: legacy room received default settings on rehydration',
+    !!(legacyJoined && legacyJoined.state && legacyJoined.state.settings && legacyJoined.state.settings.enableTrading === true && legacyJoined.state.settings.fastMode === false),
+    JSON.stringify(legacyJoined && legacyJoined.state && legacyJoined.state.settings));
+  L.disconnect();
 
   // ---- ORPHANED RESTORED ROOM: a restored room nobody rejoins must be reaped --
   // This is the leak guard: server B restored the abandoned room with ZERO

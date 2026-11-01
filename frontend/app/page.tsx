@@ -1,10 +1,10 @@
-﻿﻿"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import Flag from "react-world-flags";
 import DiceScene from "@/app/dice";
-import { computeRestoredState, type PlayerRestoreState } from "@/lib/restore-state";
+import { computeRestoredState, type PlayerRestoreState, type RestoredRoomSettings } from "@/lib/restore-state";
 import { computeIsMyTurn, computeTurnControls } from "@/lib/turn-state";
 
 interface Tile {
@@ -715,6 +715,34 @@ export default function GameBoard() {
     addLog(`⚙️ Max players set to ${count}.`);
   };
 
+  const updateRoomSettings = (patch: Partial<RestoredRoomSettings>) => {
+    if (isGameStarted) return;
+    if (roomRole === "guest") return; // Guests cannot modify settings
+    if (socketRef.current?.connected && roomId) {
+      socketRef.current.emit("room:update-settings", { settings: patch }, (res: { ok: boolean; settings?: RestoredRoomSettings; error?: string }) => {
+        if (res && res.ok && res.settings) {
+          const s = res.settings;
+          if (typeof s.fastMode === "boolean") setFastMode(s.fastMode);
+          if (s.restHouseMode === "pot" || s.restHouseMode === "rest") setRestHouseMode(s.restHouseMode);
+          if (typeof s.enableTrading === "boolean") setEnableTrading(s.enableTrading);
+          if (typeof s.enableMortgage === "boolean") setEnableMortgage(s.enableMortgage);
+          if (typeof s.jailCollectsRent === "boolean") setJailCollectsRent(s.jailCollectsRent);
+          if (typeof s.enableAuction === "boolean") setEnableAuction(s.enableAuction);
+          if (typeof s.enableMovementCards === "boolean") setEnableMovementCards(s.enableMovementCards);
+        }
+      });
+    } else {
+      // Local/offline fallback
+      if (typeof patch.fastMode === "boolean") setFastMode(patch.fastMode);
+      if (patch.restHouseMode === "pot" || patch.restHouseMode === "rest") setRestHouseMode(patch.restHouseMode);
+      if (typeof patch.enableTrading === "boolean") setEnableTrading(patch.enableTrading);
+      if (typeof patch.enableMortgage === "boolean") setEnableMortgage(patch.enableMortgage);
+      if (typeof patch.jailCollectsRent === "boolean") setJailCollectsRent(patch.jailCollectsRent);
+      if (typeof patch.enableAuction === "boolean") setEnableAuction(patch.enableAuction);
+      if (typeof patch.enableMovementCards === "boolean") setEnableMovementCards(patch.enableMovementCards);
+    }
+  };
+
   const handlePlayerNameChange = (playerId: number, newName: string) => {    if (isGameStarted) return;
     setPlayers((prev) =>
       prev.map((p) => (p.id === playerId ? { ...p, name: newName } : p))
@@ -995,6 +1023,17 @@ export default function GameBoard() {
     if (next.myPlayerId !== null) setMyPlayerId(next.myPlayerId);
     if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
     if (restored.kickVotes) setKickVotes(restored.kickVotes);
+    if (next.settings) {
+      if (typeof next.settings.fastMode === "boolean") setFastMode(next.settings.fastMode);
+      if (next.settings.restHouseMode === "pot" || next.settings.restHouseMode === "rest") {
+        setRestHouseMode(next.settings.restHouseMode);
+      }
+      if (typeof next.settings.enableTrading === "boolean") setEnableTrading(next.settings.enableTrading);
+      if (typeof next.settings.enableMortgage === "boolean") setEnableMortgage(next.settings.enableMortgage);
+      if (typeof next.settings.jailCollectsRent === "boolean") setJailCollectsRent(next.settings.jailCollectsRent);
+      if (typeof next.settings.enableAuction === "boolean") setEnableAuction(next.settings.enableAuction);
+      if (typeof next.settings.enableMovementCards === "boolean") setEnableMovementCards(next.settings.enableMovementCards);
+    }
     // Adopt the server's turn clock so the rejoin repaints the correct turn and
     // countdown immediately, rather than waiting for the next turn:changed.
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
@@ -1054,6 +1093,17 @@ export default function GameBoard() {
     if (next.chatMessages) setChatMessages(next.chatMessages);
     if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
     if (restored.kickVotes) setKickVotes(restored.kickVotes);
+    if (next.settings) {
+      if (typeof next.settings.fastMode === "boolean") setFastMode(next.settings.fastMode);
+      if (next.settings.restHouseMode === "pot" || next.settings.restHouseMode === "rest") {
+        setRestHouseMode(next.settings.restHouseMode);
+      }
+      if (typeof next.settings.enableTrading === "boolean") setEnableTrading(next.settings.enableTrading);
+      if (typeof next.settings.enableMortgage === "boolean") setEnableMortgage(next.settings.enableMortgage);
+      if (typeof next.settings.jailCollectsRent === "boolean") setJailCollectsRent(next.settings.jailCollectsRent);
+      if (typeof next.settings.enableAuction === "boolean") setEnableAuction(next.settings.enableAuction);
+      if (typeof next.settings.enableMovementCards === "boolean") setEnableMovementCards(next.settings.enableMovementCards);
+    }
     setActiveAuction(next.activeAuction as AuctionState | null);
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
     // deliberately NOT touching myPlayerId or isGameStarted here — this is a
@@ -1587,10 +1637,21 @@ export default function GameBoard() {
 
     // Room membership: the server is the source of truth for the code, the
     // host/guest role and how many peers are currently connected.
-    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; token?: string; connectedCount?: number; playerState?: PlayerRestoreState | null; state?: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null; currentTurnPlayerId?: number | null; turnDeadline?: number | null } }) => {
+    newSocket.on("room:joined", (data: { roomId: string; role: "host" | "guest"; token?: string; connectedCount?: number; playerState?: PlayerRestoreState | null; state?: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; settings?: RestoredRoomSettings; isGameOver?: boolean; winnerId?: number | null; currentTurnPlayerId?: number | null; turnDeadline?: number | null } }) => {
       setRoomId(data.roomId);
       setRoomRole(data.role);
       setPeerCount(data.connectedCount ?? 1);
+      // Synchronize settings from authoritative room state if provided
+      if (data.state?.settings) {
+        const s = data.state.settings;
+        if (typeof s.fastMode === "boolean") setFastMode(s.fastMode);
+        if (s.restHouseMode === "pot" || s.restHouseMode === "rest") setRestHouseMode(s.restHouseMode);
+        if (typeof s.enableTrading === "boolean") setEnableTrading(s.enableTrading);
+        if (typeof s.enableMortgage === "boolean") setEnableMortgage(s.enableMortgage);
+        if (typeof s.jailCollectsRent === "boolean") setJailCollectsRent(s.jailCollectsRent);
+        if (typeof s.enableAuction === "boolean") setEnableAuction(s.enableAuction);
+        if (typeof s.enableMovementCards === "boolean") setEnableMovementCards(s.enableMovementCards);
+      }
       // The server's roster snapshot rides along on `state`. Applying it FIRST is
       // what makes a late joiner see colours and names already taken — without
       // this, someone who joins after the host picked a colour would be shown a
@@ -1650,8 +1711,18 @@ export default function GameBoard() {
     // re-renders its picker from it, which is how a swatch greys out the instant
     // someone else claims it. It also carries isGameStarted, so the lock arrives
     // from the server rather than being inferred locally.
-    newSocket.on("room:players", (data: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; isGameOver?: boolean; winnerId?: number | null; currentTurnPlayerId?: number | null; turnDeadline?: number | null }) => {
+    newSocket.on("room:players", (data: { players?: Player[]; isGameStarted?: boolean; maxPlayers?: number; settings?: RestoredRoomSettings; isGameOver?: boolean; winnerId?: number | null; currentTurnPlayerId?: number | null; turnDeadline?: number | null }) => {
       if (typeof data?.maxPlayers === "number") setMaxPlayers(data.maxPlayers);
+      if (data?.settings) {
+        const s = data.settings;
+        if (typeof s.fastMode === "boolean") setFastMode(s.fastMode);
+        if (s.restHouseMode === "pot" || s.restHouseMode === "rest") setRestHouseMode(s.restHouseMode);
+        if (typeof s.enableTrading === "boolean") setEnableTrading(s.enableTrading);
+        if (typeof s.enableMortgage === "boolean") setEnableMortgage(s.enableMortgage);
+        if (typeof s.jailCollectsRent === "boolean") setJailCollectsRent(s.jailCollectsRent);
+        if (typeof s.enableAuction === "boolean") setEnableAuction(s.enableAuction);
+        if (typeof s.enableMovementCards === "boolean") setEnableMovementCards(s.enableMovementCards);
+      }
       if (typeof data?.isGameStarted === "boolean") setServerGameStarted(data.isGameStarted);
       if (typeof data?.turnDeadline === "number") setTurnDeadline(data.turnDeadline);
       const turnId = typeof data?.currentTurnPlayerId === "number" ? data.currentTurnPlayerId : null;
@@ -1671,6 +1742,19 @@ export default function GameBoard() {
       const mine = Array.isArray(data?.players) ? data.players.find((p) => p.id === me) : undefined;
       if (mine) setMyColor(mine.color ?? null);
     });
+    newSocket.on("room:settings", (data: { settings?: RestoredRoomSettings }) => {
+      if (data?.settings) {
+        const s = data.settings;
+        if (typeof s.fastMode === "boolean") setFastMode(s.fastMode);
+        if (s.restHouseMode === "pot" || s.restHouseMode === "rest") setRestHouseMode(s.restHouseMode);
+        if (typeof s.enableTrading === "boolean") setEnableTrading(s.enableTrading);
+        if (typeof s.enableMortgage === "boolean") setEnableMortgage(s.enableMortgage);
+        if (typeof s.jailCollectsRent === "boolean") setJailCollectsRent(s.jailCollectsRent);
+        if (typeof s.enableAuction === "boolean") setEnableAuction(s.enableAuction);
+        if (typeof s.enableMovementCards === "boolean") setEnableMovementCards(s.enableMovementCards);
+      }
+    });
+
     newSocket.on("room:left", () => {
       setRoomId(null);
       setRoomRole(null);
@@ -6026,8 +6110,9 @@ export default function GameBoard() {
                   </span>
                   <div className="flex gap-1.5 md:gap-[0.5vmin]">
                     <button
-                      onClick={() => setFastMode(false)}
-                      className={`flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.2vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${!fastMode
+                      onClick={() => updateRoomSettings({ fastMode: false })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.2vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${!fastMode
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6035,8 +6120,9 @@ export default function GameBoard() {
                       Normal
                     </button>
                     <button
-                      onClick={() => setFastMode(true)}
-                      className={`flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.2vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${fastMode
+                      onClick={() => updateRoomSettings({ fastMode: true })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex-1 flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.2vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${fastMode
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6053,8 +6139,9 @@ export default function GameBoard() {
                   </span>
                   <div className="grid grid-cols-2 gap-1.5 md:gap-[0.6vmin]">
                     <button
-                      onClick={() => setRestHouseMode("pot")}
-                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.15vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${restHouseMode === "pot"
+                      onClick={() => updateRoomSettings({ restHouseMode: "pot" })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.15vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${restHouseMode === "pot"
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6062,8 +6149,9 @@ export default function GameBoard() {
                       Collect Pot
                     </button>
                     <button
-                      onClick={() => setRestHouseMode("rest")}
-                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.15vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${restHouseMode === "rest"
+                      onClick={() => updateRoomSettings({ restHouseMode: "rest" })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2 md:py-[0.85vmin] text-xs sm:text-sm md:text-[1.15vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${restHouseMode === "rest"
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/70 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6084,8 +6172,9 @@ export default function GameBoard() {
                   <div className="grid grid-cols-2 gap-2 md:gap-[0.6vmin]">
                     {/* Movement Cards */}
                     <button
-                      onClick={() => setEnableMovementCards((prev) => !prev)}
-                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableMovementCards
+                      onClick={() => updateRoomSettings({ enableMovementCards: !enableMovementCards })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${enableMovementCards
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6095,8 +6184,9 @@ export default function GameBoard() {
 
                     {/* Trading */}
                     <button
-                      onClick={() => setEnableTrading((prev) => !prev)}
-                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableTrading
+                      onClick={() => updateRoomSettings({ enableTrading: !enableTrading })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${enableTrading
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6106,8 +6196,9 @@ export default function GameBoard() {
 
                     {/* Mortgage */}
                     <button
-                      onClick={() => setEnableMortgage((prev) => !prev)}
-                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableMortgage
+                      onClick={() => updateRoomSettings({ enableMortgage: !enableMortgage })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${enableMortgage
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6117,8 +6208,9 @@ export default function GameBoard() {
 
                     {/* Jail Rent */}
                     <button
-                      onClick={() => setJailCollectsRent((prev) => !prev)}
-                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${jailCollectsRent
+                      onClick={() => updateRoomSettings({ jailCollectsRent: !jailCollectsRent })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${jailCollectsRent
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}
@@ -6128,8 +6220,9 @@ export default function GameBoard() {
 
                     {/* Auctions */}
                     <button
-                      onClick={() => setEnableAuction((prev) => !prev)}
-                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 ${enableAuction
+                      onClick={() => updateRoomSettings({ enableAuction: !enableAuction })}
+                      disabled={isGameStarted || roomRole === "guest"}
+                      className={`flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.6vmin] border py-2.5 px-2 md:py-[0.8vmin] md:px-[0.8vmin] text-xs sm:text-sm md:text-[1.1vmin] font-semibold transition-colors cursor-pointer active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${enableAuction
                           ? "border-cyan-400 bg-cyan-600/40 text-white shadow-[0_0_1.6vmin_rgba(34,211,238,0.75),inset_0_0_1vmin_rgba(34,211,238,0.35)]"
                           : "border-cyan-500/25 bg-white/[0.03] text-cyan-100/60 hover:border-cyan-400/70 hover:bg-cyan-500/15 hover:text-white"
                         }`}

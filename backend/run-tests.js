@@ -81,6 +81,7 @@ const ONLINE_SUITES = [
   'test-tax-authority.js',
   'test-bankruptcy-votekick.js',
   'test-turn-synchronization.js',
+  'test-game-settings.js',
 ];
 
 const onlyOffline = process.argv.includes('--offline');

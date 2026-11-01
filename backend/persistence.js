@@ -57,6 +57,7 @@ function serializeRoom(room) {
     isGameStarted: room.isGameStarted === true,
     // The player ceiling. Durable so a restart keeps a room's capacity cap.
     maxPlayers: room.maxPlayers ?? MAX_PLAYERS_DEFAULT,
+    settings: room.settings,
     // Game-over outcome, so a restart can't resurrect a finished game as live.
     isGameOver: room.isGameOver === true,
     winnerId: room.winnerId ?? null,

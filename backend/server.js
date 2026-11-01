@@ -167,6 +167,8 @@ class GameRoom {
     // required headcount: the game may start with any count from 2 up to this,
     // and room:join refuses once this many real seats exist.
     this.maxPlayers = MAX_PLAYERS_DEFAULT;
+    // Authoritative room settings. Initialized with defaults, editable by host in lobby only.
+    this.settings = { ...DEFAULT_ROOM_SETTINGS };
     // Set when the game is over and who won. `isGameOver` is the single flag the
     // turn clock checks, so a finished game can never keep ticking.
     this.winnerId = null;
@@ -811,6 +813,7 @@ function rehydrateRoom(data) {
   room.maxPlayers = Number.isInteger(data.maxPlayers)
     ? Math.min(MAX_PLAYERS_LIMIT, Math.max(MIN_PLAYERS, data.maxPlayers))
     : MAX_PLAYERS_DEFAULT;
+  room.settings = normalizeRoomSettings(data.settings, DEFAULT_ROOM_SETTINGS);
   room.isGameOver = !!data.isGameOver;
   room.winnerId = data.winnerId ?? null;
   room.winnerReason = data.winnerReason ?? null;
@@ -891,6 +894,42 @@ const CHAT_TEXT_MAX = 280;
 const MAX_PLAYERS_DEFAULT = 6;
 const MAX_PLAYERS_LIMIT = 6;
 const MIN_PLAYERS = 2;
+
+// Default authoritative game rules/settings
+const DEFAULT_ROOM_SETTINGS = Object.freeze({
+  fastMode: false,
+  restHouseMode: 'pot', // 'pot' | 'rest'
+  enableTrading: true,
+  enableMortgage: true,
+  jailCollectsRent: false,
+  enableAuction: true,
+  enableMovementCards: true,
+});
+
+function normalizeRoomSettings(incoming, current = DEFAULT_ROOM_SETTINGS) {
+  const base = current || DEFAULT_ROOM_SETTINGS;
+  const raw = (incoming && typeof incoming === 'object') ? incoming : {};
+
+  const fastMode = typeof raw.fastMode === 'boolean' ? raw.fastMode : base.fastMode;
+  const restHouseMode = (raw.restHouseMode === 'rest' || raw.restHouseMode === 'pot')
+    ? raw.restHouseMode
+    : base.restHouseMode;
+  const enableTrading = typeof raw.enableTrading === 'boolean' ? raw.enableTrading : base.enableTrading;
+  const enableMortgage = typeof raw.enableMortgage === 'boolean' ? raw.enableMortgage : base.enableMortgage;
+  const jailCollectsRent = typeof raw.jailCollectsRent === 'boolean' ? raw.jailCollectsRent : base.jailCollectsRent;
+  const enableAuction = typeof raw.enableAuction === 'boolean' ? raw.enableAuction : base.enableAuction;
+  const enableMovementCards = typeof raw.enableMovementCards === 'boolean' ? raw.enableMovementCards : base.enableMovementCards;
+
+  return {
+    fastMode,
+    restHouseMode,
+    enableTrading,
+    enableMortgage,
+    jailCollectsRent,
+    enableAuction,
+    enableMovementCards,
+  };
+}
 
 // A "seat" is a player the server has actually created a record for. The seeded
 // template players a client renders don't exist here, which is what makes this
@@ -1105,6 +1144,7 @@ function serializeRoomState(room) {
     // The room's player ceiling, so the client renders "N / max" and can tell
     // when the room is full without guessing.
     maxPlayers: room.maxPlayers ?? MAX_PLAYERS_DEFAULT,
+    settings: room.settings ?? { ...DEFAULT_ROOM_SETTINGS },
     // When the current turn times out (epoch ms), so the UI countdown is driven
     // by the server's clock rather than a client-side guess.
     turnDeadline: room.turnDeadline,
@@ -1159,6 +1199,7 @@ function serializePlayerState(room, player) {
     activeAuction: auction,
     kickVotes: serializeKickVotes(room),
     chatMessages: room.chatMessages,
+    settings: room.settings ?? { ...DEFAULT_ROOM_SETTINGS },
     pot: room.pot ?? 0,
     restHousePot: room.pot ?? 0
   };
@@ -1909,6 +1950,34 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') ack({ ok: true, maxPlayers: wanted });
   });
 
+  // Host-authoritative game settings.
+  // Only the host can update settings, and only before the game has started.
+  // Broadcasts room:settings (and updates room state) to all connected players.
+  socket.on('room:update-settings', (data, ack) => {
+    const { room, error } = lobbyPlayer();
+    if (error) { if (typeof ack === 'function') ack(error); return; }
+
+    if (lobbyEditLocked(room)) {
+      return reject(ack, 'GAME_STARTED', 'Settings are locked once the game has started.');
+    }
+
+    const hostToken = room.hostToken;
+    const token = socketToken.get(socket.id) || socket.data.sessionToken;
+    if (!hostToken || token !== hostToken) {
+      return reject(ack, 'NOT_HOST', 'Only the host can modify game settings.');
+    }
+
+    const incoming = data && typeof data === 'object' ? (data.settings || data) : {};
+    const updatedSettings = normalizeRoomSettings(incoming, room.settings);
+    room.settings = updatedSettings;
+    persistRoom(room);
+
+    io.to(room.roomId).emit('room:settings', { settings: room.settings });
+    io.to(room.roomId).emit('room:players', serializeRoomState(room));
+    console.log(`⚙️ Room ${room.roomId}: Settings updated by host:`, JSON.stringify(room.settings));
+    if (typeof ack === 'function') ack({ ok: true, settings: room.settings });
+  });
+
   socket.on('player:set-color', (data, ack) => {
     const { room, player, error } = lobbyPlayer();
     if (error) { if (typeof ack === 'function') ack(error); return; }
@@ -2155,6 +2224,11 @@ io.on('connection', (socket) => {
       return reject(ack, 'OWNER_MISMATCH', `Tile ${data.tileId} is owned by player ${owed.ownerId}.`);
     }
     const amount = owed.amount;
+
+    // If the owner is currently in jail and jailCollectsRent is disabled, no rent is due.
+    if (owner.inJail && room.settings && room.settings.jailCollectsRent === false) {
+      return reject(ack, 'OWNER_IN_JAIL', `Player ${owner.id} is in jail and cannot collect rent.`);
+    }
 
     // Replay gate: a duplicated rent frame would move money twice, so the id is
     // claimed before either balance is touched.
@@ -2562,6 +2636,11 @@ io.on('connection', (socket) => {
     const gateError = turnGate(room, ack, data && data.playerId);
     if (gateError) return gateError;
 
+    // Server-side enforcement: check if movement cards are enabled in room settings.
+    if (room.settings && room.settings.enableMovementCards === false) {
+      return reject(ack, 'CARDS_DISABLED', 'Movement cards are disabled in this game.');
+    }
+
     // Movement cards cannot be played while in jail.
     if (actor.inJail) {
       return reject(ack, 'IN_JAIL', `Player ${actor.id} is in jail and cannot use movement cards.`);
@@ -2778,6 +2857,12 @@ io.on('connection', (socket) => {
     }
     const gateError = turnGate(room, ack, data.playerId);
     if (gateError) return gateError;
+
+    // Server-side enforcement: check if mortgage/selling is enabled in room settings.
+    if (room.settings && room.settings.enableMortgage === false) {
+      return reject(ack, 'MORTGAGE_DISABLED', 'Mortgaging and selling properties is disabled in this game.');
+    }
+
     if (!isOwnableTile(data.tileId)) {
       return reject(ack, 'BAD_TILE', `Tile ${data.tileId} is not a sellable tile.`);
     }
@@ -2825,6 +2910,11 @@ io.on('connection', (socket) => {
     }
     const gateError = turnGate(room, ack, data.playerId);
     if (gateError) return gateError;
+
+    // Server-side enforcement: check if mortgage/selling is enabled in room settings.
+    if (room.settings && room.settings.enableMortgage === false) {
+      return reject(ack, 'MORTGAGE_DISABLED', 'Mortgaging and selling properties is disabled in this game.');
+    }
 
     if (!isPropertyTile(data.tileId)) {
       return reject(ack, 'BAD_TILE', `Tile ${data.tileId} is not a sellable property.`);
@@ -3046,24 +3136,27 @@ io.on('connection', (socket) => {
     if (replayError) return replayError;
 
     const fee = board.calculateRestHouseFee(); // 0
-    const payout = room.pot || 0;
+    const isRestMode = room.settings && room.settings.restHouseMode === 'rest';
+    const payout = isRestMode ? 0 : (room.pot || 0);
     const currentMoney = Number.isFinite(actor.money) ? actor.money : 0;
 
     actor.money = currentMoney + payout;
     actor.isResting = true;
-    room.pot = 0;
-    room.restHousePot = 0;
+    if (!isRestMode) {
+      room.pot = 0;
+      room.restHousePot = 0;
+    }
 
     persistRoom(room);
 
-    console.log(`🏨 Room ${roomId}: Player ${actor.id} landed on REST HOUSE and collected $${payout} pot (new balance $${actor.money}). Pot reset to 0.`);
+    console.log(`🏨 Room ${roomId}: Player ${actor.id} landed on REST HOUSE and ${isRestMode ? 'rests for one turn (no pot)' : `collected $${payout} pot (new balance $${actor.money}). Pot reset to 0.`}`);
 
     const resultPayload = {
       playerId: actor.id,
       fee,
       payout,
-      pot: 0,
-      restHousePot: 0,
+      pot: room.pot || 0,
+      restHousePot: room.pot || 0,
       money: actor.money,
       isResting: true,
     };
@@ -3405,6 +3498,11 @@ io.on('connection', (socket) => {
   };
 
   socket.on('trade:created', withRoom((room, roomId, trade, ack) => {
+    // Server-side enforcement: check if trading is enabled in room settings.
+    if (room.settings && room.settings.enableTrading === false) {
+      return reject(ack, 'TRADING_DISABLED', 'Trading is disabled in this game.');
+    }
+
     const bad = validateTrade(room, trade);
     if (bad) return reject(ack, bad.code, bad.error);
 
@@ -3424,6 +3522,11 @@ io.on('connection', (socket) => {
   }));
 
   socket.on('trade:updated', withRoom((room, roomId, trade, ack) => {
+    // Server-side enforcement: check if trading is enabled in room settings.
+    if (room.settings && room.settings.enableTrading === false) {
+      return reject(ack, 'TRADING_DISABLED', 'Trading is disabled in this game.');
+    }
+
     const bad = validateTrade(room, trade);
     if (bad) return reject(ack, bad.code, bad.error);
 
@@ -3441,6 +3544,11 @@ io.on('connection', (socket) => {
     if (!data || !data.trade) {
       return reject(ack, 'BAD_PAYLOAD', 'trade:accepted needs a trade.');
     }
+    // Server-side enforcement: check if trading is enabled in room settings.
+    if (room.settings && room.settings.enableTrading === false) {
+      return reject(ack, 'TRADING_DISABLED', 'Trading is disabled in this game.');
+    }
+
     const t = data.trade;
     // Re-validate against CURRENT state: a tile may have changed hands or a
     // player may have spent the cash since the trade was proposed.
@@ -3566,6 +3674,11 @@ io.on('connection', (socket) => {
     if (!data || !data.auction) {
       return reject(ack, 'BAD_PAYLOAD', 'auction:start needs an auction.');
     }
+    // Server-side enforcement: check if auction is enabled in room settings.
+    if (room.settings && room.settings.enableAuction === false) {
+      return reject(ack, 'AUCTION_DISABLED', 'Auctions are disabled in this game.');
+    }
+
     // AUTHORIZATION: only the identified player whose turn it is may open an
     // auction, matching every other board-changing action.
     const gateError = turnGate(room, ack, data.playerId);
@@ -3611,6 +3724,11 @@ io.on('connection', (socket) => {
     if (!data || !data.auction) {
       return reject(ack, 'BAD_PAYLOAD', 'auction:bid needs an auction.');
     }
+    // Server-side enforcement: check if auction is enabled in room settings.
+    if (room.settings && room.settings.enableAuction === false) {
+      return reject(ack, 'AUCTION_DISABLED', 'Auctions are disabled in this game.');
+    }
+
     const { actor, error } = requireActor(room, ack);
     if (error) return error;
 
