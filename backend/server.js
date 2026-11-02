@@ -449,6 +449,8 @@ class GameRoom {
         this.syncTurnFlags();
         this.consecutiveDoubles = 0;
         this.hasExtraTurn = false;
+        this.pendingAction = null;
+        this.settledCardLanding = null;
         // A roll belongs to the turn it was made in. Moving the turn on retires
         // it, so the outgoing player can no longer spend it and the incoming
         // player cannot spend someone else's. Cleared here — the single place a
@@ -805,6 +807,8 @@ function rehydrateRoom(data) {
   room.propertyHouses = data.propertyHouses || {};
   room.trades = Array.isArray(data.trades) ? data.trades : [];
   room.activeAuction = data.activeAuction || null;
+  room.pendingAction = data.pendingAction || null;
+  room.settledCardLanding = null;
   room.currentTurnPlayerId = data.currentTurnPlayerId ?? null;
   room.turnSeeded = !!data.turnSeeded;
   // Restore the turn clock so a restart resumes the SAME turn window. If the
@@ -1169,7 +1173,8 @@ function serializeRoomState(room) {
     activeAuction: room.activeAuction,
     kickVotes: serializeKickVotes(room),
     pot: room.pot ?? 0,
-    restHousePot: room.pot ?? 0
+    restHousePot: room.pot ?? 0,
+    pendingAction: room.pendingAction || null
   };
 }
 
@@ -1219,7 +1224,8 @@ function serializePlayerState(room, player) {
     consecutiveDoubles: room.consecutiveDoubles ?? 0,
     hasExtraTurn: room.hasExtraTurn === true,
     pot: room.pot ?? 0,
-    restHousePot: room.pot ?? 0
+    restHousePot: room.pot ?? 0,
+    pendingAction: room.pendingAction || null
   };
 }
 
@@ -2126,6 +2132,7 @@ io.on('connection', (socket) => {
     // pathological re-entry cannot spend it twice.
     roll.consumed = true;
     player.position = wrapped;
+    room.settledCardLanding = null;
 
     // ===== SALARY IS CREDITED SERVER-SIDE =====
     // Passing GO pays PASS_START_BONUS, decided here from the server's own board
@@ -2219,6 +2226,27 @@ io.on('connection', (socket) => {
     // Paying rent is a turn action: only the identified player on turn may pay.
     const gateError = turnGate(room, ack, data.payerId);
     if (gateError) return gateError;
+
+    // Idempotency: if this rent was ALREADY settled authoritatively during card movement, do not charge twice!
+    if (room.settledCardLanding &&
+        room.settledCardLanding.type === 'rent' &&
+        room.settledCardLanding.playerId === payer.id &&
+        room.settledCardLanding.tileId === data.tileId) {
+      const settled = room.settledCardLanding;
+      console.log(`💰 Room ${roomId}: rent on tile ${data.tileId} already settled by card movement for Player ${payer.id} ($${settled.paid})`);
+      if (typeof ack === 'function') {
+        ack({
+          ok: true,
+          alreadySettled: true,
+          isBankrupt: !!settled.isBankrupt,
+          paid: settled.paid,
+          amount: settled.amount,
+          payerMoney: payer.money,
+          ownerMoney: owner.money,
+        });
+      }
+      return;
+    }
 
     // The tile must exist on the server's board.
     if (!board.isValidTileId(data.tileId)) {
@@ -2385,6 +2413,206 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') ack({ ok: true });
   }));
 
+  // Server-authoritative resolution of destination landing effects after card movement.
+  // Reuses the board tables and settlement logic for rent, tax, club, rest-house, and unowned properties.
+  function applyCardLandingEffect(room, io, player, tileId, options = {}) {
+    const effect = cards.resolveCardLanding(room, player, tileId, options);
+    if (!effect) {
+      room.pendingAction = null;
+      return null;
+    }
+
+    const wasCurrentTurn = (room.currentTurnPlayerId === player.id);
+
+    if (effect.type === 'tax') {
+      const tax = effect.amount;
+      const currentMoney = Number.isFinite(player.money) ? player.money : 0;
+      const isBankrupt = currentMoney < tax;
+      const paid = Math.min(tax, Math.max(0, currentMoney));
+
+      player.money = Math.max(0, currentMoney - paid);
+      room.pot = (room.pot || 0) + paid;
+      room.restHousePot = room.pot;
+      room.pendingAction = null;
+
+      if (isBankrupt) {
+        eliminatePlayer(room, io, player, {
+          reason: 'tax',
+          wasCurrentTurn,
+        });
+      }
+
+      console.log(`📉 Room ${room.roomId}: Player ${player.id} paid $${paid} tax on card landing tile ${tileId} (due $${tax}). Room pot is now $${room.pot}.`);
+
+      io.to(room.roomId).emit('tax:paid', {
+        playerId: player.id,
+        tileId,
+        amount: tax,
+        paid,
+        pot: room.pot,
+        restHousePot: room.pot,
+        money: player.money,
+        isBankrupt: !!player.isBankrupt,
+        currentTurnPlayerId: room.currentTurnPlayerId,
+        turnDeadline: room.turnDeadline,
+      });
+
+      return {
+        ...effect,
+        paid,
+        pot: room.pot,
+        restHousePot: room.pot,
+        money: player.money,
+        isBankrupt: !!player.isBankrupt,
+      };
+    }
+
+    if (effect.type === 'rent') {
+      const amount = effect.amount;
+      if (amount <= 0) {
+        room.pendingAction = null;
+        return { ...effect, paid: 0, payerMoney: player.money };
+      }
+
+      const owner = findPlayer(room, effect.ownerId);
+      const currentMoney = Number.isFinite(player.money) ? player.money : 0;
+      const isBankrupt = currentMoney < amount;
+      const paid = Math.min(amount, Math.max(0, currentMoney));
+
+      player.money = Math.max(0, currentMoney - paid);
+      if (owner) {
+        owner.money = (Number.isFinite(owner.money) ? owner.money : 0) + paid;
+      }
+      room.pendingAction = null;
+
+      if (isBankrupt) {
+        eliminatePlayer(room, io, player, {
+          reason: 'rent',
+          creditorId: owner ? owner.id : undefined,
+          wasCurrentTurn,
+        });
+      }
+
+      console.log(`💰 Room ${room.roomId}: Player ${player.id} paid $${paid} rent to Player ${effect.ownerId} on card landing tile ${tileId} (official $${amount})`);
+
+      io.to(room.roomId).emit('rent:paid', {
+        payerId: player.id,
+        ownerId: effect.ownerId,
+        tileId,
+        amount: paid,
+        officialAmount: amount,
+        payerMoney: player.money,
+        ownerMoney: owner ? owner.money : 0,
+        isBankrupt: !!player.isBankrupt,
+        creditorId: isBankrupt && owner ? owner.id : undefined,
+        propertyOwnership: room.propertyOwnership,
+        propertyHouses: room.propertyHouses,
+        currentTurnPlayerId: room.currentTurnPlayerId,
+        turnDeadline: room.turnDeadline,
+      });
+
+      return {
+        ...effect,
+        paid,
+        payerMoney: player.money,
+        ownerMoney: owner ? owner.money : 0,
+        isBankrupt: !!player.isBankrupt,
+      };
+    }
+
+    if (effect.type === 'unowned_property') {
+      room.pendingAction = {
+        type: 'buy_property',
+        playerId: player.id,
+        tileId,
+        price: effect.price,
+      };
+      return {
+        ...effect,
+        canBuy: effect.price !== null && player.money >= effect.price,
+      };
+    }
+
+    if (effect.type === 'club') {
+      const fee = effect.fee;
+      const currentMoney = Number.isFinite(player.money) ? player.money : 0;
+      const isBankrupt = fee > 0 && currentMoney < fee;
+      const paid = Math.min(fee, Math.max(0, currentMoney));
+
+      player.money = Math.max(0, currentMoney - paid);
+      room.pot = (room.pot || 0) + paid;
+      room.restHousePot = room.pot;
+      room.pendingAction = null;
+
+      if (isBankrupt) {
+        eliminatePlayer(room, io, player, {
+          reason: 'club',
+          wasCurrentTurn,
+        });
+      }
+
+      console.log(`🥂 Room ${room.roomId}: Player ${player.id} paid $${paid} at CLUB on card landing tile 30. Room pot is now $${room.pot}.`);
+
+      io.to(room.roomId).emit('club:paid', {
+        playerId: player.id,
+        fee,
+        paid,
+        cardCount: effect.cardCount,
+        houseCount: effect.houseCount,
+        pot: room.pot,
+        restHousePot: room.pot,
+        money: player.money,
+        isBankrupt: !!player.isBankrupt,
+        currentTurnPlayerId: room.currentTurnPlayerId,
+        turnDeadline: room.turnDeadline,
+      });
+
+      return {
+        ...effect,
+        paid,
+        pot: room.pot,
+        restHousePot: room.pot,
+        money: player.money,
+        isBankrupt: !!player.isBankrupt,
+      };
+    }
+
+    if (effect.type === 'rest_house') {
+      const isRestMode = room.settings && room.settings.restHouseMode === 'rest';
+      const payout = isRestMode ? 0 : (room.pot || 0);
+      if (payout > 0) {
+        player.money = (Number.isFinite(player.money) ? player.money : 0) + payout;
+        room.pot = 0;
+        room.restHousePot = 0;
+      }
+      player.isResting = true;
+      room.pendingAction = null;
+
+      console.log(`🏨 Room ${room.roomId}: Player ${player.id} landed on REST HOUSE via card and ${isRestMode ? 'rests for one turn (no pot)' : `collected $${payout} pot.`}`);
+
+      io.to(room.roomId).emit('rest-house:resolved', {
+        playerId: player.id,
+        fee: 0,
+        payout,
+        pot: 0,
+        money: player.money,
+        isResting: true,
+      });
+
+      return {
+        ...effect,
+        payout,
+        pot: 0,
+        restHousePot: 0,
+        money: player.money,
+        isResting: true,
+      };
+    }
+
+    room.pendingAction = null;
+    return effect;
+  }
+
   // ===================== AUTHORITATIVE CARD ENGINE =====================
   // Chance / Community Chest (Treasure / Surprise) card draw and resolution.
   //
@@ -2441,6 +2669,30 @@ io.on('connection', (socket) => {
     if (player.inJail) {
       room.consecutiveDoubles = 0;
       room.hasExtraTurn = false;
+      room.pendingAction = null;
+      room.settledCardLanding = null;
+    } else if (outcome.position !== outcome.fromPosition) {
+      const rentMultiplier = outcome.card && Number.isFinite(outcome.card.rentMultiplier)
+        ? outcome.card.rentMultiplier
+        : 1;
+      const landingEffect = applyCardLandingEffect(room, io, player, outcome.position, {
+        rentMultiplier,
+      });
+      outcome.landingEffect = landingEffect;
+      outcome.money = player.money;
+
+      if (landingEffect && (landingEffect.type === 'rent' || landingEffect.type === 'tax' || landingEffect.type === 'club' || landingEffect.type === 'rest_house')) {
+        room.settledCardLanding = {
+          ...landingEffect,
+          playerId: player.id,
+          tileId: outcome.position,
+          actionId: data.actionId,
+        };
+      } else {
+        room.settledCardLanding = null;
+      }
+    } else {
+      room.settledCardLanding = null;
     }
 
     persistRoom(room);
@@ -2500,6 +2752,8 @@ io.on('connection', (socket) => {
 
     // The server decides the dice. Nothing from `data` is read.
     const roll = room.rollDiceFor(rollerId, 'dice', null, forcedDice);
+    room.pendingAction = null;
+    room.settledCardLanding = null;
 
     // The first roll is the moment the game actually begins (the client flips
     // its own isGameStarted on the same press). Stamping it server-side is what
@@ -2745,6 +2999,8 @@ io.on('connection', (socket) => {
     // Playing a movement card resets consecutive doubles and cancels any extra roll
     room.consecutiveDoubles = 0;
     room.hasExtraTurn = false;
+    room.pendingAction = null;
+    room.settledCardLanding = null;
 
     // The card becomes the authoritative roll for this player, so the movement
     // it produces is derived server-side by player:moved.
@@ -2766,6 +3022,8 @@ io.on('connection', (socket) => {
     // Ending turn resets consecutive doubles and cancels extra rolls
     room.consecutiveDoubles = 0;
     room.hasExtraTurn = false;
+    room.pendingAction = null;
+    room.settledCardLanding = null;
 
     // Advance through the shared turn path: this cancels the outgoing turn
     // clock, advances the turn, re-arms the clock for the new player, and
@@ -2839,6 +3097,7 @@ io.on('connection', (socket) => {
     // Debit the SERVER's price. `price` is a whole non-negative number straight
     // from the board table, so no further coercion is needed here.
     player.money = knownMoney - price;
+    room.pendingAction = null;
     // A purchase changes ownership + money: a meaningful state change, persist it.
     persistRoom(room);
     console.log(`🏠 Room ${roomId}: Tile ${data.tileId} purchased by Player ${data.playerId}`);
@@ -3141,6 +3400,32 @@ io.on('connection', (socket) => {
       return reject(ack, 'NOT_ON_CLUB', `Player ${actor.id} is on tile ${actor.position}, not on CLUB (tile ${board.CLUB_TILE_ID}).`);
     }
 
+    // Idempotency: if this club fee was ALREADY settled authoritatively during card movement, do not charge twice!
+    if (room.settledCardLanding &&
+        room.settledCardLanding.type === 'club' &&
+        room.settledCardLanding.playerId === actor.id &&
+        room.settledCardLanding.tileId === board.CLUB_TILE_ID) {
+      const settled = room.settledCardLanding;
+      if (typeof ack === 'function') {
+        ack({
+          ok: true,
+          alreadySettled: true,
+          playerId: actor.id,
+          fee: settled.fee,
+          paid: settled.paid,
+          cardCount: settled.cardCount,
+          houseCount: settled.houseCount,
+          pot: room.pot,
+          restHousePot: room.pot,
+          money: actor.money,
+          isBankrupt: !!actor.isBankrupt,
+          currentTurnPlayerId: room.currentTurnPlayerId,
+          turnDeadline: room.turnDeadline,
+        });
+      }
+      return;
+    }
+
     const replayError = actionGate(room, ack, data.actionId);
     if (replayError) return replayError;
 
@@ -3221,6 +3506,28 @@ io.on('connection', (socket) => {
       return reject(ack, 'NOT_ON_REST_HOUSE', `Player ${actor.id} is on tile ${actor.position}, not on REST HOUSE (tile ${board.REST_HOUSE_TILE_ID}).`);
     }
 
+    // Idempotency: if rest house was ALREADY settled authoritatively during card movement, do not process twice!
+    if (room.settledCardLanding &&
+        room.settledCardLanding.type === 'rest_house' &&
+        room.settledCardLanding.playerId === actor.id &&
+        room.settledCardLanding.tileId === board.REST_HOUSE_TILE_ID) {
+      const settled = room.settledCardLanding;
+      if (typeof ack === 'function') {
+        ack({
+          ok: true,
+          alreadySettled: true,
+          playerId: actor.id,
+          fee: 0,
+          payout: settled.payout,
+          pot: room.pot,
+          restHousePot: room.pot,
+          money: actor.money,
+          isResting: true,
+        });
+      }
+      return;
+    }
+
     const replayError = actionGate(room, ack, data.actionId);
     if (replayError) return replayError;
 
@@ -3293,6 +3600,32 @@ io.on('connection', (socket) => {
 
     if (data.tileId !== undefined && data.tileId !== actor.position) {
       return reject(ack, 'TILE_MISMATCH', `Player ${actor.id} is on tile ${actor.position}, not tile ${data.tileId}.`);
+    }
+
+    // Idempotency: if this tax was ALREADY settled authoritatively during card movement, do not charge twice!
+    if (room.settledCardLanding &&
+        room.settledCardLanding.type === 'tax' &&
+        room.settledCardLanding.playerId === actor.id &&
+        room.settledCardLanding.tileId === actor.position) {
+      const settled = room.settledCardLanding;
+      console.log(`📉 Room ${roomId}: tax on tile ${actor.position} already settled by card movement for Player ${actor.id} ($${settled.paid})`);
+      if (typeof ack === 'function') {
+        ack({
+          ok: true,
+          alreadySettled: true,
+          playerId: actor.id,
+          tileId: actor.position,
+          amount: settled.amount,
+          paid: settled.paid,
+          pot: room.pot,
+          restHousePot: room.pot,
+          money: actor.money,
+          isBankrupt: !!actor.isBankrupt,
+          currentTurnPlayerId: room.currentTurnPlayerId,
+          turnDeadline: room.turnDeadline,
+        });
+      }
+      return;
     }
 
     const replayError = actionGate(room, ack, data.actionId);
@@ -3776,6 +4109,7 @@ io.on('connection', (socket) => {
     if (room.activeAuction) {
       return reject(ack, 'AUCTION_IN_PROGRESS', 'An auction is already running in this room.');
     }
+    room.pendingAction = null;
     if (!isOwnableTile(data.auction.tileId)) {
       return reject(ack, 'BAD_TILE', `Tile ${data.auction.tileId} cannot be auctioned.`);
     }

@@ -46,7 +46,14 @@ function findNearestTileIndex(fromPos, type) {
   for (let offset = 1; offset <= board.BOARD_SIZE; offset++) {
     const idx = (fromPos + offset) % board.BOARD_SIZE;
     const tile = board.getTile(idx);
-    if (tile && tile.type === type) return idx;
+    if (!tile) continue;
+    if (type === 'utility') {
+      if (typeof board.isUtilityTile === 'function' ? board.isUtilityTile(idx) : (tile.type === 'airport' || tile.type === 'electricity' || tile.type === 'internet')) {
+        return idx;
+      }
+    } else if (tile.type === type) {
+      return idx;
+    }
   }
   return fromPos;
 }
@@ -101,6 +108,16 @@ function resolveCardDraw(room, player, options = {}) {
       salary = board.PASS_START_BONUS;
     }
     newPosition = targetIdx;
+  } else if (card.movementType === 'nearest_utility') {
+    const targetIdx = findNearestTileIndex(fromPosition, 'utility');
+    let steps = targetIdx - fromPosition;
+    if (steps <= 0) steps += board.BOARD_SIZE;
+    const raw = fromPosition + steps;
+    if (raw >= board.BOARD_SIZE) {
+      passedGo = true;
+      salary = board.PASS_START_BONUS;
+    }
+    newPosition = targetIdx;
   } else if (card.movementType === 'forward_8') {
     const steps = 8;
     const raw = fromPosition + steps;
@@ -109,6 +126,38 @@ function resolveCardDraw(room, player, options = {}) {
       salary = board.PASS_START_BONUS;
     }
     newPosition = ((raw % board.BOARD_SIZE) + board.BOARD_SIZE) % board.BOARD_SIZE;
+  } else if (typeof card.movementType === 'string' && (card.movementType.startsWith('forward_') || card.movementType.startsWith('backward_') || card.movementType === 'spaces' || card.movementType === 'relative')) {
+    let steps = Number.isInteger(card.steps) ? card.steps : 0;
+    if (card.movementType.startsWith('forward_')) {
+      const parsed = parseInt(card.movementType.replace('forward_', ''), 10);
+      if (Number.isInteger(parsed)) steps = parsed;
+    } else if (card.movementType.startsWith('backward_')) {
+      const parsed = parseInt(card.movementType.replace('backward_', ''), 10);
+      if (Number.isInteger(parsed)) steps = -parsed;
+    }
+    if (steps > 0) {
+      const raw = fromPosition + steps;
+      if (raw >= board.BOARD_SIZE) {
+        passedGo = true;
+        salary = board.PASS_START_BONUS;
+      }
+      newPosition = ((raw % board.BOARD_SIZE) + board.BOARD_SIZE) % board.BOARD_SIZE;
+    } else if (steps < 0) {
+      newPosition = (((fromPosition + steps) % board.BOARD_SIZE) + board.BOARD_SIZE) % board.BOARD_SIZE;
+      passedGo = false;
+      salary = 0;
+    }
+  } else if (card.movementType === 'named_tile' || card.movementType === 'tile' || card.movementType === 'go_to_tile') {
+    const targetIdx = Number.isInteger(card.targetTile) ? card.targetTile : (Number.isInteger(card.tileId) ? card.tileId : fromPosition);
+    if (targetIdx !== fromPosition) {
+      let steps = targetIdx - fromPosition;
+      if (steps <= 0) steps += board.BOARD_SIZE;
+      if (fromPosition + steps >= board.BOARD_SIZE && targetIdx !== board.JAIL_TILE_ID) {
+        passedGo = true;
+        salary = board.PASS_START_BONUS;
+      }
+    }
+    newPosition = targetIdx;
   } else if (card.movementType === 'jail') {
     newPosition = 10;
     // Straight to JAIL does not pass GO
@@ -163,6 +212,11 @@ function resolveCardDraw(room, player, options = {}) {
 
   player.money = finalMoney;
 
+  let landingEffect = null;
+  if (newPosition !== fromPosition && !player.inJail) {
+    landingEffect = resolveCardLanding(room, player, newPosition, options);
+  }
+
   return {
     ok: true,
     kind,
@@ -174,6 +228,7 @@ function resolveCardDraw(room, player, options = {}) {
       money: card.money,
       grantSkillCard: card.grantSkillCard,
       movementType: card.movementType,
+      rentMultiplier: card.rentMultiplier || 1,
     },
     playerId: player.id,
     fromPosition,
@@ -186,7 +241,115 @@ function resolveCardDraw(room, player, options = {}) {
     swap,
     inJail: typeof player.inJail === 'boolean' ? player.inJail : false,
     jailTurns: Number.isInteger(player.jailTurns) ? player.jailTurns : 0,
+    landingEffect: landingEffect || null,
   };
+}
+
+function resolveCardLanding(room, player, tileId, options = {}) {
+  const tile = board.getTile(tileId);
+  if (!tile) return null;
+
+  // Direct to jail or already in jail triggers no ordinary landing effects
+  if (player && player.inJail) {
+    return null;
+  }
+  if (tileId === board.JAIL_TILE_ID) {
+    return null;
+  }
+
+  // 1. Tax Tile
+  if (board.isTaxTile(tileId)) {
+    const amount = board.taxAmount(tileId);
+    return {
+      type: 'tax',
+      tileId,
+      amount,
+    };
+  }
+
+  // 2. Rest House (Tile 20)
+  if (tileId === board.REST_HOUSE_TILE_ID) {
+    return {
+      type: 'rest_house',
+      tileId: 20,
+      payout: (room && Number.isFinite(room.pot)) ? room.pot : 0,
+    };
+  }
+
+  // 3. Club (Tile 30)
+  if (tileId === board.CLUB_TILE_ID) {
+    const cardCount = (player && player.hasSkillCard !== false) ? 1 : 0;
+    const houseCount = room ? board.countPlayerHouses(room.propertyOwnership, room.propertyHouses, player.id) : 0;
+    const fee = board.calculateClubFee(cardCount, houseCount);
+    return {
+      type: 'club',
+      tileId: 30,
+      fee,
+      cardCount,
+      houseCount,
+    };
+  }
+
+  // 4. Ownable tile (Property or Utility/Airport)
+  if (board.isOwnableTile(tileId)) {
+    const ownership = (room && room.propertyOwnership) || {};
+    const ownerId = ownership[tileId];
+
+    // Unowned property: purchase prompt
+    if (ownerId === undefined || ownerId === null) {
+      const price = board.purchasePrice(tileId);
+      const playerMoney = (player && Number.isFinite(player.money)) ? player.money : 0;
+      return {
+        type: 'unowned_property',
+        action: 'buy_or_pass',
+        tileId,
+        price,
+        canBuy: price !== null && playerMoney >= price,
+      };
+    }
+
+    // Owned by self: no rent
+    if (player && ownerId === player.id) {
+      return {
+        type: 'own_property',
+        tileId,
+        ownerId: player.id,
+        amount: 0,
+      };
+    }
+
+    // Owned by opponent -> Rent!
+    const houses = (room && room.propertyHouses) || {};
+    const owner = (room && Array.isArray(room.players)) ? room.players.find(p => p.id === ownerId) : null;
+
+    // Check if owner is in jail and jailCollectsRent is disabled
+    if (owner && owner.inJail && room && room.settings && room.settings.jailCollectsRent === false) {
+      return {
+        type: 'rent',
+        tileId,
+        ownerId,
+        amount: 0,
+        ownerInJail: true,
+      };
+    }
+
+    const baseRent = board.calculateRent(tileId, ownerId, ownership, houses);
+    const multiplier = (Number.isFinite(options.rentMultiplier) && options.rentMultiplier > 0)
+      ? options.rentMultiplier
+      : 1;
+    const rentAmount = Math.floor(baseRent * multiplier);
+
+    return {
+      type: 'rent',
+      tileId,
+      ownerId,
+      amount: rentAmount,
+      baseRent,
+      multiplier,
+    };
+  }
+
+  return null;
 }
 
 module.exports = {
@@ -198,4 +361,5 @@ module.exports = {
   getCardTileType,
   getCardDefinition,
   resolveCardDraw,
+  resolveCardLanding,
 };

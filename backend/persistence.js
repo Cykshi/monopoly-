@@ -66,6 +66,7 @@ function serializeRoom(room) {
     winnerReason: room.winnerReason ?? null,
     trades: room.trades,
     activeAuction: room.activeAuction,
+    pendingAction: room.pendingAction ?? null,
     pot: room.pot ?? 0,
     restHousePot: room.pot ?? 0,
     createdAt: room.createdAt,

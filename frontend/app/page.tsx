@@ -101,6 +101,18 @@ interface CardDrawnEvent {
   } | null;
   inJail?: boolean;
   jailTurns?: number;
+  landingEffect?: {
+    type: string;
+    tileId?: number;
+    amount?: number;
+    paid?: number;
+    price?: number | null;
+    canBuy?: boolean;
+    ownerId?: number;
+    fee?: number;
+    payout?: number;
+    isBankrupt?: boolean;
+  } | null;
   code?: string;
   error?: string;
 }
@@ -2533,12 +2545,33 @@ export default function GameBoard() {
       })
     );
 
-    if (data.card?.movementType === "nearest_airport" || data.card?.movementType === "forward_8") {
-      addLog(`${pName} advanced to ${BOARD_TILES[data.position]?.name || `tile ${data.position}`}.`);
-      moveTimeoutRef.current = window.setTimeout(
-        () => handleLanding(BOARD_TILES[data.position], data.playerId, broadcast),
-        300
-      );
+    if (data.position !== data.fromPosition && data.card?.movementType !== "jail") {
+      const destTile = BOARD_TILES[data.position];
+      if (data.landingEffect?.type === "unowned_property") {
+        addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`}.`);
+        if (data.playerId === myPlayerIdRef.current && destTile) {
+          setActiveModal(destTile);
+        }
+      } else if (data.landingEffect?.type === "rent") {
+        const owner = playersRef.current.find((p) => p.id === data.landingEffect?.ownerId);
+        addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`} and paid -$${data.landingEffect.paid ?? data.landingEffect.amount} rent to ${owner?.name || `Player ${data.landingEffect.ownerId}`}.`);
+      } else if (data.landingEffect?.type === "tax") {
+        addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`} and paid -$${data.landingEffect.paid ?? data.landingEffect.amount} tax.`);
+      } else if (data.landingEffect?.type === "club") {
+        addLog(`${pName} advanced to CLUB and paid -$${data.landingEffect.paid ?? data.landingEffect.fee} fee.`);
+      } else if (data.landingEffect?.type === "rest_house") {
+        if ((data.landingEffect.payout || 0) > 0) {
+          addLog(`${pName} advanced to REST HOUSE and collected +$${data.landingEffect.payout}.`);
+        } else {
+          addLog(`${pName} advanced to REST HOUSE.`);
+        }
+      } else if (data.card?.movementType === "nearest_airport" || data.card?.movementType === "forward_8") {
+        addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`}.`);
+        moveTimeoutRef.current = window.setTimeout(
+          () => handleLanding(destTile, data.playerId, broadcast),
+          300
+        );
+      }
     }
   };
 
