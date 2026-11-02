@@ -206,9 +206,9 @@ const syncNow = (socket) =>
   // on — the board gives them no houseCost. This fixture builds 3 houses below, so
   // it must own a genuine PROPERTY or the build is correctly refused with
   // BAD_BUILD and the restored house count comes back 0.
-  const OWNABLE = [1, 2, 4, 6, 8, 11, 13, 16, 17, 19, 21, 22, 26, 27, 29];
+  const OWNABLE = [1, 26]; // Bangladesh color group monopoly
   const owned = [];
-  for (let i = 0; i < 12 && owned.length < 2; i++) {
+  for (let i = 0; i < 40 && owned.length < 2; i++) {
     // Exclude tiles we already own: the walker may still be STANDING on the tile
     // it just bought, and walkToAny would otherwise return it immediately, so the
     // loop would never collect a second distinct tile.
@@ -222,6 +222,11 @@ const syncNow = (socket) =>
     `owned=${JSON.stringify(owned)} pos=${await serverPos(A, 1)}`);
   // The build now costs money, so assert it actually applied — otherwise the
   // restored house-count check below fails with a confusing "houses=0".
+  for (let lvl = 1; lvl <= 2; lvl++) {
+    await emitAction(A, 'house:upgraded', { tileId: owned[0], houses: lvl, playerId: 1 });
+    await emitAction(A, 'house:upgraded', { tileId: owned[1], houses: lvl, playerId: 1 });
+  }
+  await emitAction(A, 'house:upgraded', { tileId: owned[0], houses: 3, playerId: 1 });
   const buildAck = await emitAction(A, 'house:upgraded', { tileId: owned[1], houses: 3, playerId: 1 });
   check('fixture: three houses were built on the second owned tile',
     !!(buildAck && buildAck.ok), `tile=${owned[1]} ack=${JSON.stringify(buildAck)}`);

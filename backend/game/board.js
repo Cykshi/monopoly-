@@ -80,6 +80,8 @@ const UTILITY_RENT_TABLE = {
 };
 
 const MAX_HOUSES = 5; // 5 == hotel
+const BANK_HOUSES_LIMIT = 32;
+const BANK_HOTELS_LIMIT = 12;
 
 // The economy constants the client also applies. Kept here so every money
 // change the server makes uses one set of numbers.
@@ -256,6 +258,63 @@ function isTaxTile(tileId) {
   return !!tile && tile.type === 'tax';
 }
 
+// Returns all tiles belonging to a specific group/type.
+function getGroupTiles(type) {
+  return TILES.filter((t) => t.type === type);
+}
+
+// Checks if a player owns every property in the given color group.
+function hasMonopoly(propertyOwnership, playerId, groupType) {
+  if (!propertyOwnership || playerId === undefined || playerId === null || !PROPERTY_TYPES.has(groupType)) {
+    return false;
+  }
+  const groupTiles = getGroupTiles(groupType);
+  if (!groupTiles.length) return false;
+  return groupTiles.every((t) => propertyOwnership[t.id] === playerId);
+}
+
+// Checks if building on `tileId` violates even-building rules.
+// Rule: A player cannot build on a property if another property in the same group has fewer houses.
+function canBuildEvenly(propertyHouses, tileId, groupType) {
+  const currentHouses = (propertyHouses && Number.isInteger(propertyHouses[tileId]))
+    ? propertyHouses[tileId]
+    : 0;
+  const groupTiles = getGroupTiles(groupType);
+  for (const t of groupTiles) {
+    if (t.id === tileId) continue;
+    const otherHouses = (propertyHouses && Number.isInteger(propertyHouses[t.id]))
+      ? propertyHouses[t.id]
+      : 0;
+    if (otherHouses < currentHouses) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Computes bank building supply available for purchase.
+// 32 houses, 12 hotels total.
+function getBankBuildingSupply(propertyHouses) {
+  let housesInUse = 0;
+  let hotelsInUse = 0;
+  if (propertyHouses && typeof propertyHouses === 'object') {
+    for (const h of Object.values(propertyHouses)) {
+      const count = Number(h) || 0;
+      if (count >= 1 && count <= 4) {
+        housesInUse += count;
+      } else if (count === 5) {
+        hotelsInUse += 1;
+      }
+    }
+  }
+  return {
+    availableHouses: Math.max(0, BANK_HOUSES_LIMIT - housesInUse),
+    availableHotels: Math.max(0, BANK_HOTELS_LIMIT - hotelsInUse),
+    housesInUse,
+    hotelsInUse,
+  };
+}
+
 module.exports = {
   TILES,
   BOARD_SIZE,
@@ -290,4 +349,10 @@ module.exports = {
   calculateRestHouseFee,
   countPlayerHouses,
   isTaxTile,
+  BANK_HOUSES_LIMIT,
+  BANK_HOTELS_LIMIT,
+  getGroupTiles,
+  hasMonopoly,
+  canBuildEvenly,
+  getBankBuildingSupply,
 };

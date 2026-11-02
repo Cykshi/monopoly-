@@ -3526,8 +3526,40 @@ export default function GameBoard() {
     const tile = BOARD_TILES.find((t) => t.id === tileId);
     if (!tile || !PROPERTY_TYPES.has(tile.type) || propertyOwnership[tileId] !== currentPlayer.id) return;
 
+    // Monopoly rule check
+    const groupTiles = BOARD_TILES.filter((t) => t.type === tile.type);
+    const hasMonopoly = groupTiles.every((t) => propertyOwnership[t.id] === currentPlayer.id);
+    if (!hasMonopoly) {
+      addLog("You must own all properties in this color group to build.");
+      return;
+    }
+
     const currentHouses = propertyHouses[tileId] || 0;
     if (currentHouses >= 5) return;
+
+    // Even-building rule check
+    const hasUneven = groupTiles.some((t) => t.id !== tileId && (propertyHouses[t.id] || 0) < currentHouses);
+    if (hasUneven) {
+      addLog("Cannot build: another property in this color group has fewer houses.");
+      return;
+    }
+
+    // Bank building supply check
+    let housesInUse = 0;
+    let hotelsInUse = 0;
+    Object.values(propertyHouses).forEach((h) => {
+      const cnt = Number(h) || 0;
+      if (cnt >= 1 && cnt <= 4) housesInUse += cnt;
+      else if (cnt === 5) hotelsInUse += 1;
+    });
+    if (currentHouses < 4 && housesInUse >= 32) {
+      addLog("No houses available in the bank.");
+      return;
+    }
+    if (currentHouses === 4 && hotelsInUse >= 12) {
+      addLog("No hotels available in the bank.");
+      return;
+    }
 
     const cost = currentHouses === 4 ? tile.hotelCost || 200 : tile.houseCost || 100;
     if (currentPlayer.money < cost) {
@@ -3540,7 +3572,11 @@ export default function GameBoard() {
     );
     setPropertyHouses((prev) => ({ ...prev, [tileId]: currentHouses + 1 }));
     addLog(`${currentPlayer.name} built on ${tile.name} (-$${cost})`);
-    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1, playerId: currentPlayer.id, actionId: newActionId() });
+    socketRef.current?.emit("house:upgraded", { tileId, houses: currentHouses + 1, playerId: currentPlayer.id, actionId: newActionId() }, (res: { ok: boolean; error?: string }) => {
+      if (res && res.ok === false) {
+        addLog(`⚠️ Upgrade refused: ${res.error || "Cannot upgrade property."}`);
+      }
+    });
   };
 
   // Requests only: the server calculates the refund and broadcasts the resulting
@@ -4773,6 +4809,11 @@ export default function GameBoard() {
                         const degradeRefund = Math.floor(degradeCost / 2);
                         const canDegrade = currentHouses > 0;
 
+                        const groupTiles = BOARD_TILES.filter((t) => t.type === activeModal.type);
+                        const hasMonopoly = groupTiles.every((t) => propertyOwnership[t.id] === currentPlayer?.id);
+                        const hasUneven = groupTiles.some((t) => t.id !== activeModal.id && (propertyHouses[t.id] || 0) < currentHouses);
+                        const cantAfford = (currentPlayer?.money ?? 0) < upgradeCost;
+
                         return (
                           <div
                             className={`mt-3 md:mt-[2vmin] grid gap-2 md:gap-[1.2vmin] ${isUpgradable ? "grid-cols-3" : "grid-cols-1"
@@ -4790,10 +4831,10 @@ export default function GameBoard() {
                               <>
                                 <button
                                   onClick={() => upgradeHouse(activeModal.id)}
-                                  disabled={maxedOut}
+                                  disabled={maxedOut || !hasMonopoly || hasUneven || cantAfford}
                                   className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-green-500 bg-green-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
                                 >
-                                  {maxedOut ? "Maxed" : `Upgrade (-$${upgradeCost})`}
+                                  {maxedOut ? "Maxed" : !hasMonopoly ? "Need Monopoly" : hasUneven ? "Build Evenly" : cantAfford ? "Can't Afford" : `Upgrade (-$${upgradeCost})`}
                                 </button>
                                 <button
                                   onClick={() => downgradeHouse(activeModal.id)}

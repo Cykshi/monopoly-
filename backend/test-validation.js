@@ -478,9 +478,12 @@ const cleanup = async (roomId) => {
   if (buildTile !== null) {
     const moneyBeforeBuild = playerIn(await readState(A), 1).money;
     const buildOk = await emitAction(A, 'house:upgraded', { tileId: buildTile, houses: 2, playerId: 1 });
-    check('a legal build (2 houses on an owned PROPERTY) is ACCEPTED or correctly gated',
+    check('a build on an owned PROPERTY is ACCEPTED or correctly gated',
       !!(buildOk && (buildOk.ok === true ||
         buildOk.code === 'NOT_YOUR_TURN' ||
+        buildOk.code === 'NOT_MONOPOLY' ||
+        buildOk.code === 'INVALID_TRANSITION' ||
+        buildOk.code === 'UNEVEN_BUILDING' ||
         buildOk.code === 'INSUFFICIENT_FUNDS')),
       `tile=${buildTile} ${JSON.stringify(buildOk)}`);
 

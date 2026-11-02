@@ -223,10 +223,10 @@ function loadComputeRestoredState() {
   // on — the board gives them no houseCost. This fixture builds 3 houses below, so
   // it must own a genuine PROPERTY, otherwise the build is correctly refused with
   // BAD_BUILD and the mapped house count comes back 0.
-  const OWNABLE = [1, 2, 4, 6, 8, 11, 13, 16, 17, 19, 21, 22, 26, 27, 29];
+  const OWNABLE = [1, 26]; // Bangladesh color group monopoly
   const owned = [];
   let lastBuyError = null;
-  for (let i = 0; i < 12 && owned.length < 2; i++) {
+  for (let i = 0; i < 40 && owned.length < 2; i++) {
     // Exclude tiles we already own: the walker may still be STANDING on the tile
     // it just bought, and walkToAny would otherwise return it immediately, so the
     // loop would never collect a second distinct tile.
@@ -249,6 +249,11 @@ function loadComputeRestoredState() {
     await cleanup(roomId);
     process.exit(1);
   }
+  for (let lvl = 1; lvl <= 2; lvl++) {
+    await emitAction(owner, 'house:upgraded', { tileId: owned[0], houses: lvl, playerId: 1 });
+    await emitAction(owner, 'house:upgraded', { tileId: owned[1], houses: lvl, playerId: 1 });
+  }
+  await emitAction(owner, 'house:upgraded', { tileId: owned[0], houses: 3, playerId: 1 });
   await emitAction(owner, 'house:upgraded', { tileId: owned[1], houses: 3, playerId: 1 });
 
   // One final move so the persisted position is a real, derived value. The walk

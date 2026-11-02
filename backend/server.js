@@ -3115,10 +3115,14 @@ io.on('connection', (socket) => {
     const gateError = turnGate(room, ack, data.playerId);
     if (gateError) return gateError;
 
-    if (!isOwnableTile(data.tileId)) {
-      return reject(ack, 'BAD_TILE', `Tile ${data.tileId} is not a buildable tile.`);
+    if (!board.isPropertyTile(data.tileId)) {
+      return reject(ack, 'BAD_TILE', `Tile ${data.tileId} is not a buildable property tile.`);
     }
-    if (!Number.isInteger(data.houses) || data.houses < 0 || data.houses > 5) {
+    const tile = board.getTile(data.tileId);
+    if (!tile) {
+      return reject(ack, 'BAD_TILE', `Tile ${data.tileId} does not exist.`);
+    }
+    if (!Number.isInteger(data.houses) || data.houses < 0 || data.houses > board.MAX_HOUSES) {
       return reject(ack, 'BAD_HOUSE_COUNT', `House count ${data.houses} must be 0-5.`);
     }
     const owner = room.propertyOwnership[data.tileId];
@@ -3138,62 +3142,70 @@ io.on('connection', (socket) => {
       return reject(ack, 'NOT_OWNER', `Tile ${data.tileId} belongs to player ${owner}, not ${actor.id}.`);
     }
 
-    // Replay gate: house counts are absolute, so a duplicate build frame is
-    // idempotent in effect — but it would still be reported as a second build
-    // to the log and the client's build button, so it is dropped here. A
-    // duplicated frame must ALSO not be charged twice, which is what the money
-    // block below depends on.
+    // 1. Monopoly ownership rule: Player must own all properties in the color group
+    if (!board.hasMonopoly(room.propertyOwnership, actor.id, tile.type)) {
+      return reject(ack, 'NOT_MONOPOLY', 'You must own all properties in this color group before building.');
+    }
+
+    // Replay gate: a duplicate build frame must not be charged twice.
     const replayError = actionGate(room, ack, data.actionId);
     if (replayError) return replayError;
 
-    // ===== BUILDING COSTS MONEY (SERVER-AUTHORITATIVE) =====
-    // Previously this handler wrote the house count and charged NOTHING — the
-    // client applied its own cost for display while the server recorded the
-    // houses for free, so any player could build out the whole board at $0 and a
-    // hand-rolled client could build silently. The cost now comes from the
-    // server's board table (board.buildCost), never from the payload.
-    //
-    // House counts are ABSOLUTE (the client sends the level it wants, not a
-    // delta), so the charge is the sum of the levels being added: building from
-    // 1 to 3 pays for level 1 and level 2. Level 4 -> 5 is charged at hotelCost.
-    //
-    // A DOWNGRADE is not a sale: this handler only ever charges for added levels
-    // and never credits money back, so a client cannot convert houses into cash
-    // by sending a lower count. Selling is the separate `house:sold` handler.
     const currentHouses = Number.isInteger(room.propertyHouses[data.tileId])
       ? room.propertyHouses[data.tileId]
       : 0;
-    if (data.houses < currentHouses) {
+
+    if (currentHouses >= board.MAX_HOUSES) {
+      return reject(ack, 'ALREADY_MAXED', 'Property already has a hotel.');
+    }
+    if (data.houses <= currentHouses) {
       return reject(ack, 'BAD_BUILD', 'Use house:sold to remove an improvement.');
     }
-    let buildTotal = 0;
-    for (let level = currentHouses; level < data.houses; level++) {
-      const stepCost = buildCost(data.tileId, level);
-      if (stepCost === null) {
-        return reject(ack, 'BAD_BUILD', `Tile ${data.tileId} cannot be built to level ${level + 1}.`);
-      }
-      buildTotal += stepCost;
+
+    // 2. Valid transitions: Must upgrade exactly one level at a time (e.g. 0->1, 1->2, 2->3, 3->4, 4->5)
+    if (data.houses !== currentHouses + 1) {
+      return reject(ack, 'INVALID_TRANSITION', 'Houses must be upgraded one level at a time.');
     }
 
-    // Affordability is enforced for every balance including exactly $0, matching
-    // the purchase path. Lower counts are handled only by house:sold.
+    // 3. Even-building rule: Cannot build on a property if another property in the group has fewer houses
+    if (!board.canBuildEvenly(room.propertyHouses, data.tileId, tile.type)) {
+      return reject(ack, 'UNEVEN_BUILDING', 'Cannot build: another property in this color group has fewer houses.');
+    }
+
+    // 4. Available bank building supply: 32 houses, 12 hotels
+    const supply = board.getBankBuildingSupply(room.propertyHouses);
+    if (data.houses <= 4 && supply.availableHouses < 1) {
+      return reject(ack, 'BANK_HOUSES_EXHAUSTED', 'No houses available in the bank.');
+    }
+    if (data.houses === 5 && supply.availableHotels < 1) {
+      return reject(ack, 'BANK_HOTELS_EXHAUSTED', 'No hotels available in the bank.');
+    }
+
+    // 5. Cost & Affordability
+    const cost = board.buildCost(data.tileId, currentHouses);
+    if (cost === null) {
+      return reject(ack, 'BAD_BUILD', `Tile ${data.tileId} cannot be built to level ${data.houses}.`);
+    }
+
     const knownMoney = Number.isFinite(actor.money) ? actor.money : 0;
-    if (buildTotal > knownMoney) {
+    if (cost > knownMoney) {
       return reject(ack,
         'INSUFFICIENT_FUNDS',
-        `Building to ${data.houses} house(s) costs $${buildTotal} but player has $${knownMoney}.`);
+        `Building to ${data.houses} house(s) costs $${cost} but player has $${knownMoney}.`);
     }
 
-    // Debit the SERVER's cost, then write the house count. The charge happens
-    // BEFORE the mutation so a rejected build cannot leave houses without a
-    // payment.
-    actor.money = knownMoney - buildTotal;
-
+    // Debit the SERVER's cost, then write the house count.
+    actor.money = knownMoney - cost;
     room.propertyHouses[data.tileId] = data.houses;
-    // A build changes the board permanently — persist it.
     persistRoom(room);
-    socket.to(roomId).emit('house:upgraded', data);
-    if (typeof ack === 'function') ack({ ok: true, cost: buildTotal, money: actor.money });
+    socket.to(roomId).emit('house:upgraded', {
+      tileId: data.tileId,
+      houses: data.houses,
+      playerId: actor.id,
+      cost,
+      money: actor.money,
+    });
+    if (typeof ack === 'function') ack({ ok: true, tileId: data.tileId, houses: data.houses, cost, money: actor.money });
   }));
 
   // ================= SELL PROPERTY / HOUSES =================

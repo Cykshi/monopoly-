@@ -53,6 +53,7 @@ const observe = (socket, event) => {
   const spy = observe(B, 'property:sold');
   const houseSpy = observe(B, 'house:sold');
   await acquire(1); // Dhaka: $60, $50 per house / hotel
+  await acquire(26); // Chittagong: completes bangladesh monopoly
   await acquire(5); // Airport: $160, no improvements
   let state = await sync(A);
   let before = money(state);
@@ -91,6 +92,10 @@ const observe = (socket, event) => {
   assert.equal(spy.received.length, 0);
   assert.equal(houseSpy.received.length, 0);
 
+  for (let lvl = 1; lvl <= 4; lvl++) {
+    assert.equal((await ack(A, 'house:upgraded', { tileId: 1, playerId: 1, houses: lvl, actionId: actionId() })).ok, true);
+    assert.equal((await ack(A, 'house:upgraded', { tileId: 26, playerId: 1, houses: lvl, actionId: actionId() })).ok, true);
+  }
   const built = await ack(A, 'house:upgraded', { tileId: 1, playerId: 1, houses: 5, actionId: actionId() });
   assert.equal(built.ok, true, JSON.stringify(built));
   state = await sync(A);

@@ -84,6 +84,7 @@ const ONLINE_SUITES = [
   'test-game-settings.js',
   'test-doubles-authority.js',
   'test-card-landing-authority.js',
+  'test-building-authority.js',
 ];
 
 const onlyOffline = process.argv.includes('--offline');
