@@ -85,6 +85,7 @@ const ONLINE_SUITES = [
   'test-doubles-authority.js',
   'test-card-landing-authority.js',
   'test-building-authority.js',
+  'test-mortgage-authority.js',
 ];
 
 const onlyOffline = process.argv.includes('--offline');

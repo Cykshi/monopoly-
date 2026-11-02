@@ -96,6 +96,7 @@ class GameRoom {
     this.players = [];               // player records, each carrying its own sessionToken
     this.propertyOwnership = {}; // tileId -> playerId
     this.propertyHouses = {};    // tileId -> houseCount
+    this.propertyMortgaged = {}; // tileId -> boolean
     this.trades = [];            // Array of TradeProposal
     this.chatMessages = [];      // Array of ChatMessage
     this.activeAuction = null;   // AuctionState | null
@@ -620,6 +621,7 @@ function eliminatePlayer(room, io, player, { reason = 'bankrupt', creditorId = n
         room.propertyOwnership[tileId] = creditor.id;
       } else {
         delete room.propertyOwnership[tileId];
+        delete room.propertyMortgaged[tileId];
       }
       delete room.propertyHouses[tileId];
     }
@@ -805,6 +807,7 @@ function rehydrateRoom(data) {
   room.restHousePot = room.pot;
   room.propertyOwnership = data.propertyOwnership || {};
   room.propertyHouses = data.propertyHouses || {};
+  room.propertyMortgaged = data.propertyMortgaged || {};
   room.trades = Array.isArray(data.trades) ? data.trades : [];
   room.activeAuction = data.activeAuction || null;
   room.pendingAction = data.pendingAction || null;
@@ -1148,6 +1151,7 @@ function serializeRoomState(room) {
     players: publicPlayers(room),
     propertyOwnership: room.propertyOwnership,
     propertyHouses: room.propertyHouses,
+    propertyMortgaged: room.propertyMortgaged || {},
     // The authoritative turn, so a client can render whose turn it is from the
     // server's truth rather than inferring it from a stale local flag.
     currentTurnPlayerId: room.currentTurnPlayerId,
@@ -1191,7 +1195,8 @@ function serializePlayerState(room, player) {
     if (ownerId === player.id) {
       ownedProperties.push({
         tileId: Number(tileId),
-        houses: room.propertyHouses[tileId] || 0
+        houses: room.propertyHouses[tileId] || 0,
+        isMortgaged: !!(room.propertyMortgaged && room.propertyMortgaged[tileId]),
       });
     }
   }
@@ -1212,6 +1217,7 @@ function serializePlayerState(room, player) {
     ownedPropertyIds: ownedProperties.map(p => p.tileId),
     propertyOwnership: room.propertyOwnership,
     propertyHouses: room.propertyHouses,
+    propertyMortgaged: room.propertyMortgaged || {},
     // The authoritative turn + its deadline, so a rejoining client repaints the
     // correct current player and the correct countdown from server truth.
     currentTurnPlayerId: room.currentTurnPlayerId,
@@ -1785,6 +1791,26 @@ io.on('connection', (socket) => {
     };
   };
 
+  // Invalidate any pending in-flight trade offers containing a property whose
+  // ownership, mortgage, or existence has mutated since the offer was created.
+  const cancelTradesWithProperty = (room, tileId, reason = 'MORTGAGE_STATUS_CHANGED') => {
+    if (!Array.isArray(room.trades)) return;
+    const affectedTrades = room.trades.filter(
+      (t) =>
+        t.status === 'pending' &&
+        ((Array.isArray(t.initiatorPropertyIds) && t.initiatorPropertyIds.includes(tileId)) ||
+          (Array.isArray(t.targetPropertyIds) && t.targetPropertyIds.includes(tileId)))
+    );
+    if (affectedTrades.length > 0) {
+      room.trades = room.trades.map((t) =>
+        affectedTrades.some((at) => at.id === t.id) ? { ...t, status: 'cancelled' } : t
+      );
+      for (const t of affectedTrades) {
+        io.to(room.roomId).emit('trade:cancelled', { tradeId: t.id, reason });
+      }
+    }
+  };
+
   // Is this player still allowed to act at all? A bankrupt seat is out of the
   // game permanently, so no event may be accepted from it regardless of what the
   // turn pointer says. This is deliberately separate from the turn gate: a
@@ -2263,13 +2289,18 @@ io.on('connection', (socket) => {
     }
 
     // ===== AUTHORITATIVE AMOUNT =====
-    // Computed from the board + the server's ownership/house state. The
+    // Computed from the board + the server's ownership/house/mortgage state. The
     // payload's `amount`, if present, is never consulted.
+    if (room.propertyMortgaged && room.propertyMortgaged[data.tileId]) {
+      return reject(ack, 'PROPERTY_MORTGAGED', `Tile ${data.tileId} is mortgaged and collects no rent.`);
+    }
+
     const owed = board.landingCharge(
       data.tileId,
       payer.id,
       room.propertyOwnership,
-      room.propertyHouses
+      room.propertyHouses,
+      room.propertyMortgaged
     );
     if (!owed || owed.kind !== 'rent' || !(owed.amount > 0)) {
       return reject(ack, 'NO_RENT_DUE', `No rent is due on tile ${data.tileId}.`);
@@ -3142,9 +3173,19 @@ io.on('connection', (socket) => {
       return reject(ack, 'NOT_OWNER', `Tile ${data.tileId} belongs to player ${owner}, not ${actor.id}.`);
     }
 
+    // Mortgaged properties cannot be built upon
+    if (room.propertyMortgaged && room.propertyMortgaged[data.tileId]) {
+      return reject(ack, 'PROPERTY_MORTGAGED', `Cannot build on tile ${data.tileId} because it is mortgaged.`);
+    }
+
     // 1. Monopoly ownership rule: Player must own all properties in the color group
     if (!board.hasMonopoly(room.propertyOwnership, actor.id, tile.type)) {
       return reject(ack, 'NOT_MONOPOLY', 'You must own all properties in this color group before building.');
+    }
+
+    // Cannot build on any property in group if any property in the group is mortgaged
+    if (board.groupHasMortgage(room.propertyMortgaged, tile.type)) {
+      return reject(ack, 'GROUP_HAS_MORTGAGE', 'Cannot build houses when a property in this color group is mortgaged.');
     }
 
     // Replay gate: a duplicate build frame must not be charged twice.
@@ -3237,6 +3278,9 @@ io.on('connection', (socket) => {
       return reject(ack, owner === undefined ? 'NOT_OWNED' : 'NOT_OWNER',
         `Player ${actor.id} does not own tile ${data.tileId}.`);
     }
+    if (room.propertyMortgaged && room.propertyMortgaged[data.tileId]) {
+      return reject(ack, 'PROPERTY_MORTGAGED', `Tile ${data.tileId} is mortgaged and cannot be sold back to the bank.`);
+    }
     const price = purchasePrice(data.tileId);
     const houses = room.propertyHouses[data.tileId] || 0;
     if (price === null || !Number.isInteger(houses) || houses < 0 || houses > board.MAX_HOUSES ||
@@ -3252,6 +3296,8 @@ io.on('connection', (socket) => {
     actor.money = (Number.isFinite(actor.money) ? actor.money : 0) + refund;
     delete room.propertyOwnership[data.tileId];
     delete room.propertyHouses[data.tileId];
+    delete room.propertyMortgaged[data.tileId];
+    cancelTradesWithProperty(room, data.tileId, 'PROPERTY_SOLD');
     persistRoom(room);
     io.to(roomId).emit('property:sold', {
       tileId: data.tileId, playerId: actor.id, houses: 0, ownerId: null, refund, money: actor.money,
@@ -3320,6 +3366,160 @@ io.on('connection', (socket) => {
     });
     if (typeof ack === 'function') {
       ack({ ok: true, refund, houses: room.propertyHouses[data.tileId], money: actor.money });
+    }
+  }));
+
+  // ================= MORTGAGE PROPERTY =================
+  // Mortgaging pays the player 50% of the property's purchase price.
+  // Ownership is retained. Mortgaged properties collect no rent and cannot be built upon.
+  // Before mortgaging, any buildings on the property (and in its color group) must be sold.
+  socket.on('property:mortgaged', withRoom((room, roomId, data, ack) => {
+    if (!data || data.tileId === undefined) {
+      return reject(ack, 'BAD_PAYLOAD', 'property:mortgaged needs a tileId.');
+    }
+    const gateError = turnGate(room, ack, data.playerId);
+    if (gateError) return gateError;
+
+    if (room.settings && room.settings.enableMortgage === false) {
+      return reject(ack, 'MORTGAGE_DISABLED', 'Mortgaging properties is disabled in this game.');
+    }
+
+    if (!board.isOwnableTile(data.tileId)) {
+      return reject(ack, 'BAD_TILE', `Tile ${data.tileId} is not an ownable tile.`);
+    }
+
+    const { actor, error } = requireActor(room, ack);
+    if (error) return error;
+
+    // Claim actionId before state mutation checks so replays are reported as DUPLICATE_ACTION
+    const replayError = actionGate(room, ack, data.actionId);
+    if (replayError) return replayError;
+
+    const owner = room.propertyOwnership[data.tileId];
+    if (owner !== actor.id) {
+      return reject(ack, owner === undefined ? 'NOT_OWNED' : 'NOT_OWNER',
+        `Player ${actor.id} does not own tile ${data.tileId}.`);
+    }
+
+    if (room.propertyMortgaged && room.propertyMortgaged[data.tileId]) {
+      return reject(ack, 'ALREADY_MORTGAGED', `Tile ${data.tileId} is already mortgaged.`);
+    }
+
+    // Any houses/hotels on the tile or in its color group must be sold first
+    const tile = board.getTile(data.tileId);
+    const currentHouses = room.propertyHouses[data.tileId] || 0;
+    if (currentHouses > 0) {
+      return reject(ack, 'HAS_HOUSES', `All buildings on tile ${data.tileId} must be sold before mortgaging.`);
+    }
+    if (tile && board.isPropertyTile(data.tileId)) {
+      const groupTiles = board.getGroupTiles(tile.type);
+      const groupHasBuildings = groupTiles.some(t => (room.propertyHouses[t.id] || 0) > 0);
+      if (groupHasBuildings) {
+        return reject(ack, 'HAS_HOUSES', 'All buildings in this color group must be sold before mortgaging.');
+      }
+    }
+
+    const mortgageVal = board.mortgageValue(data.tileId);
+    if (mortgageVal === null || mortgageVal <= 0) {
+      return reject(ack, 'BAD_TILE', `Tile ${data.tileId} has invalid mortgage value.`);
+    }
+
+    if (!room.propertyMortgaged) room.propertyMortgaged = {};
+    room.propertyMortgaged[data.tileId] = true;
+    actor.money = (Number.isFinite(actor.money) ? actor.money : 0) + mortgageVal;
+    cancelTradesWithProperty(room, data.tileId, 'MORTGAGE_STATUS_CHANGED');
+    persistRoom(room);
+
+    console.log(`🏦 Room ${roomId}: Player ${actor.id} mortgaged tile ${data.tileId} (+$${mortgageVal})`);
+
+    io.to(roomId).emit('property:mortgaged', {
+      tileId: data.tileId,
+      playerId: actor.id,
+      mortgageValue: mortgageVal,
+      money: actor.money,
+      propertyMortgaged: room.propertyMortgaged,
+    });
+    if (typeof ack === 'function') {
+      ack({
+        ok: true,
+        tileId: data.tileId,
+        playerId: actor.id,
+        mortgageValue: mortgageVal,
+        money: actor.money,
+        isMortgaged: true,
+        propertyMortgaged: room.propertyMortgaged,
+      });
+    }
+  }));
+
+  // ================= UNMORTGAGE PROPERTY =================
+  // Unmortgaging costs mortgage value + 10% interest.
+  // Requires sufficient funds and lifts the mortgaged status, restoring rent collection.
+  socket.on('property:unmortgaged', withRoom((room, roomId, data, ack) => {
+    if (!data || data.tileId === undefined) {
+      return reject(ack, 'BAD_PAYLOAD', 'property:unmortgaged needs a tileId.');
+    }
+    const gateError = turnGate(room, ack, data.playerId);
+    if (gateError) return gateError;
+
+    if (room.settings && room.settings.enableMortgage === false) {
+      return reject(ack, 'MORTGAGE_DISABLED', 'Mortgaging properties is disabled in this game.');
+    }
+
+    if (!board.isOwnableTile(data.tileId)) {
+      return reject(ack, 'BAD_TILE', `Tile ${data.tileId} is not an ownable tile.`);
+    }
+
+    const { actor, error } = requireActor(room, ack);
+    if (error) return error;
+
+    // Claim actionId before state mutation checks so replays are reported as DUPLICATE_ACTION
+    const replayError = actionGate(room, ack, data.actionId);
+    if (replayError) return replayError;
+
+    const owner = room.propertyOwnership[data.tileId];
+    if (owner !== actor.id) {
+      return reject(ack, owner === undefined ? 'NOT_OWNED' : 'NOT_OWNER',
+        `Player ${actor.id} does not own tile ${data.tileId}.`);
+    }
+
+    if (!room.propertyMortgaged || !room.propertyMortgaged[data.tileId]) {
+      return reject(ack, 'NOT_MORTGAGED', `Tile ${data.tileId} is not mortgaged.`);
+    }
+
+    const cost = board.unmortgageCost(data.tileId);
+    if (cost === null || cost <= 0) {
+      return reject(ack, 'BAD_TILE', `Tile ${data.tileId} has invalid unmortgage cost.`);
+    }
+
+    if ((actor.money || 0) < cost) {
+      return reject(ack, 'INSUFFICIENT_FUNDS', `Unmortgaging tile ${data.tileId} costs $${cost}, but you only have $${actor.money}.`);
+    }
+
+    delete room.propertyMortgaged[data.tileId];
+    actor.money = actor.money - cost;
+    cancelTradesWithProperty(room, data.tileId, 'MORTGAGE_STATUS_CHANGED');
+    persistRoom(room);
+
+    console.log(`🔓 Room ${roomId}: Player ${actor.id} lifted mortgage on tile ${data.tileId} (-$${cost})`);
+
+    io.to(roomId).emit('property:unmortgaged', {
+      tileId: data.tileId,
+      playerId: actor.id,
+      unmortgageCost: cost,
+      money: actor.money,
+      propertyMortgaged: room.propertyMortgaged,
+    });
+    if (typeof ack === 'function') {
+      ack({
+        ok: true,
+        tileId: data.tileId,
+        playerId: actor.id,
+        unmortgageCost: cost,
+        money: actor.money,
+        isMortgaged: false,
+        propertyMortgaged: room.propertyMortgaged,
+      });
     }
   }));
 
@@ -3949,9 +4149,22 @@ io.on('connection', (socket) => {
     if (party.error) return party.error;
 
     room.trades = [trade, ...room.trades.filter(t => t.id !== trade.id)];
+    const tradeWithSnapshot = {
+      status: 'pending',
+      ...trade,
+      mortgageSnapshot: {},
+    };
+    const allTradeTiles = [
+      ...(Array.isArray(trade.initiatorPropertyIds) ? trade.initiatorPropertyIds : []),
+      ...(Array.isArray(trade.targetPropertyIds) ? trade.targetPropertyIds : []),
+    ];
+    for (const tileId of allTradeTiles) {
+      tradeWithSnapshot.mortgageSnapshot[tileId] = !!(room.propertyMortgaged && room.propertyMortgaged[tileId]);
+    }
+    room.trades = [tradeWithSnapshot, ...room.trades.filter(t => t.id !== trade.id)];
     // An active trade is durable state — persist so it survives a restart.
     persistRoom(room);
-    socket.to(roomId).emit('trade:created', trade);
+    socket.to(roomId).emit('trade:created', tradeWithSnapshot);
     if (typeof ack === 'function') ack({ ok: true });
   }));
 
@@ -3968,9 +4181,21 @@ io.on('connection', (socket) => {
     const party = requireTradeParty(room, ack, trade);
     if (party.error) return party.error;
 
-    room.trades = room.trades.map(t => t.id === trade.id ? trade : t);
+    const tradeWithSnapshot = {
+      status: 'pending',
+      ...trade,
+      mortgageSnapshot: {},
+    };
+    const allTradeTiles = [
+      ...(Array.isArray(trade.initiatorPropertyIds) ? trade.initiatorPropertyIds : []),
+      ...(Array.isArray(trade.targetPropertyIds) ? trade.targetPropertyIds : []),
+    ];
+    for (const tileId of allTradeTiles) {
+      tradeWithSnapshot.mortgageSnapshot[tileId] = !!(room.propertyMortgaged && room.propertyMortgaged[tileId]);
+    }
+    room.trades = room.trades.map(t => t.id === trade.id ? tradeWithSnapshot : t);
     persistRoom(room);
-    socket.to(roomId).emit('trade:updated', trade);
+    socket.to(roomId).emit('trade:updated', tradeWithSnapshot);
     if (typeof ack === 'function') ack({ ok: true });
   }));
 
@@ -3984,6 +4209,30 @@ io.on('connection', (socket) => {
     }
 
     const t = data.trade;
+
+    // A trade offer whose properties changed mortgage state after proposal is stale and rejected.
+    const existing = Array.isArray(room.trades) ? room.trades.find(x => x.id === t.id) : null;
+    if (existing) {
+      if (existing.status !== 'pending') {
+        return reject(ack, 'TRADE_NOT_PENDING', `Trade ${t.id} is no longer pending (status: ${existing.status}).`);
+      }
+      if (existing.mortgageSnapshot) {
+        for (const [tileIdStr, wasMortgaged] of Object.entries(existing.mortgageSnapshot)) {
+          const isNowMortgaged = !!(room.propertyMortgaged && room.propertyMortgaged[tileIdStr]);
+          if (wasMortgaged !== isNowMortgaged) {
+            return reject(ack, 'TRADE_STALE', `Property ${tileIdStr} mortgage status changed after trade was offered.`);
+          }
+        }
+      }
+    } else if (t.mortgageSnapshot) {
+      for (const [tileIdStr, wasMortgaged] of Object.entries(t.mortgageSnapshot)) {
+        const isNowMortgaged = !!(room.propertyMortgaged && room.propertyMortgaged[tileIdStr]);
+        if (wasMortgaged !== isNowMortgaged) {
+          return reject(ack, 'TRADE_STALE', `Property ${tileIdStr} mortgage status changed after trade was offered.`);
+        }
+      }
+    }
+
     // Re-validate against CURRENT state: a tile may have changed hands or a
     // player may have spent the cash since the trade was proposed.
     const bad = validateTrade(room, t);

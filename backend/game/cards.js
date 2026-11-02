@@ -322,6 +322,18 @@ function resolveCardLanding(room, player, tileId, options = {}) {
     const houses = (room && room.propertyHouses) || {};
     const owner = (room && Array.isArray(room.players)) ? room.players.find(p => p.id === ownerId) : null;
 
+    // Check if property is mortgaged
+    const mortgaged = (room && room.propertyMortgaged) || {};
+    if (mortgaged[tileId]) {
+      return {
+        type: 'rent',
+        tileId,
+        ownerId,
+        amount: 0,
+        isMortgaged: true,
+      };
+    }
+
     // Check if owner is in jail and jailCollectsRent is disabled
     if (owner && owner.inJail && room && room.settings && room.settings.jailCollectsRent === false) {
       return {
@@ -333,7 +345,7 @@ function resolveCardLanding(room, player, tileId, options = {}) {
       };
     }
 
-    const baseRent = board.calculateRent(tileId, ownerId, ownership, houses);
+    const baseRent = board.calculateRent(tileId, ownerId, ownership, houses, mortgaged);
     const multiplier = (Number.isFinite(options.rentMultiplier) && options.rentMultiplier > 0)
       ? options.rentMultiplier
       : 1;

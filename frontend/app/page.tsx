@@ -112,6 +112,8 @@ interface CardDrawnEvent {
     fee?: number;
     payout?: number;
     isBankrupt?: boolean;
+    isMortgaged?: boolean;
+    ownerInJail?: boolean;
   } | null;
   code?: string;
   error?: string;
@@ -593,6 +595,7 @@ export default function GameBoard() {
   const [specialModal, setSpecialModal] = useState<"treasure" | "surprise" | "tax" | "resthouse" | null>(null);
   const [propertyHouses, setPropertyHouses] = useState<Record<number, number>>(INITIAL_HOUSES);
   const [propertyOwnership, setPropertyOwnership] = useState<Record<number, number>>(PROPERTY_OWNERSHIP);
+  const [propertyMortgaged, setPropertyMortgaged] = useState<Record<number, boolean>>({});
   const [players, setPlayers] = useState<Player[]>(INITIAL_PLAYERS);
   const [actionLog, setActionLog] = useState<string[]>(["Game setup ready. Configure settings below or roll dice to start!"]);
 
@@ -1034,6 +1037,7 @@ export default function GameBoard() {
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
+    if (next.propertyMortgaged) setPropertyMortgaged(next.propertyMortgaged);
     if (next.trades) setTrades(next.trades);
     if (next.chatMessages) setChatMessages(next.chatMessages);
     setActiveAuction(next.activeAuction as AuctionState | null);
@@ -1108,6 +1112,7 @@ export default function GameBoard() {
     }
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
+    if (next.propertyMortgaged) setPropertyMortgaged(next.propertyMortgaged);
     if (next.trades) setTrades(next.trades);
     if (next.chatMessages) setChatMessages(next.chatMessages);
     if (typeof next.restHousePot === "number") setRestHousePot(next.restHousePot);
@@ -1163,6 +1168,7 @@ export default function GameBoard() {
     setPlayers(INITIAL_PLAYERS);
     setPropertyOwnership({});
     setPropertyHouses({});
+    setPropertyMortgaged({});
     setActiveAuction(null);
     setWinner(null);
     setIsGameStarted(false);
@@ -1504,6 +1510,17 @@ export default function GameBoard() {
         }
         return next;
       });
+      if (!data.creditorId) {
+        setPropertyMortgaged((prev) => {
+          const next = { ...prev };
+          for (const [tileId, ownerId] of Object.entries(propertyOwnershipRef.current)) {
+            if (ownerId === data.playerId) {
+              delete next[Number(tileId)];
+            }
+          }
+          return next;
+        });
+      }
       setPropertyHouses((prev) => {
         const next = { ...prev };
         for (const [tileId, ownerId] of Object.entries(propertyOwnershipRef.current)) {
@@ -1585,6 +1602,31 @@ export default function GameBoard() {
         return next;
       });
       setPropertyHouses((prev) => ({ ...prev, [data.tileId]: data.houses }));
+      setPropertyMortgaged((prev) => {
+        const next = { ...prev };
+        delete next[data.tileId];
+        return next;
+      });
+      setPlayers((prev) => prev.map((p) => p.id === data.playerId ? { ...p, money: data.money } : p));
+    });
+    newSocket.on("property:mortgaged", (data: { tileId: number; playerId: number; mortgageValue: number; money: number; propertyMortgaged?: Record<number, boolean> }) => {
+      if (data.propertyMortgaged) {
+        setPropertyMortgaged(data.propertyMortgaged);
+      } else {
+        setPropertyMortgaged((prev) => ({ ...prev, [data.tileId]: true }));
+      }
+      setPlayers((prev) => prev.map((p) => p.id === data.playerId ? { ...p, money: data.money } : p));
+    });
+    newSocket.on("property:unmortgaged", (data: { tileId: number; playerId: number; unmortgageCost: number; money: number; propertyMortgaged?: Record<number, boolean> }) => {
+      if (data.propertyMortgaged) {
+        setPropertyMortgaged(data.propertyMortgaged);
+      } else {
+        setPropertyMortgaged((prev) => {
+          const next = { ...prev };
+          delete next[data.tileId];
+          return next;
+        });
+      }
       setPlayers((prev) => prev.map((p) => p.id === data.playerId ? { ...p, money: data.money } : p));
     });
     newSocket.on("house:sold", (data: PropertySaleEvent) => {
@@ -2554,7 +2596,14 @@ export default function GameBoard() {
         }
       } else if (data.landingEffect?.type === "rent") {
         const owner = playersRef.current.find((p) => p.id === data.landingEffect?.ownerId);
-        addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`} and paid -$${data.landingEffect.paid ?? data.landingEffect.amount} rent to ${owner?.name || `Player ${data.landingEffect.ownerId}`}.`);
+        const rentPaid = data.landingEffect.paid ?? data.landingEffect.amount ?? 0;
+        if (rentPaid > 0) {
+          addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`} and paid -$${rentPaid} rent to ${owner?.name || `Player ${data.landingEffect.ownerId}`}.`);
+        } else if (data.landingEffect.isMortgaged) {
+          addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`} (owned by ${owner?.name || `Player ${data.landingEffect.ownerId}`}) but it is MORTGAGED and collects no rent.`);
+        } else {
+          addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`} — no rent due.`);
+        }
       } else if (data.landingEffect?.type === "tax") {
         addLog(`${pName} advanced to ${destTile?.name || `tile ${data.position}`} and paid -$${data.landingEffect.paid ?? data.landingEffect.amount} tax.`);
       } else if (data.landingEffect?.type === "club") {
@@ -2824,6 +2873,13 @@ export default function GameBoard() {
         if (owner?.inJail && !jailCollectsRent) {
           setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
           addLog(`${player.name} landed on ${tile.name} (owned by ${owner?.name}) but they're in JAIL and don't collect rent.`);
+          return;
+        }
+
+        // Mortgaged property collects no rent
+        if (propertyMortgaged[tile.id]) {
+          setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, mood: "happy" } : p)));
+          addLog(`${player.name} landed on ${tile.name} (owned by ${owner?.name}) but it is MORTGAGED and collects no rent.`);
           return;
         }
 
@@ -3592,6 +3648,38 @@ export default function GameBoard() {
       });
   };
 
+  const mortgageProperty = (tileId: number) => {
+    if (!currentPlayer || propertyOwnership[tileId] !== currentPlayer.id) return;
+    const tile = BOARD_TILES.find((t) => t.id === tileId);
+    socketRef.current?.emit(
+      "property:mortgaged",
+      { tileId, playerId: currentPlayer.id, actionId: newActionId() },
+      (res: { ok: boolean; mortgageValue?: number; money?: number; error?: string }) => {
+        if (!res?.ok) {
+          addLog(res?.error || "Could not mortgage property.");
+          return;
+        }
+        addLog(`🏦 ${currentPlayer.name} mortgaged ${tile?.name || "property"} (+$${res.mortgageValue})`);
+      }
+    );
+  };
+
+  const unmortgageProperty = (tileId: number) => {
+    if (!currentPlayer || propertyOwnership[tileId] !== currentPlayer.id) return;
+    const tile = BOARD_TILES.find((t) => t.id === tileId);
+    socketRef.current?.emit(
+      "property:unmortgaged",
+      { tileId, playerId: currentPlayer.id, actionId: newActionId() },
+      (res: { ok: boolean; unmortgageCost?: number; money?: number; error?: string }) => {
+        if (!res?.ok) {
+          addLog(res?.error || "Could not unmortgage property.");
+          return;
+        }
+        addLog(`🔓 ${currentPlayer.name} lifted mortgage on ${tile?.name || "property"} (-$${res.unmortgageCost})`);
+      }
+    );
+  };
+
   const downgradeHouse = (tileId: number) => {
     if (!currentPlayer || propertyOwnership[tileId] !== currentPlayer.id || !(propertyHouses[tileId] > 0)) return;
     const tile = BOARD_TILES.find((t) => t.id === tileId);
@@ -4109,7 +4197,12 @@ export default function GameBoard() {
                         </div>
                         <div className="mt-0.5 md:mt-[0.3vmin] flex items-center gap-1.5 md:gap-[0.5vmin]">
                           <span className="text-xs md:text-[1.4vmin] font-black leading-none text-emerald-400">{tile.price}</span>
-                          {PROPERTY_TYPES.has(tile.type) && houses > 0 && (
+                          {propertyMortgaged[tile.id] && (
+                            <span className="rounded bg-amber-950/90 px-1 py-0.5 text-[9px] md:text-[0.85vmin] font-black uppercase tracking-wider text-amber-300 border border-amber-500/50">
+                              Mortgaged
+                            </span>
+                          )}
+                          {PROPERTY_TYPES.has(tile.type) && houses > 0 && !propertyMortgaged[tile.id] && (
                             <span className="flex items-center text-[11px] md:text-[1.05vmin] leading-none" title={isHotel ? "Hotel" : `${houses} house(s)`}>
                               {isHotel ? "🏨" : "🏠"}
                               {!isHotel && houses > 1 ? <span className="ml-0.5 md:ml-[0.15vmin] text-[10px] md:text-[0.95vmin] text-gray-400">×{houses}</span> : null}
@@ -4467,9 +4560,15 @@ export default function GameBoard() {
                         <div
                           className={`m-[0.2vmin] flex h-[2.6vmin] w-[85%] max-w-[7vmin] items-center justify-center rounded-[0.3vmin] text-center font-black uppercase tracking-wide ${isProperty && houses > 0 ? "invisible" : ""
                             }`}
-                          style={{ color: owner.color, backgroundColor: `${owner.color}18` }}
+                          style={{
+                            color: propertyMortgaged[tile.id] ? "#f59e0b" : owner.color,
+                            backgroundColor: propertyMortgaged[tile.id] ? "rgba(245,158,11,0.25)" : `${owner.color}18`,
+                            border: propertyMortgaged[tile.id] ? "1px solid rgba(245,158,11,0.6)" : undefined,
+                          }}
                         >
-                          <span className="whitespace-nowrap text-[0.9vmin]">Owned</span>
+                          <span className="whitespace-nowrap text-[0.8vmin]">
+                            {propertyMortgaged[tile.id] ? "Mortgaged" : "Owned"}
+                          </span>
                         </div>
                       ) : null}
 
@@ -4797,7 +4896,12 @@ export default function GameBoard() {
                       (() => {
                         const isUpgradable = PROPERTY_TYPES.has(activeModal.type);
                         const currentHouses = propertyHouses[activeModal.id] || 0;
-                        const sellRefund = Math.floor(Math.abs(parsePrice(activeModal.price) || 0) / 2) +
+                        const isMortgaged = !!propertyMortgaged[activeModal.id];
+                        const basePrice = Math.abs(parsePrice(activeModal.price) || 0);
+                        const mortgageVal = Math.floor(basePrice / 2);
+                        const unmortgageCost = Math.round(mortgageVal * 1.1);
+
+                        const sellRefund = Math.floor(basePrice / 2) +
                           (PROPERTY_TYPES.has(activeModal.type)
                             ? (currentHouses === 5 ? Math.floor((activeModal.hotelCost ?? 200) / 2) : 0) +
                               Math.min(currentHouses, 4) * Math.floor((activeModal.houseCost ?? 100) / 2)
@@ -4812,39 +4916,68 @@ export default function GameBoard() {
                         const groupTiles = BOARD_TILES.filter((t) => t.type === activeModal.type);
                         const hasMonopoly = groupTiles.every((t) => propertyOwnership[t.id] === currentPlayer?.id);
                         const hasUneven = groupTiles.some((t) => t.id !== activeModal.id && (propertyHouses[t.id] || 0) < currentHouses);
-                        const cantAfford = (currentPlayer?.money ?? 0) < upgradeCost;
+                        const groupHasHouses = groupTiles.some((t) => (propertyHouses[t.id] || 0) > 0);
+                        const groupHasMortgage = groupTiles.some((t) => propertyMortgaged[t.id]);
+                        const cantAffordUpgrade = (currentPlayer?.money ?? 0) < upgradeCost;
+                        const cantAffordUnmortgage = (currentPlayer?.money ?? 0) < unmortgageCost;
 
                         return (
-                          <div
-                            className={`mt-3 md:mt-[2vmin] grid gap-2 md:gap-[1.2vmin] ${isUpgradable ? "grid-cols-3" : "grid-cols-1"
-                              }`}
-                          >
-                            {enableMortgage && (
-                            <button
-                              onClick={() => sellPropertyEntirely(activeModal.id)}
-                              className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-red-500 bg-red-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white active:scale-95 cursor-pointer"
+                          <div className="mt-3 md:mt-[2vmin] space-y-2 md:space-y-[1vmin]">
+                            {isMortgaged && (
+                              <div className="rounded-lg border border-amber-500/50 bg-amber-950/60 p-2 text-center text-xs md:text-[1.15vmin] font-bold uppercase tracking-wider text-amber-200">
+                                ⚠️ Property Mortgaged (No Rent Collected)
+                              </div>
+                            )}
+                            <div
+                              className={`grid gap-2 md:gap-[1.2vmin] ${isUpgradable ? "grid-cols-3" : "grid-cols-2"}`}
                             >
-                              Sell (+${sellRefund})
-                            </button>
-                            )}
-                            {isUpgradable && (
-                              <>
+                              {enableMortgage && (
+                                isMortgaged ? (
+                                  <button
+                                    onClick={() => unmortgageProperty(activeModal.id)}
+                                    disabled={cantAffordUnmortgage}
+                                    className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-amber-500 bg-amber-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-amber-100 shadow-[inset_0_0_1.4vmin_rgba(245,158,11,0.55),0_0_0.8vmin_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-amber-400 hover:bg-amber-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
+                                  >
+                                    {cantAffordUnmortgage ? "Can't Afford" : `Unmortgage (-$${unmortgageCost})`}
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => mortgageProperty(activeModal.id)}
+                                    disabled={groupHasHouses}
+                                    className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-amber-500 bg-amber-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-amber-100 shadow-[inset_0_0_1.4vmin_rgba(245,158,11,0.55),0_0_0.8vmin_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-amber-400 hover:bg-amber-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
+                                  >
+                                    {groupHasHouses ? "Clear Houses 1st" : `Mortgage (+$${mortgageVal})`}
+                                  </button>
+                                )
+                              )}
+                              {isUpgradable && (
+                                <>
+                                  <button
+                                    onClick={() => upgradeHouse(activeModal.id)}
+                                    disabled={isMortgaged || groupHasMortgage || maxedOut || !hasMonopoly || hasUneven || cantAffordUpgrade}
+                                    className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-green-500 bg-green-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
+                                  >
+                                    {isMortgaged ? "Mortgaged" : groupHasMortgage ? "Group Mortgaged" : maxedOut ? "Maxed" : !hasMonopoly ? "Need Monopoly" : hasUneven ? "Build Evenly" : cantAffordUpgrade ? "Can't Afford" : `Upgrade (-$${upgradeCost})`}
+                                  </button>
+                                  <button
+                                    onClick={() => downgradeHouse(activeModal.id)}
+                                    disabled={!canDegrade}
+                                    className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-orange-500 bg-orange-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
+                                  >
+                                    {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
+                                  </button>
+                                </>
+                              )}
+                              {enableMortgage && (
                                 <button
-                                  onClick={() => upgradeHouse(activeModal.id)}
-                                  disabled={maxedOut || !hasMonopoly || hasUneven || cantAfford}
-                                  className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-green-500 bg-green-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-green-100 shadow-[inset_0_0_1.4vmin_rgba(34,197,94,0.55),0_0_0.8vmin_rgba(34,197,94,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-green-400 hover:bg-green-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
+                                  onClick={() => sellPropertyEntirely(activeModal.id)}
+                                  disabled={isMortgaged}
+                                  className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-red-500 bg-red-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-red-100 shadow-[inset_0_0_1.4vmin_rgba(239,68,68,0.55),0_0_0.8vmin_rgba(239,68,68,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-red-400 hover:bg-red-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
                                 >
-                                  {maxedOut ? "Maxed" : !hasMonopoly ? "Need Monopoly" : hasUneven ? "Build Evenly" : cantAfford ? "Can't Afford" : `Upgrade (-$${upgradeCost})`}
+                                  Sell (+${sellRefund})
                                 </button>
-                                <button
-                                  onClick={() => downgradeHouse(activeModal.id)}
-                                  disabled={!canDegrade}
-                                  className="flex items-center justify-center min-h-[44px] rounded-lg md:rounded-[0.9vmin] border border-orange-500 bg-orange-950/60 py-2.5 px-1.5 md:py-[1.2vmin] text-[11px] sm:text-xs md:text-[1.1vmin] font-black uppercase text-orange-100 shadow-[inset_0_0_1.4vmin_rgba(249,115,22,0.55),0_0_0.8vmin_rgba(249,115,22,0.35)] transition-all duration-200 hover:scale-[1.03] hover:border-orange-400 hover:bg-orange-600/70 hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 cursor-pointer"
-                                >
-                                  {canDegrade ? `Degrade (+$${degradeRefund})` : "None Built"}
-                                </button>
-                              </>
-                            )}
+                              )}
+                            </div>
                           </div>
                         );
                       })()}
@@ -5267,6 +5400,11 @@ export default function GameBoard() {
                                     <div className="flex items-center gap-2 md:gap-[0.9vmin]">
                                       {renderTileIconOrFlag(tile, "w-6 h-4 md:w-[2.6vmin] md:h-[1.8vmin]")}
                                       <span className="text-xs sm:text-sm md:text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                      {propertyMortgaged[tile.id] && (
+                                        <span className="rounded bg-amber-950/90 px-1.5 py-0.5 text-[9px] md:text-[0.85vmin] font-black uppercase tracking-wider text-amber-300 border border-amber-500/50">
+                                          Mortgaged
+                                        </span>
+                                      )}
                                       {isSelected && <span className="text-xs md:text-[1.2vmin] font-black text-purple-200">✓</span>}
                                     </div>
                                     <span className="font-mono text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-400 drop-shadow">
@@ -5363,6 +5501,11 @@ export default function GameBoard() {
                                         <div className="flex items-center gap-2 md:gap-[0.9vmin]">
                                           {renderTileIconOrFlag(tile, "w-6 h-4 md:w-[2.6vmin] md:h-[1.8vmin]")}
                                           <span className="text-xs sm:text-sm md:text-[1.4vmin] font-black tracking-wide text-white">{tile.name}</span>
+                                          {propertyMortgaged[tile.id] && (
+                                            <span className="rounded bg-amber-950/90 px-1.5 py-0.5 text-[9px] md:text-[0.85vmin] font-black uppercase tracking-wider text-amber-300 border border-amber-500/50">
+                                              Mortgaged
+                                            </span>
+                                          )}
                                           {isSelected && <span className="text-xs md:text-[1.2vmin] font-black text-cyan-200">✓</span>}
                                         </div>
                                         <span className="font-mono text-xs sm:text-sm md:text-[1.45vmin] font-black text-emerald-400 drop-shadow">
@@ -5497,6 +5640,11 @@ export default function GameBoard() {
                                   <div className="flex items-center gap-2 md:gap-[0.8vmin]">
                                     {renderTileIconOrFlag(tile)}
                                     <span className="text-xs md:text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                    {propertyMortgaged[tile.id] && (
+                                      <span className="rounded bg-amber-950/90 px-1.5 py-0.5 text-[9px] md:text-[0.85vmin] font-black uppercase tracking-wider text-amber-300 border border-amber-500/50">
+                                        Mortgaged
+                                      </span>
+                                    )}
                                   </div>
                                   <span className="font-mono text-xs md:text-[1.4vmin] font-black text-emerald-400 drop-shadow">
                                     {tile.price}
@@ -5559,6 +5707,11 @@ export default function GameBoard() {
                                   <div className="flex items-center gap-2 md:gap-[0.8vmin]">
                                     {renderTileIconOrFlag(tile)}
                                     <span className="text-xs md:text-[1.35vmin] font-black text-white">{tile.name}</span>
+                                    {propertyMortgaged[tile.id] && (
+                                      <span className="rounded bg-amber-950/90 px-1.5 py-0.5 text-[9px] md:text-[0.85vmin] font-black uppercase tracking-wider text-amber-300 border border-amber-500/50">
+                                        Mortgaged
+                                      </span>
+                                    )}
                                   </div>
                                   <span className="font-mono text-xs md:text-[1.4vmin] font-black text-emerald-400 drop-shadow">
                                     {tile.price}

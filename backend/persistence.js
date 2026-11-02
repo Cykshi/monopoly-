@@ -44,6 +44,7 @@ function serializeRoom(room) {
     players: room.players,
     propertyOwnership: room.propertyOwnership,
     propertyHouses: room.propertyHouses,
+    propertyMortgaged: room.propertyMortgaged || {},
     currentTurnPlayerId: room.currentTurnPlayerId,
     turnSeeded: room.turnSeeded,
     // The turn clock, so a restart can resume the SAME turn rather than silently

@@ -9,6 +9,7 @@
 export interface RestoredOwnedProperty {
   tileId: number;
   houses: number;
+  isMortgaged?: boolean;
 }
 
 export interface RestoredPlayer {
@@ -63,6 +64,7 @@ export interface PlayerRestoreState {
   ownedPropertyIds?: number[];
   propertyOwnership?: Record<string, number>;
   propertyHouses?: Record<string, number>;
+  propertyMortgaged?: Record<string, boolean>;
   trades?: RestoredTrade[];
   activeAuction?: RestoredAuction | null;
   chatMessages?: RestoredChatMessage[];
@@ -96,6 +98,7 @@ export interface ComputedRestoredState<
   players: TPlayer[] | null;
   propertyOwnership: Record<string, number> | null;
   propertyHouses: Record<string, number> | null;
+  propertyMortgaged: Record<string, boolean> | null;
   trades: TTrade[] | null;
   chatMessages: TChat[] | null;
   activeAuction: RestoredAuction | null;
@@ -133,6 +136,7 @@ export function computeRestoredState<
     players: p.players && p.players.length ? (p.players as unknown as TPlayer[]) : null,
     propertyOwnership: p.propertyOwnership ?? null,
     propertyHouses: p.propertyHouses ?? null,
+    propertyMortgaged: p.propertyMortgaged ?? null,
     trades: p.trades ? (p.trades as unknown as TTrade[]) : null,
     chatMessages: p.chatMessages ? (p.chatMessages as unknown as TChat[]) : null,
     activeAuction: p.activeAuction ?? null,

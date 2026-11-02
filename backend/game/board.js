@@ -163,15 +163,18 @@ function countOwnedOfType(type, ownerId, propertyOwnership) {
 }
 
 // The authoritative rent for landing on `tileId`, computed from server state
-// only. Returns 0 when no rent is due (unowned, self-owned, or not rentable).
+// only. Returns 0 when no rent is due (unowned, self-owned, mortgaged, or not rentable).
 //
-// `propertyOwnership` and `propertyHouses` are the room's server-side maps.
-function calculateRent(tileId, ownerId, propertyOwnership, propertyHouses) {
+// `propertyOwnership`, `propertyHouses`, and `propertyMortgaged` are the room's server-side maps.
+function calculateRent(tileId, ownerId, propertyOwnership, propertyHouses, propertyMortgaged = {}) {
   const tile = getTile(tileId);
   if (!tile) return 0;
 
+  // Mortgaged properties do not collect rent
+  if (propertyMortgaged && propertyMortgaged[tileId]) return 0;
+
   if (PROPERTY_TYPES.has(tile.type)) {
-    const houses = propertyHouses[tileId] || 0;
+    const houses = (propertyHouses && propertyHouses[tileId]) || 0;
     if (Array.isArray(tile.rents) && tile.rents[houses] !== undefined) return tile.rents[houses];
     if (!Number.isFinite(tile.rents?.[0])) return 0;
     // Fallback shape, same as the client's: base rent + 60% per house.
@@ -200,7 +203,7 @@ function taxAmount(tileId) {
 // What a player is charged for landing on `tileId`. Covers the two money-moving
 // specials the server can settle on its own (tax and rent). Returns
 // { kind, amount, ownerId } or null when nothing is owed.
-function landingCharge(tileId, playerId, propertyOwnership, propertyHouses) {
+function landingCharge(tileId, playerId, propertyOwnership, propertyHouses, propertyMortgaged = {}) {
   const tile = getTile(tileId);
   if (!tile) return null;
 
@@ -211,7 +214,8 @@ function landingCharge(tileId, playerId, propertyOwnership, propertyHouses) {
   const ownerId = propertyOwnership[tileId];
   if (ownerId === undefined || ownerId === null) return null; // unowned
   if (ownerId === playerId) return null; // own property: no rent
-  const amount = calculateRent(tileId, ownerId, propertyOwnership, propertyHouses);
+  if (propertyMortgaged && propertyMortgaged[tileId]) return null; // mortgaged: no rent
+  const amount = calculateRent(tileId, ownerId, propertyOwnership, propertyHouses, propertyMortgaged);
   if (amount <= 0) return null;
   return { kind: 'rent', amount, ownerId };
 }
@@ -315,6 +319,37 @@ function getBankBuildingSupply(propertyHouses) {
   };
 }
 
+// Mortgage & Unmortgage parameters
+const MORTGAGE_PERCENT = 0.5;
+const UNMORTGAGE_INTEREST_RATE = 0.1;
+
+// The authoritative mortgage value for an ownable tile (50% of purchase price, floored).
+function mortgageValue(tileId) {
+  const price = purchasePrice(tileId);
+  if (price === null || price <= 0) return null;
+  return Math.floor(price * MORTGAGE_PERCENT);
+}
+
+// The authoritative cost to unmortgage a tile (mortgage value + 10% interest).
+function unmortgageCost(tileId) {
+  const val = mortgageValue(tileId);
+  if (val === null) return null;
+  return Math.round(val * (1 + UNMORTGAGE_INTEREST_RATE));
+}
+
+// Checks if a specific tile is mortgaged.
+function isPropertyMortgaged(propertyMortgaged, tileId) {
+  if (!propertyMortgaged || typeof propertyMortgaged !== 'object') return false;
+  return !!propertyMortgaged[tileId];
+}
+
+// Checks if any property in the given color group is currently mortgaged.
+function groupHasMortgage(propertyMortgaged, groupType) {
+  if (!propertyMortgaged || typeof propertyMortgaged !== 'object') return false;
+  const groupTiles = getGroupTiles(groupType);
+  return groupTiles.some(t => !!propertyMortgaged[t.id]);
+}
+
 module.exports = {
   TILES,
   BOARD_SIZE,
@@ -355,4 +390,10 @@ module.exports = {
   hasMonopoly,
   canBuildEvenly,
   getBankBuildingSupply,
+  MORTGAGE_PERCENT,
+  UNMORTGAGE_INTEREST_RATE,
+  mortgageValue,
+  unmortgageCost,
+  isPropertyMortgaged,
+  groupHasMortgage,
 };
