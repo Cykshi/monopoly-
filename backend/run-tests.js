@@ -78,6 +78,7 @@ const ONLINE_SUITES = [
   'test-property-selling.js',
   'test-card-authority.js',
   'test-jail-entry.js',
+  'test-jail-card.js',
   'test-pot-authority.js',
   'test-tax-authority.js',
   'test-bankruptcy-votekick.js',

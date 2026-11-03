@@ -16,12 +16,12 @@ const board = require('./board');
 //   5:   Advance to nearest Airport
 //   6:   Pay $150 luxury tax
 const TREASURE_CARDS = {
-  1: { id: 'treasure-1', title: 'Treasure Chest', description: 'Collect $100 from the bank.', money: 100, grantSkillCard: false, movementType: 'none' },
-  2: { id: 'treasure-2', title: 'Treasure Chest', description: 'Collect $100 from the bank.', money: 100, grantSkillCard: false, movementType: 'none' },
-  3: { id: 'treasure-3', title: 'Treasure Chest', description: 'Collect $200 and a free Movement Card.', money: 200, grantSkillCard: true, movementType: 'none' },
-  4: { id: 'treasure-4', title: 'Treasure Chest', description: 'Collect $200 and a free Movement Card.', money: 200, grantSkillCard: true, movementType: 'none' },
-  5: { id: 'treasure-5', title: 'Treasure Chest', description: 'Advances to the nearest Airport.', money: 0, grantSkillCard: false, movementType: 'nearest_airport' },
-  6: { id: 'treasure-6', title: 'Treasure Chest', description: 'Pays $150 luxury tax.', money: -150, grantSkillCard: false, movementType: 'none' },
+  1: { id: 'treasure-1', title: 'Treasure Chest', description: 'Collect $100 from the bank.', money: 100, grantSkillCard: false, grantJailCard: false, movementType: 'none' },
+  2: { id: 'treasure-2', title: 'Treasure Chest', description: 'Collect $100 from the bank.', money: 100, grantSkillCard: false, grantJailCard: false, movementType: 'none' },
+  3: { id: 'treasure-3', title: 'Treasure Chest', description: 'Collect $200 and a free Movement Card.', money: 200, grantSkillCard: true, grantJailCard: false, movementType: 'none' },
+  4: { id: 'treasure-4', title: 'Treasure Chest', description: 'Collect $200, a free Movement Card, and Get Out of Jail Free card.', money: 200, grantSkillCard: true, grantJailCard: true, movementType: 'none' },
+  5: { id: 'treasure-5', title: 'Treasure Chest', description: 'Advances to the nearest Airport.', money: 0, grantSkillCard: false, grantJailCard: false, movementType: 'nearest_airport' },
+  6: { id: 'treasure-6', title: 'Treasure Chest', description: 'Pays $150 luxury tax.', money: -150, grantSkillCard: false, grantJailCard: false, movementType: 'none' },
 };
 
 // Surprise Card (Chance):
@@ -30,12 +30,12 @@ const TREASURE_CARDS = {
 //   5:   Receive $250 dividend
 //   6:   Swap position with any player
 const SURPRISE_CARDS = {
-  1: { id: 'surprise-1', title: 'Surprise Card', description: 'Sent straight to JAIL.', money: 0, grantSkillCard: false, movementType: 'jail' },
-  2: { id: 'surprise-2', title: 'Surprise Card', description: 'Sent straight to JAIL.', money: 0, grantSkillCard: false, movementType: 'jail' },
-  3: { id: 'surprise-3', title: 'Surprise Card', description: 'Jumps forward 8 spaces.', money: 0, grantSkillCard: false, movementType: 'forward_8' },
-  4: { id: 'surprise-4', title: 'Surprise Card', description: 'Jumps forward 8 spaces.', money: 0, grantSkillCard: false, movementType: 'forward_8' },
-  5: { id: 'surprise-5', title: 'Surprise Card', description: 'Receives a $250 dividend.', money: 250, grantSkillCard: false, movementType: 'none' },
-  6: { id: 'surprise-6', title: 'Surprise Card', description: 'Swap position with any player.', money: 0, grantSkillCard: false, movementType: 'swap' },
+  1: { id: 'surprise-1', title: 'Surprise Card', description: 'Sent straight to JAIL.', money: 0, grantSkillCard: false, grantJailCard: false, movementType: 'jail' },
+  2: { id: 'surprise-2', title: 'Surprise Card', description: 'Sent straight to JAIL.', money: 0, grantSkillCard: false, grantJailCard: false, movementType: 'jail' },
+  3: { id: 'surprise-3', title: 'Surprise Card', description: 'Jumps forward 8 spaces.', money: 0, grantSkillCard: false, grantJailCard: false, movementType: 'forward_8' },
+  4: { id: 'surprise-4', title: 'Surprise Card', description: 'Jumps forward 8 spaces and Get Out of Jail Free card.', money: 0, grantSkillCard: false, grantJailCard: true, movementType: 'forward_8' },
+  5: { id: 'surprise-5', title: 'Surprise Card', description: 'Receives a $250 dividend.', money: 250, grantSkillCard: false, grantJailCard: false, movementType: 'none' },
+  6: { id: 'surprise-6', title: 'Surprise Card', description: 'Swap position with any player.', money: 0, grantSkillCard: false, grantJailCard: false, movementType: 'swap' },
 };
 
 function rollD6() {
@@ -212,6 +212,10 @@ function resolveCardDraw(room, player, options = {}) {
 
   player.money = finalMoney;
 
+  if (card.grantJailCard) {
+    player.jailCards = (Number.isInteger(player.jailCards) && player.jailCards >= 0 ? player.jailCards : 0) + 1;
+  }
+
   let landingEffect = null;
   if (newPosition !== fromPosition && !player.inJail) {
     landingEffect = resolveCardLanding(room, player, newPosition, options);
@@ -227,6 +231,7 @@ function resolveCardDraw(room, player, options = {}) {
       description: card.description,
       money: card.money,
       grantSkillCard: card.grantSkillCard,
+      grantJailCard: !!card.grantJailCard,
       movementType: card.movementType,
       rentMultiplier: card.rentMultiplier || 1,
     },
@@ -238,6 +243,8 @@ function resolveCardDraw(room, player, options = {}) {
     passedGo,
     salary,
     grantSkillCard: !!card.grantSkillCard,
+    grantJailCard: !!card.grantJailCard,
+    jailCards: Number.isInteger(player.jailCards) ? player.jailCards : 0,
     swap,
     inJail: typeof player.inJail === 'boolean' ? player.inJail : false,
     jailTurns: Number.isInteger(player.jailTurns) ? player.jailTurns : 0,

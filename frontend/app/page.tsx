@@ -30,6 +30,7 @@ interface Player {
   mood?: "happy" | "flat";
   inJail?: boolean;
   jailTurns?: number;
+  jailCards?: number;
   isBankrupt?: boolean;
   isResting?: boolean;
   // Set by the server on players it has actually created a seat for. Client-side
@@ -84,6 +85,7 @@ interface CardDrawnEvent {
     description: string;
     money: number;
     grantSkillCard: boolean;
+    grantJailCard?: boolean;
     movementType: string;
   };
   fromPosition: number;
@@ -93,6 +95,8 @@ interface CardDrawnEvent {
   passedGo: boolean;
   salary: number;
   grantSkillCard: boolean;
+  grantJailCard?: boolean;
+  jailCards?: number;
   swap?: {
     targetId: number;
     targetName?: string;
@@ -1000,6 +1004,7 @@ export default function GameBoard() {
         mood: local.mood ?? next.mood,
         inJail: typeof next.inJail === "boolean" ? next.inJail : (local.inJail ?? false),
         jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : (local.jailTurns ?? 0),
+        jailCards: typeof next.jailCards === "number" ? next.jailCards : (local.jailCards ?? 0),
         isBankrupt: local.isBankrupt ?? next.isBankrupt,
         isResting: local.isResting ?? next.isResting,
         isCurrentPlayer: typeof next.isCurrentPlayer === "boolean" ? next.isCurrentPlayer : (local.isCurrentPlayer ?? false),
@@ -1323,6 +1328,22 @@ export default function GameBoard() {
       triggerJailBreak(data.playerId);
       const peer = playersRef.current.find((p) => p.id === data.playerId);
       addLog(`${peer?.name || `Player ${data.playerId}`} paid -$${data.bail} bail and was released from JAIL.`);
+    });
+    // Server-authoritative Get Out of Jail Free card usage. When a peer uses a
+    // card, clear their inJail status, update their jailCards, and trigger the
+    // jailbreak animation.
+    newSocket.on("jail:card-used", (data: { playerId: number; inJail: boolean; jailTurns: number; jailCards: number }) => {
+      if (!data || typeof data.playerId !== "number") return;
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === data.playerId
+            ? { ...p, inJail: false, jailTurns: 0, jailCards: typeof data.jailCards === "number" ? data.jailCards : Math.max(0, (p.jailCards ?? 1) - 1) }
+            : p
+        )
+      );
+      triggerJailBreak(data.playerId);
+      const peer = playersRef.current.find((p) => p.id === data.playerId);
+      addLog(`🔓 ${peer?.name || `Player ${data.playerId}`} used a Get Out of Jail Free card and was released from JAIL.`);
     });
     newSocket.on("club:paid", (data: { playerId: number; fee: number; paid?: number; cardCount?: number; houseCount?: number; pot: number; money: number; isBankrupt?: boolean }) => {
       if (!data || typeof data.playerId !== "number") return;
@@ -2604,15 +2625,23 @@ export default function GameBoard() {
       setHasSkillCard(true);
     }
 
+    if (data.grantJailCard) {
+      addLog(`🎉 ${pName} received a Get Out of Jail Free card!`);
+    }
+
     setPlayers((prev) =>
       prev.map((p) => {
         if (p.id === data.playerId) {
           const isJail = typeof data.inJail === "boolean" ? data.inJail : data.card?.movementType === "jail";
           const jailTurns = typeof data.jailTurns === "number" ? data.jailTurns : 0;
+          const jailCards = typeof data.jailCards === "number"
+            ? data.jailCards
+            : (data.grantJailCard ? (p.jailCards ?? 0) + 1 : (p.jailCards ?? 0));
           return {
             ...p,
             position: data.position,
             money: data.money,
+            jailCards,
             mood: (data.card?.money && data.card.money < 0) ? "flat" : "happy",
             ...(isJail ? { inJail: true, jailTurns } : {}),
           };
@@ -3163,6 +3192,43 @@ export default function GameBoard() {
     collectToRestHouse(bail);
     triggerJailBreak(currentPlayer.id);
     addLog(`${currentPlayer.name} paid -$${bail} bail and is released from JAIL.`);
+  };
+
+  const useJailCard = () => {
+    if (!isMyTurn || !currentPlayer || currentPlayer.isResting || !currentPlayer.inJail || gamePhase !== "YOUR TURN" || winner) return;
+    if ((currentPlayer.jailCards ?? 0) <= 0) {
+      addLog(`⚠️ You do not have a Get Out of Jail Free card.`);
+      return;
+    }
+
+    if (socketRef.current?.connected) {
+      socketRef.current.emit(
+        "jail:use-card",
+        { playerId: currentPlayer.id, actionId: newActionId() },
+        (res: { ok: boolean; inJail?: boolean; jailTurns?: number; jailCards?: number; code?: string; error?: string } | null) => {
+          if (res && res.ok) {
+            setPlayers((prev) =>
+              prev.map((p) =>
+                p.id === currentPlayer.id
+                  ? { ...p, inJail: false, jailTurns: 0, jailCards: typeof res.jailCards === "number" ? res.jailCards : Math.max(0, (p.jailCards ?? 1) - 1) }
+                  : p
+              )
+            );
+            triggerJailBreak(currentPlayer.id);
+            addLog(`🔓 ${currentPlayer.name} used a Get Out of Jail Free card and was released from JAIL.`);
+          } else if (res && res.ok === false) {
+            addLog(`⚠️ Card use refused: ${res.error || res.code || "unknown reason"}`);
+          }
+        }
+      );
+      return;
+    }
+
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === currentPlayer.id ? { ...p, inJail: false, jailTurns: 0, jailCards: Math.max(0, (p.jailCards ?? 1) - 1) } : p))
+    );
+    triggerJailBreak(currentPlayer.id);
+    addLog(`🔓 ${currentPlayer.name} used a Get Out of Jail Free card and is released from JAIL.`);
   };
 
   const openSkillCard = () => {
@@ -4753,13 +4819,23 @@ export default function GameBoard() {
                     {turnControls.showRollButton ? (
                       <>
                         {currentPlayer?.inJail && (
-                          <button
-                            onClick={payBail}
-                            disabled={(currentPlayer.money ?? 0) < 100}
-                            className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-1 sm:py-2 md:py-[1.6vmin] px-1 sm:px-2 md:px-2 text-[10px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-                          >
-                            🔓 Pay $100
-                          </button>
+                          <>
+                            {(currentPlayer.jailCards ?? 0) > 0 && (
+                              <button
+                                onClick={useJailCard}
+                                className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-emerald-600 to-teal-600 py-1 sm:py-2 md:py-[1.6vmin] px-1 sm:px-2 md:px-2 text-[10px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 cursor-pointer"
+                              >
+                                🃏 Use Card
+                              </button>
+                            )}
+                            <button
+                              onClick={payBail}
+                              disabled={(currentPlayer.money ?? 0) < 100}
+                              className="no-touch-target flex-1 flex items-center justify-center min-h-[30px] sm:min-h-[36px] md:min-h-0 rounded-md sm:rounded-lg md:rounded-[1.1vmin] border border-white/20 bg-gradient-to-r from-amber-600 to-orange-600 py-1 sm:py-2 md:py-[1.6vmin] px-1 sm:px-2 md:px-2 text-[10px] sm:text-xs md:text-[1.6vmin] font-black uppercase text-white shadow-lg transition hover:scale-[1.03] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                            >
+                              🔓 Pay $100
+                            </button>
+                          </>
                         )}
 
                         <button

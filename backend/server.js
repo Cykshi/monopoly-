@@ -607,6 +607,7 @@ function eliminatePlayer(room, io, player, { reason = 'bankrupt', creditorId = n
 
   player.isBankrupt = true;
   player.money = 0;
+  player.jailCards = 0;
 
   if (wasCurrentTurn || room.currentTurnPlayerId === player.id) {
     room.consecutiveDoubles = 0;
@@ -806,6 +807,9 @@ function rehydrateRoom(data) {
     }
     if (!Number.isInteger(player.jailTurns) || player.jailTurns < 0) {
       player.jailTurns = 0;
+    }
+    if (!Number.isInteger(player.jailCards) || player.jailCards < 0) {
+      player.jailCards = 0;
     }
     if (typeof player.hasSkillCard !== 'boolean') {
       player.hasSkillCard = true;
@@ -1039,6 +1043,7 @@ function createSessionToken(room, playerId, { name, color } = {}) {
     mood: 'happy',
     inJail: false,
     jailTurns: 0,
+    jailCards: 0,
     hasSkillCard: true,
     isResting: false
   };
@@ -3558,12 +3563,12 @@ io.on('connection', (socket) => {
       return reject(ack, 'PLAYER_OUT', 'You are out of the game.');
     }
 
+    const replayError = actionGate(room, ack, data && data.actionId);
+    if (replayError) return replayError;
+
     if (!actor.inJail) {
       return reject(ack, 'NOT_IN_JAIL', `Player ${actor.id} is not in jail.`);
     }
-
-    const replayError = actionGate(room, ack, data && data.actionId);
-    if (replayError) return replayError;
 
     const bailCost = board.JAIL_BAIL_COST || 100;
     const currentMoney = Number.isFinite(actor.money) ? actor.money : 0;
@@ -3592,6 +3597,66 @@ io.on('connection', (socket) => {
     };
 
     socket.to(roomId).emit('jail:bail-paid', resultPayload);
+    if (typeof ack === 'function') {
+      ack({ ok: true, ...resultPayload });
+    }
+  }));
+
+  // ================= JAIL: USE GET OUT OF JAIL FREE CARD =================
+  // Server-authoritative card escape:
+  // 1. Gated by requireActor (authenticated socket identity).
+  // 2. Gated by turnGate (must be identified, on their turn, not bankrupt).
+  // 3. Verifies player is actually in jail (NOT_IN_JAIL).
+  // 4. Gated by actionGate (must have valid, unique actionId to prevent replay/duplicate use).
+  // 5. Verifies player holds at least one Get Out of Jail Free card (NO_JAIL_CARD).
+  // 6. Consumes exactly one card (actor.jailCards -= 1).
+  // 7. Releases player: actor.inJail = false, actor.jailTurns = 0.
+  // 8. Resets turn & roll state: room.consecutiveDoubles = 0, room.hasExtraTurn = false, room.clearRoll().
+  // 9. Persists room state.
+  // 10. Broadcasts jail:card-used to room peers and returns ack to actor.
+  socket.on('jail:use-card', withRoom((room, roomId, data, ack) => {
+    const { actor, error } = requireActor(room, ack);
+    if (error) return error;
+
+    const gateError = turnGate(room, ack, data && data.playerId);
+    if (gateError) return gateError;
+
+    if (isOutOfGame(actor)) {
+      return reject(ack, 'PLAYER_OUT', 'You are out of the game.');
+    }
+
+    const replayError = actionGate(room, ack, data && data.actionId);
+    if (replayError) return replayError;
+
+    if (!actor.inJail) {
+      return reject(ack, 'NOT_IN_JAIL', `Player ${actor.id} is not in jail.`);
+    }
+
+    const cardsCount = Number.isInteger(actor.jailCards) ? actor.jailCards : 0;
+    if (cardsCount <= 0) {
+      return reject(ack, 'NO_JAIL_CARD', `Player ${actor.id} does not have a Get Out of Jail Free card.`);
+    }
+
+    actor.jailCards = cardsCount - 1;
+    actor.inJail = false;
+    actor.jailTurns = 0;
+
+    room.consecutiveDoubles = 0;
+    room.hasExtraTurn = false;
+    room.clearRoll();
+
+    persistRoom(room);
+
+    console.log(`🔓 Room ${roomId}: Player ${actor.id} used a Get Out of Jail Free card and was released from JAIL (cards remaining: ${actor.jailCards})`);
+
+    const resultPayload = {
+      playerId: actor.id,
+      inJail: false,
+      jailTurns: 0,
+      jailCards: actor.jailCards,
+    };
+
+    socket.to(roomId).emit('jail:card-used', resultPayload);
     if (typeof ack === 'function') {
       ack({ ok: true, ...resultPayload });
     }

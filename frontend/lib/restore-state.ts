@@ -22,6 +22,7 @@ export interface RestoredPlayer {
   mood?: "happy" | "flat";
   inJail?: boolean;
   jailTurns?: number;
+  jailCards?: number;
   isBankrupt?: boolean;
   isResting?: boolean;
   [key: string]: unknown;
