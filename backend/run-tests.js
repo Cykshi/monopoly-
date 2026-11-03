@@ -74,6 +74,7 @@ const ONLINE_SUITES = [
   'test-identity-security.js',
   'test-restore-integration.js',
   'test-auction-payment.js',
+  'test-auction-disconnect.js',
   'test-property-selling.js',
   'test-card-authority.js',
   'test-jail-entry.js',

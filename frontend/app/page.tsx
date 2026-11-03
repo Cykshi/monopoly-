@@ -1695,9 +1695,24 @@ export default function GameBoard() {
 
     newSocket.on("auction:bid", (data: { auction: AuctionState }) => {
       setActiveAuction(data.auction);
+      if (data.auction.highestBidderId === null) {
+        return;
+      }
       const bidder = playersRef.current.find((p) => p.id === data.auction.highestBidderId);
       const tile = BOARD_TILES.find((t) => t.id === data.auction.tileId);
       addLog(`🔨 ${bidder?.name || "Player"} bid $${data.auction.currentBid} on ${tile?.name || "property"}!`);
+    });
+
+    newSocket.on("auction:reopened", (data: {
+      auction: AuctionState;
+      previousLeaderId?: number;
+      previousLeaderName?: string;
+    }) => {
+      setActiveAuction(data.auction);
+      const prevLeader = playersRef.current.find((p) => p.id === data.previousLeaderId);
+      const leaderName = data.previousLeaderName || prevLeader?.name || "Highest bidder";
+      const tile = BOARD_TILES.find((t) => t.id === data.auction.tileId);
+      addLog(`⚠️ ${leaderName} disconnected! Auction for ${tile?.name || "property"} has reopened.`);
     });
 
     newSocket.on("auction:pass", (data: { auction: AuctionState }) => {
@@ -1711,23 +1726,45 @@ export default function GameBoard() {
       setActiveAuction(data.auction);
     });
 
-    newSocket.on("auction:end", (data: { auction: AuctionState }) => {
-      if (data.auction.highestBidderId !== null) {
-        const winnerP = playersRef.current.find((p) => p.id === data.auction.highestBidderId);
-        const tile = BOARD_TILES.find((t) => t.id === data.auction.tileId);
-        if (winnerP && tile) {
-          // The server awards ownership and settles it authoritatively; we mirror
-          // it here AND charge the winner the winning bid, so the money side of
-          // the sale is settled on EVERY end path — including the timer-driven
-          // auto-end the server fires on its own (which never went through the
-          // old client-side countdown/handleEndAuction).
-          setPropertyOwnership((prev) => ({ ...prev, [tile.id]: winnerP.id }));
-          setPlayers((prev) =>
-            prev.map((p) => (p.id === winnerP.id ? { ...p, money: p.money - data.auction.currentBid } : p))
-          );
-          addLog(`🎉 AUCTION WON! ${winnerP.name} won ${tile.name} for $${data.auction.currentBid}!`);
-        }
+    newSocket.on("auction:end", (data: {
+      auction: AuctionState;
+      winnerId?: number | null;
+      tileId?: number;
+      currentBid?: number;
+      winnerMoney?: number | null;
+      propertyOwnership?: Record<string, number>;
+    }) => {
+      if (data.propertyOwnership) {
+        setPropertyOwnership(data.propertyOwnership);
       }
+
+      const winnerId = data.winnerId !== undefined ? data.winnerId : data.auction?.highestBidderId;
+      const tileId = data.tileId !== undefined ? data.tileId : data.auction?.tileId;
+      const tile = BOARD_TILES.find((t) => t.id === tileId);
+
+      if (winnerId !== null && winnerId !== undefined) {
+        const winnerP = playersRef.current.find((p) => p.id === winnerId);
+        // Authoritative winner money from server
+        if (typeof data.winnerMoney === "number") {
+          setPlayers((prev) =>
+            prev.map((p) => (p.id === winnerId ? { ...p, money: data.winnerMoney! } : p))
+          );
+        } else if (winnerP && typeof data.currentBid === "number") {
+          setPlayers((prev) =>
+            prev.map((p) => (p.id === winnerId ? { ...p, money: p.money - data.currentBid! } : p))
+          );
+        }
+        if (!data.propertyOwnership && tile) {
+          setPropertyOwnership((prev) => ({ ...prev, [tile.id]: winnerId }));
+        }
+        const winningBid = typeof data.currentBid === "number" ? data.currentBid : data.auction?.currentBid;
+        const winnerName = winnerP?.name || `Player ${winnerId}`;
+        addLog(`🎉 AUCTION WON! ${winnerName} won ${tile?.name || "property"} for $${winningBid}!`);
+      } else {
+        // Handle no-sale settlements correctly
+        addLog(`🔨 Auction for ${tile?.name || "property"} ended with no sale.`);
+      }
+
       setActiveAuction(null);
     });
 
@@ -3160,7 +3197,7 @@ export default function GameBoard() {
   };
 
   const endTurn = () => {
-    if (!isMyTurn || winner) return;
+    if (!isMyTurn || winner || activeAuction) return;
     if (gamePhase !== "ACTION" && gamePhase !== "END TURN") return;
 
     setConsecutiveDoubles(0);

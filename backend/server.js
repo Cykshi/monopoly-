@@ -650,9 +650,11 @@ function eliminatePlayer(room, io, player, { reason = 'bankrupt', creditorId = n
       live.passedPlayerIds = [...passed, player.id];
     }
 
-    if (live.highestBidderId === player.id) {
+    const wasLeader = (live.highestBidderId === player.id);
+    if (wasLeader) {
       live.highestBidderId = null;
       live.currentBid = 0;
+      live.timeLeft = 15;
     }
 
     const alive = room.players.filter((p) => !p.isBankrupt);
@@ -661,7 +663,16 @@ function eliminatePlayer(room, io, player, { reason = 'bankrupt', creditorId = n
     if (alive.length <= 1 || nonPassed.length === 0) {
       room.settleAuction(io);
     } else {
-      io.to(room.roomId).emit('auction:bid', { auction: live });
+      if (wasLeader) {
+        room.startAuctionTimer(io);
+        io.to(room.roomId).emit('auction:reopened', {
+          auction: live,
+          previousLeaderId: player.id,
+          previousLeaderName: player.name,
+        });
+      } else {
+        io.to(room.roomId).emit('auction:pass', { auction: live });
+      }
     }
   }
 
@@ -3047,6 +3058,10 @@ io.on('connection', (socket) => {
   // ahead by naming a next player — the server computes the next seat from its
   // own roster. The new turn is broadcast so every client repaints from truth.
   socket.on('turn:ended', withRoom((room, roomId, data, ack) => {
+    if (room.activeAuction) {
+      return reject(ack, 'AUCTION_IN_PROGRESS', 'An auction is currently in progress.');
+    }
+
     const gateError = turnGate(room, ack, data && data.playerId);
     if (gateError) return gateError;
 
@@ -4451,7 +4466,13 @@ io.on('connection', (socket) => {
 
     // Store the auction with the SERVER's bidder id, so a later end settles to
     // the player who really bid rather than whoever the payload named.
-    const updated = { ...incoming, highestBidderId: bidderId, timeLeft: 15 };
+    const updated = {
+      ...live,
+      ...incoming,
+      highestBidderId: bidderId,
+      timeLeft: 15,
+      passedPlayerIds: Array.isArray(live.passedPlayerIds) ? live.passedPlayerIds : [],
+    };
     room.activeAuction = updated;
     room.startAuctionTimer(io);
     console.log(`🔨 Room ${roomId}: Bid $${updated.currentBid} by Player ${bidderId}`);
