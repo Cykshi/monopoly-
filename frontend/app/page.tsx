@@ -6004,6 +6004,24 @@ export default function GameBoard() {
                   </button>
 
                   <button
+                    type="button"
+                    onClick={handleCopyInviteLink}
+                    title={copiedLink ? "Invite link copied!" : copyLinkFailed ? "Copy failed — share code" : "Copy invite link"}
+                    aria-label="Copy invite link"
+                    className={`flex shrink-0 items-center justify-center h-[44px] w-[44px] md:h-[4.4vmin] md:w-[4.4vmin] rounded-xl md:rounded-[1vmin] border transition-all hover:scale-[1.05] active:scale-95 cursor-pointer ${
+                      copiedLink
+                        ? "border-emerald-400 bg-emerald-500/25 text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.5)]"
+                        : copyLinkFailed
+                        ? "border-amber-400 bg-amber-500/25 text-amber-200"
+                        : "border-purple-400/60 bg-purple-500/15 text-purple-200 hover:border-purple-300 hover:bg-purple-500/25 shadow-[0_0_12px_rgba(168,85,247,0.25)]"
+                    }`}
+                  >
+                    <span className="text-base md:text-[1.8vmin] leading-none">
+                      {copiedLink ? "✓" : copyLinkFailed ? "⚠️" : "🔗"}
+                    </span>
+                  </button>
+
+                  <button
                     onClick={handleLeaveRoom}
                     title="Leave this room and return to the lobby"
                     className="flex shrink-0 items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[44px] rounded-xl md:rounded-[1vmin] border border-red-400/70 bg-gradient-to-r from-red-500/35 to-red-600/20 px-3.5 py-2 md:px-[1.6vmin] md:py-[1vmin] text-xs md:text-[1.5vmin] font-black uppercase tracking-wide text-white shadow-[0_0_1.6vmin_rgba(239,68,68,0.5)] transition-all hover:scale-[1.04] hover:border-red-300 hover:from-red-500/60 hover:to-red-600/40 hover:shadow-[0_0_2.4vmin_rgba(239,68,68,0.85)] active:scale-95 cursor-pointer"
@@ -6012,26 +6030,6 @@ export default function GameBoard() {
                     <span>Leave</span>
                   </button>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handleCopyInviteLink}
-                  title="Copy shareable invite link with room code"
-                  className={`flex w-full items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[40px] rounded-xl md:rounded-[1vmin] border px-3 py-2 text-xs md:text-[1.2vmin] font-black uppercase tracking-wider transition-all hover:scale-[1.02] active:scale-95 cursor-pointer ${
-                    copiedLink
-                      ? "border-emerald-400 bg-emerald-500/25 text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.5)]"
-                      : copyLinkFailed
-                      ? "border-amber-400 bg-amber-500/25 text-amber-200"
-                      : "border-purple-400/60 bg-gradient-to-r from-purple-600/30 to-indigo-600/30 text-purple-200 shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:border-purple-300 hover:from-purple-600/45 hover:to-indigo-600/45"
-                  }`}
-                >
-                  <span className="text-sm md:text-[1.4vmin] leading-none">
-                    {copiedLink ? "✓" : copyLinkFailed ? "⚠️" : "🔗"}
-                  </span>
-                  <span>
-                    {copiedLink ? "Invite Link Copied!" : copyLinkFailed ? "Copy Failed — Share Code" : "Copy Invite Link"}
-                  </span>
-                </button>
               </div>
 
               <span className="px-1 md:px-[0.3vmin] text-[10px] md:text-[0.95vmin] text-gray-500">
