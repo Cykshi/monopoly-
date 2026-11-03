@@ -4121,23 +4121,6 @@ export default function GameBoard() {
             <p className="mt-1 md:mt-[0.6vmin] text-center text-xs md:text-[1.15vmin] font-bold uppercase tracking-widest text-gray-400">
               {entryName.trim() || "Player"} • Room {roomId}
             </p>
-            <div className="mt-2 md:mt-[0.8vmin] flex justify-center">
-              <button
-                type="button"
-                onClick={handleCopyInviteLink}
-                title="Copy shareable invite link with room code"
-                className={`flex items-center gap-1.5 px-3 py-1.5 md:px-[1.2vmin] md:py-[0.6vmin] rounded-xl border text-xs md:text-[1.1vmin] font-bold transition-all hover:scale-105 active:scale-95 cursor-pointer ${
-                  copiedLink
-                    ? "border-emerald-400 bg-emerald-500/20 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.4)]"
-                    : copyLinkFailed
-                    ? "border-amber-400 bg-amber-500/20 text-amber-200"
-                    : "border-purple-400/50 bg-purple-500/15 text-purple-200 hover:border-purple-300 hover:bg-purple-500/25"
-                }`}
-              >
-                <span>{copiedLink ? "✓" : copyLinkFailed ? "⚠️" : "🔗"}</span>
-                <span>{copiedLink ? "Invite Link Copied!" : copyLinkFailed ? "Copy Failed" : "Copy Invite Link"}</span>
-              </button>
-            </div>
             <p className="mt-1.5 md:mt-[0.8vmin] text-center text-[11px] md:text-[1vmin] font-semibold text-gray-500">
               Greyed-out colours are already taken. Your choice is permanent.
             </p>
