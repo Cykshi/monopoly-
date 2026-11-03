@@ -564,6 +564,14 @@ export default function GameBoard() {
   // The colour this player currently holds as the SERVER sees it. This is the
   // authority for what's taken — never a local guess.
   const [myColor, setMyColor] = useState<string | null>(null);
+  // Staged colour selection on the dedicated CHOOSE YOUR COLOR screen.
+  // Clicking a swatch highlights it locally; the colour is only submitted to
+  // the server and entered into the game when the player presses "ENTER GAME".
+  const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [isEnteringGame, setIsEnteringGame] = useState(false);
+  // Flag indicating that the player has entered the game board.
+  // Reconnecting players who already have a colour assigned are auto-entered.
+  const [hasEnteredGame, setHasEnteredGame] = useState(false);
   // Transient feedback for a swatch that lost a race for the same colour.
   const [colorShake, setColorShake] = useState<string | null>(null);
   const [colorError, setColorError] = useState<string | null>(null);
@@ -1095,6 +1103,9 @@ export default function GameBoard() {
     if (restoredMe) {
       if (restoredMe.name) setEntryName((prev) => prev || restoredMe.name);
       setMyColor(restoredMe.color || null);
+      if (restoredMe.color) {
+        setHasEnteredGame(true);
+      }
     }
 
     addLog(next.logMessage);
@@ -1180,6 +1191,9 @@ export default function GameBoard() {
     sessionTokenRef.current = null;
     // Identity choices, so the picker starts clean.
     setMyColor(null);
+    setSelectedColor(null);
+    setIsEnteringGame(false);
+    setHasEnteredGame(false);
     setEntryName("");
     setColorError(null);
     // Game state, so the board is not carrying a finished/other game.
@@ -1883,6 +1897,9 @@ export default function GameBoard() {
             }
             if (res && res.ok) {
               setMyColor((prev) => (res.color !== undefined ? res.color : prev));
+              if (res.color) {
+                setHasEnteredGame(true);
+              }
             }
           }
         );
@@ -1929,7 +1946,12 @@ export default function GameBoard() {
       // colour, or the server rejected ours, `myColor` follows the server.
       const me = myPlayerIdRef.current;
       const mine = Array.isArray(data?.players) ? data.players.find((p) => p.id === me) : undefined;
-      if (mine) setMyColor(mine.color ?? null);
+      if (mine) {
+        setMyColor(mine.color ?? null);
+        if (mine.color) {
+          setHasEnteredGame(true);
+        }
+      }
     });
     newSocket.on("room:settings", (data: { settings?: RestoredRoomSettings }) => {
       if (data?.settings) {
@@ -2067,6 +2089,8 @@ export default function GameBoard() {
         saveSessionToken(res.roomId, res.token);
         rememberLastRoom(res.roomId);
         updateBrowserUrlWithRoom(res.roomId);
+        setRoomId(res.roomId);
+        setRoomRole("host");
       }
       savePlayerName(name);
       // Straight into the colour step — no colour is held yet. The picker is
@@ -2104,6 +2128,8 @@ export default function GameBoard() {
           saveSessionToken(res.roomId, res.token);
           rememberLastRoom(res.roomId);
           updateBrowserUrlWithRoom(res.roomId);
+          setRoomId(res.roomId);
+          setRoomRole("guest");
         }
         savePlayerName(name);
         setJoinCode("");
@@ -2141,28 +2167,51 @@ export default function GameBoard() {
     handleJoinRoom(undefined, inviteCode, entryName);
   }, [inviteCode, roomId, lobbyBusy, isConnected, entryName, handleJoinRoom]);
 
-  // Ask the server to take a colour. The server is the authority: it refuses a
-  // colour someone else already holds (COLOR_TAKEN), which is the ONLY correct
-  // answer when two players click the same free swatch at the same moment. We do
-  // NOT set myColor locally on click — we wait for the room:players broadcast, so
-  // the UI can never show a colour we don't actually own.
-  const chooseColor = (color: string) => {
-    const s = socketRef.current;
-    if (!s) return;
+  // Stage a colour selection locally. Selecting a colour highlights it
+  // but does NOT automatically enter the game or submit to the server yet.
+  const handleSelectColor = (color: string) => {
     setColorError(null);
-    s.emit("player:set-color", { color }, (res: { ok: boolean; color?: string; code?: string; error?: string }) => {
+    setSelectedColor((prev) => (prev?.toLowerCase() === color.toLowerCase() ? null : color));
+  };
+
+  // Explicit confirmation via ENTER GAME. Submits the staged colour to the
+  // server authoritative validation; on success, transitions to the game board.
+  const handleEnterGame = () => {
+    const s = socketRef.current;
+    if (!s) {
+      setColorError("Not connected to the server. Please wait a moment.");
+      return;
+    }
+    const colorToConfirm = selectedColor || myColor;
+    if (!colorToConfirm) {
+      setColorError("Please select a colour first.");
+      return;
+    }
+    // If the server has already confirmed our colour (e.g. from an existing seat),
+    // enter immediately.
+    if (myColor && myColor.toLowerCase() === colorToConfirm.toLowerCase()) {
+      setHasEnteredGame(true);
+      return;
+    }
+
+    setIsEnteringGame(true);
+    setColorError(null);
+    s.emit("player:set-color", { color: colorToConfirm }, (res: { ok: boolean; color?: string; code?: string; error?: string }) => {
+      setIsEnteringGame(false);
       if (res && res.ok) {
-        setMyColor(res.color || color);
+        const confirmed = res.color || colorToConfirm;
+        setMyColor(confirmed);
+        setSelectedColor(confirmed);
+        setHasEnteredGame(true);
         return;
       }
-      // Lost the race, or the colour is already fixed for this session.
       setColorError(
         res?.code === "COLOR_ALREADY_SET"
           ? "Your colour is locked. Leave the room to choose a different one."
           : res?.error || "Could not take that colour."
       );
-      setColorShake(color);
-      window.setTimeout(() => setColorShake((c) => (c === color ? null : c)), 600);
+      setColorShake(colorToConfirm);
+      window.setTimeout(() => setColorShake((c) => (c === colorToConfirm ? null : c)), 600);
     });
   };
 
@@ -2207,13 +2256,9 @@ export default function GameBoard() {
   const nameLocked = identityLocked || !!players.find((p) => p.id === myPlayerId)?.hasEntered;
 
   // Does THIS player still need to pick a colour, according to the SERVER's own
-  // roster? This is the single source of truth for showing the picker. Deriving
-  // it from the live roster (rather than the one-shot rejoin payload) is what
-  // stops a refresh from re-opening the picker for someone who already has a
-  // colour — the server would refuse their pick with COLOR_ALREADY_SET, which is
-  // exactly the "colour is not available" dead-end this avoids.
+  // roster? This is the authority for whether the color selection screen is active.
   const mySeat = players.find((p) => p.id === myPlayerId);
-  const needsColorPick = !!roomId && !!mySeat && mySeat.hasSeat === true && !mySeat.color;
+  const needsColorPick = !!roomId && (!mySeat?.color || !hasEnteredGame);
 
   // The picker is DERIVED, not stored: `needsColorPick` is computed from our own
   // colour being null, so every path — create, join, rejoin, refresh, and a live
@@ -4106,69 +4151,73 @@ export default function GameBoard() {
         </div>
       )}
 
-      {/* ================= COLOUR PICKER (post-join step) =================
-          Shown once we're in a room but before the game view. Gated on roomId so
-          it can't appear to a client that never joined, and on !myColor so a
-          refresh mid-lobby naturally lands the player back here. Which swatches
-          are available comes from the SERVER roster (room:players), so a colour
-          someone else already holds is disabled the moment they take it. */}
-      {needsColorPick && !identityLocked && (
-        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-[#050508]/95 p-3 backdrop-blur-sm overflow-y-auto">
-          <div className="w-full max-w-[480px] md:w-[58vmin] max-h-[94dvh] overflow-y-auto my-auto rounded-2xl md:rounded-[1.8vmin] border border-white/12 bg-[#0f0c16] p-4 sm:p-5 md:p-[3vmin] shadow-[0_0_6vmin_rgba(139,92,246,0.25)]">
-            <h2 className="text-center text-xl md:text-[2.4vmin] font-black uppercase tracking-widest text-white">
-              Pick your colour
-            </h2>
-            <p className="mt-1 md:mt-[0.6vmin] text-center text-xs md:text-[1.15vmin] font-bold uppercase tracking-widest text-gray-400">
+      {/* ================= COLOUR SELECTION SCREEN (dedicated full-screen step) =================
+          Shown once we're in a room before entering the game view. Gated on roomId and
+          !hasEnteredGame so the game board remains COMPLETELY HIDDEN until the player
+          has picked a colour AND pressed "ENTER GAME".
+          Which swatches are available comes from the SERVER roster (room:players),
+          so a colour someone else already holds is disabled the moment they take it. */}
+      {!!roomId && (!hasEnteredGame || (!mySeat?.color && !identityLocked)) && (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-[#050508] p-3 sm:p-4 md:p-[2vmin] overflow-y-auto">
+          <div className="w-full max-w-[520px] md:w-[62vmin] max-h-[96dvh] overflow-y-auto my-auto rounded-3xl md:rounded-[2.2vmin] border border-white/12 bg-[#0f0c16]/95 p-5 sm:p-6 md:p-[3.2vmin] shadow-[0_0_8vmin_rgba(139,92,246,0.35)] backdrop-blur-md">
+            <h1 className="text-center text-2xl sm:text-3xl md:text-[3.2vmin] font-black uppercase tracking-widest text-white drop-shadow-[0_0_2vmin_rgba(255,255,255,0.25)]">
+              CHOOSE YOUR COLOR
+            </h1>
+            <p className="mt-1.5 md:mt-[0.8vmin] text-center text-xs md:text-[1.2vmin] font-bold uppercase tracking-widest text-gray-400">
               {entryName.trim() || "Player"} • Room {roomId}
             </p>
-            <p className="mt-1.5 md:mt-[0.8vmin] text-center text-[11px] md:text-[1vmin] font-semibold text-gray-500">
-              Greyed-out colours are already taken. Your choice is permanent.
+            <p className="mt-1 md:mt-[0.6vmin] text-center text-[11px] md:text-[1.05vmin] font-semibold text-gray-400">
+              Select your token color to enter the game. Colors already taken are unavailable.
             </p>
 
-            <div className="mt-4 md:mt-[2.4vmin] grid grid-cols-3 gap-2 sm:gap-3 md:gap-[1.4vmin]">
+            <div className="mt-5 md:mt-[2.4vmin] grid grid-cols-3 gap-2.5 sm:gap-3.5 md:gap-[1.5vmin]">
               {PLAYER_COLOR_PALETTE.map(({ name, hex }) => {
                 const isTaken = takenColors.has(hex.toLowerCase());
-                const isMine = (myColor || "").toLowerCase() === hex.toLowerCase();
+                const isSelected = (selectedColor || myColor || "").toLowerCase() === hex.toLowerCase();
+                const isConfirmedMine = (myColor || "").toLowerCase() === hex.toLowerCase();
                 const shaking = colorShake === hex;
                 return (
                   <button
                     key={hex}
-                    onClick={() => !isTaken && !isMine && chooseColor(hex)}
-                    disabled={isTaken || isMine}
-                    aria-label={isTaken ? `${name} taken` : isMine ? `Your colour ${name}` : `Choose colour ${name}`}
-                    title={isTaken ? "Taken by another player" : isMine ? "Your colour" : `Choose ${name}`}
-                    className={`group relative flex flex-col items-center justify-center gap-1 md:gap-[0.5vmin] min-h-[58px] rounded-xl md:rounded-[1.4vmin] border p-2.5 md:p-[1vmin] transition-all active:scale-95 ${shaking ? "swatch-shake" : ""} ${isTaken
-                        ? "cursor-not-allowed border-white/10 bg-white/[0.02]"
-                        : isMine
-                          ? "cursor-default border-white bg-white/[0.08]"
-                          : "cursor-pointer border-white/15 bg-white/[0.03] hover:scale-[1.06] hover:border-white/40"
-                      }`}
+                    type="button"
+                    onClick={() => !isTaken && handleSelectColor(hex)}
+                    disabled={isTaken}
+                    aria-label={isTaken ? `${name} taken` : isSelected ? `Selected color ${name}` : `Select color ${name}`}
+                    title={isTaken ? "Taken by another player" : isSelected ? "Selected color" : `Choose ${name}`}
+                    className={`group relative flex flex-col items-center justify-center gap-1.5 md:gap-[0.6vmin] min-h-[72px] sm:min-h-[82px] md:min-h-[10vmin] rounded-2xl md:rounded-[1.6vmin] border p-3 md:p-[1.2vmin] transition-all active:scale-95 ${shaking ? "swatch-shake" : ""} ${
+                      isTaken
+                        ? "cursor-not-allowed border-white/5 bg-white/[0.01] opacity-40"
+                        : isSelected
+                          ? "cursor-pointer border-purple-400 bg-purple-500/20 shadow-[0_0_3vmin_rgba(168,85,247,0.55)] scale-[1.04]"
+                          : "cursor-pointer border-white/12 bg-white/[0.03] hover:scale-[1.04] hover:border-white/35 hover:bg-white/[0.06]"
+                    }`}
                   >
-                    {/* The REAL token piece, recoloured — not an abstract block.
-                        Disabled colours render the same token, dimmed + greyed. */}
-                    <div className={`relative transition-transform ${!isTaken && !isMine ? "group-hover:scale-110" : ""}`}>
+                    {/* Token piece representation */}
+                    <div className={`relative transition-transform ${!isTaken ? "group-hover:scale-110" : ""}`}>
                       {renderPlayerFace(
                         { color: hex, mood: "happy", isCurrentPlayer: false, id: 0 },
-                        "clamp(38px, 8vmin, 56px)",
-                        { dimmed: isTaken, glow: isMine }
+                        "clamp(42px, 8vmin, 62px)",
+                        { dimmed: isTaken, glow: isSelected }
                       )}
                       {isTaken && (
-                        <span className="absolute inset-0 flex items-center justify-center text-lg md:text-[2.4vmin] font-black text-white drop-shadow-[0_0.2vmin_0.3vmin_rgba(0,0,0,0.95)]">
+                        <span className="absolute inset-0 flex items-center justify-center text-xl md:text-[2.6vmin] font-black text-red-400/90 drop-shadow-[0_0.2vmin_0.3vmin_rgba(0,0,0,0.95)]">
                           ✕
                         </span>
                       )}
                     </div>
                     <span
-                      className={`text-center text-xs md:text-[1vmin] font-black uppercase leading-tight tracking-wide ${isTaken ? "text-gray-600" : isMine ? "text-white" : "text-gray-300"
-                        }`}
+                      className={`text-center text-xs md:text-[1.1vmin] font-black uppercase leading-tight tracking-wide ${
+                        isTaken ? "text-gray-600" : isSelected ? "text-white" : "text-gray-300"
+                      }`}
                     >
                       {name}
                     </span>
                     <span
-                      className={`text-[10px] md:text-[0.85vmin] font-bold uppercase tracking-wider ${isTaken ? "text-red-400/80" : isMine ? "text-emerald-300" : "text-transparent"
-                        }`}
+                      className={`text-[10px] md:text-[0.9vmin] font-bold uppercase tracking-wider ${
+                        isTaken ? "text-red-400/80" : isConfirmedMine ? "text-emerald-300" : isSelected ? "text-purple-300" : "text-transparent"
+                      }`}
                     >
-                      {isMine ? "Your colour" : isTaken ? "Taken" : "—"}
+                      {isTaken ? "Taken" : isConfirmedMine ? "Confirmed" : isSelected ? "Selected" : "—"}
                     </span>
                   </button>
                 );
@@ -4176,29 +4225,48 @@ export default function GameBoard() {
             </div>
 
             {colorError && (
-              <p className="mt-3 md:mt-[1.8vmin] rounded-lg md:rounded-[0.8vmin] border-red-500/40 bg-red-500/10 px-3 py-2 md:px-[1.2vmin] md:py-[0.8vmin] text-center text-xs md:text-[1.1vmin] font-bold text-red-300">
+              <p className="mt-3.5 md:mt-[1.8vmin] rounded-xl md:rounded-[1vmin] border border-red-500/40 bg-red-500/10 px-3.5 py-2.5 md:px-[1.4vmin] md:py-[1vmin] text-center text-xs md:text-[1.15vmin] font-bold text-red-300">
                 {colorError}
               </p>
             )}
 
-            {/* No "Enter Room" click needed any more: the picker closes by itself
-                the instant the SERVER confirms our colour (needsColorPick flips
-                false). This is a status line, not a dismiss control, so there is
-                no way to walk into the room without a colour chosen. */}
-            <div
-              className={`mt-4 md:mt-[2.2vmin] w-full rounded-xl md:rounded-[1vmin] border px-4 py-2.5 md:px-[2vmin] md:py-[1.3vmin] text-center text-xs md:text-[1.3vmin] font-black uppercase tracking-wide transition-all ${myColor
-                  ? "border-emerald-400/60 bg-emerald-500/20 text-emerald-100"
-                  : "border-white/15 bg-white/[0.04] text-gray-400"
-                }`}
-            >
-              {myColor ? "✓ Colour set — entering room" : "Pick a colour to continue"}
+            {/* ENTER GAME action button: displayed once a valid color is selected.
+                Pressing ENTER GAME submits/confirms the selected color with the server
+                and transitions to the game screen upon authoritative confirmation. */}
+            <div className="mt-5 md:mt-[2.4vmin] flex flex-col gap-2 md:gap-[1vmin]">
+              {selectedColor || myColor ? (
+                <button
+                  type="button"
+                  onClick={handleEnterGame}
+                  disabled={isEnteringGame}
+                  className="w-full flex items-center justify-center min-h-[52px] rounded-xl md:rounded-[1.2vmin] border border-emerald-400/70 bg-gradient-to-r from-emerald-500/35 to-teal-500/25 px-5 py-3 md:px-[2vmin] md:py-[1.4vmin] text-sm md:text-[1.6vmin] font-black uppercase tracking-wider text-white shadow-[0_0_3vmin_rgba(16,185,129,0.7),0_0_7vmin_rgba(16,185,129,0.35)] transition-all hover:scale-[1.02] hover:from-emerald-500/55 hover:to-teal-500/40 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                >
+                  {isEnteringGame ? "ENTERING GAME..." : "ENTER GAME"}
+                </button>
+              ) : (
+                <div className="w-full rounded-xl md:rounded-[1.2vmin] border border-white/10 bg-white/[0.03] px-4 py-3 md:px-[2vmin] md:py-[1.4vmin] text-center text-xs md:text-[1.2vmin] font-bold uppercase tracking-widest text-gray-500">
+                  Select a color to continue
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleLeaveRoom}
+                className="w-full text-center text-xs md:text-[1.1vmin] font-bold uppercase tracking-wider text-gray-500 hover:text-gray-300 transition-colors py-1 cursor-pointer"
+              >
+                ← Back to lobby
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Mobile Top Navigation Tabs (under 1024px) */}
-      <div className="flex lg:hidden w-full items-center justify-between gap-1.5 p-1.5 bg-[#0f0c16]/95 border-b border-white/10 shrink-0 sticky top-0 z-[80] backdrop-blur-md">
+      {/* The actual Monopoly game board remains completely hidden until the player
+          selects a color AND presses ENTER GAME (hasEnteredGame becomes true). */}
+      {hasEnteredGame && (
+        <>
+          {/* Mobile Top Navigation Tabs (under 1024px) */}
+          <div className="flex lg:hidden w-full items-center justify-between gap-1.5 p-1.5 bg-[#0f0c16]/95 border-b border-white/10 shrink-0 sticky top-0 z-[80] backdrop-blur-md">
         <button
           onClick={() => setMobileTab("properties")}
           className={`flex-1 flex items-center justify-center min-h-[44px] py-2 px-1 text-xs sm:text-sm font-black uppercase rounded-xl border transition-all active:scale-95 cursor-pointer ${mobileTab === "properties"
@@ -7114,6 +7182,8 @@ export default function GameBoard() {
           </div>
           );
         })()}
+        </>
+      )}
     </main>
   );
 }
