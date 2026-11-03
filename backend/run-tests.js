@@ -73,6 +73,7 @@ const ONLINE_SUITES = [
   'test-event-forgery.js',
   'test-identity-security.js',
   'test-restore-integration.js',
+  'test-reconnect-cleanup.js',
   'test-auction-payment.js',
   'test-auction-disconnect.js',
   'test-property-selling.js',

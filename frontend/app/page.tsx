@@ -529,6 +529,10 @@ export default function GameBoard() {
   // Periodic game:request-sync interval. Kept in a ref so both the disconnect
   // handler and the effect cleanup can stop it from outside the effect closure.
   const syncIntervalRef = useRef<number | null>(null);
+  // Connection cycle counter distinguishing each discrete connection / reconnect.
+  const connectCycleRef = useRef(0);
+  // Handshake key deduplication ref so a reconnect cannot apply playerState twice.
+  const lastRestoredHandshakeKeyRef = useRef<string | null>(null);
   const applyServerCardOutcomeRef = useRef<(data: CardDrawnEvent, broadcast?: boolean) => void>(() => {});
 
   const [isConnected, setIsConnected] = useState(false);
@@ -1021,7 +1025,15 @@ export default function GameBoard() {
   // can be tested headlessly against a real server payload; this closure only
   // applies its result to the setters. A null field means "leave that slice
   // untouched" rather than "clear it".
-  const applyRestoredState = (restored: PlayerRestoreState) => {
+  // `handshakeKey` provides deduplication so that a given reconnect handshake
+  // cannot apply playerState twice between the ack callback and room:joined event.
+  const applyRestoredState = (restored: PlayerRestoreState, handshakeKey?: string) => {
+    if (handshakeKey) {
+      if (lastRestoredHandshakeKeyRef.current === handshakeKey) {
+        return;
+      }
+      lastRestoredHandshakeKeyRef.current = handshakeKey;
+    }
     const next = computeRestoredState<Player, TradeProposal, ChatMessage>(restored);
     if (next.players) {
       // Merge, not replace: the server's roster is money-stubbed to $0 and must
@@ -1155,6 +1167,7 @@ export default function GameBoard() {
   // defining it after the effect left the effect closing over a binding that did
   // not exist yet when its callback ran.
   const resetToFreshSession = () => {
+    lastRestoredHandshakeKeyRef.current = null;
     socketRoomRef.current = null;
     // Identity + room membership.
     setRoomId(null);
@@ -1197,15 +1210,20 @@ export default function GameBoard() {
       setIsConnected(true);
       setConnectionLabel("Connected • Choose a room");
 
-      // (Re)start the periodic drift-correction heartbeat. handleDisconnect stops
-      // it, so on every (re)connect we make sure exactly one timer is running.
-      if (syncIntervalRef.current === null) {
-        syncIntervalRef.current = window.setInterval(() => {
-          if (isConnectedRef.current && socketRoomRef.current) {
-            newSocket.emit("game:request-sync");
-          }
-        }, 15000);
+      // Connection cycle counter distinguishing each discrete connection / reconnect
+      const currentConnectCycle = ++connectCycleRef.current;
+
+      // (Re)start the periodic drift-correction heartbeat in one clearly defined
+      // lifecycle location. Ensure any previous interval is cleared first.
+      if (syncIntervalRef.current !== null) {
+        window.clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
       }
+      syncIntervalRef.current = window.setInterval(() => {
+        if (isConnectedRef.current && socketRoomRef.current) {
+          newSocket.emit("game:request-sync");
+        }
+      }, 15000);
 
       // If we already hold a session token for the room we were in, ask the
       // server to rebind this new socket to our existing player record. If the
@@ -1214,10 +1232,11 @@ export default function GameBoard() {
       const currentRoom = socketRoomRef.current;
       const token = currentRoom ? loadSessionToken(currentRoom) : null;
       if (currentRoom && token) {
+        const handshakeKey = `${currentConnectCycle}:${currentRoom}:${token}`;
         newSocket.emit(
           "player:rejoin",
           { roomId: currentRoom, token },
-          (res: { ok: boolean; roomId?: string; rejoined?: boolean; error?: string; reason?: string; playerState?: PlayerRestoreState }) => {
+          (res: { ok: boolean; roomId?: string; token?: string; rejoined?: boolean; error?: string; reason?: string; playerState?: PlayerRestoreState }) => {
             if (!res || !res.ok) {
               // The room is gone (its last player left, ending the session) or the
               // token expired. Forget the stale room + token and return to a
@@ -1232,8 +1251,8 @@ export default function GameBoard() {
               setConnectionLabel("Connected • Choose a room");
             } else {
               // The ack carries the same restore payload as room:joined; apply
-              // it here too so state is repainted even if event ordering varies.
-              if (res.playerState) applyRestoredState(res.playerState);
+              // it with the handshakeKey so state and log are restored exactly once.
+              if (res.playerState) applyRestoredState(res.playerState, handshakeKey);
               setConnectionLabel("Connected • Rejoined room");
               updateBrowserUrlWithRoom(currentRoom);
               // Supplement (not replace) player:rejoin: the rejoin restores our
@@ -1835,7 +1854,11 @@ export default function GameBoard() {
       updateBrowserUrlWithRoom(data.roomId);
       // On a rejoin the server also hands back this player's live state —
       // repaint the board from it rather than keeping the blank defaults.
-      if (data.playerState) applyRestoredState(data.playerState);
+      // Deduplicate against the player:rejoin ack callback for this same handshake.
+      if (data.playerState) {
+        const handshakeKey = `${connectCycleRef.current}:${data.roomId}:${data.token || ""}`;
+        applyRestoredState(data.playerState, handshakeKey);
+      }
       // Complete the identity handshake: tell the server which seat this socket
       // controls, tied to the session token. The server verifies the token owns
       // the seat, so this can't be used to impersonate another player. Without
@@ -1941,22 +1964,16 @@ export default function GameBoard() {
     newSocket.on("disconnect", handleDisconnect);
     newSocket.on("connect_error", handleDisconnect);
 
-    // Periodic drift correction: while connected AND in a room, ask the server
-    // for a fresh game:sync so any missed broadcast self-heals without a refresh.
-    // Gated on the refs (not state) because this effect runs once.
-    syncIntervalRef.current = window.setInterval(() => {
-      if (isConnectedRef.current && socketRoomRef.current) {
-        newSocket.emit("game:request-sync");
-      }
-    }, 15000);
-
     return () => {
       if (syncIntervalRef.current !== null) {
         window.clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
       }
+      newSocket.removeAllListeners();
       newSocket.disconnect();
-      socketRef.current = null;
+      if (socketRef.current === newSocket) {
+        socketRef.current = null;
+      }
     };
     // Intentionally runs ONCE for the life of the page: this effect owns the
     // socket connection itself. Re-running it whenever `addLog` or the restore
