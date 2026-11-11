@@ -508,6 +508,88 @@ const SOCKET_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:3001";
 
+const SESSION_STORAGE_PREFIX = "monopoly:session:";
+const LAST_ROOM_KEY = "monopoly:last-room";
+const PLAYER_NAME_KEY = "monopoly:player-name";
+
+const loadSessionToken = (room: string): string | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`${SESSION_STORAGE_PREFIX}${room}`);
+  } catch {
+    return null;
+  }
+};
+
+const getStoredLastRoom = (): string | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(LAST_ROOM_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const getStoredPlayerName = (): string => {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(PLAYER_NAME_KEY) || "";
+  } catch {
+    return "";
+  }
+};
+
+const getUrlRoomParam = (): string | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("room") || params.get("code") || params.get("join");
+    if (!raw) return null;
+    return raw.trim().toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6) || null;
+  } catch {
+    return null;
+  }
+};
+
+// Check whether we have an active, restorable game/lobby session.
+// This is true if we have a recorded last-room AND a valid session token for that room,
+// UNLESS the URL carries a genuine invitation for a different room.
+const hasActiveRoomSession = (): boolean => {
+  const lastRoom = getStoredLastRoom();
+  if (!lastRoom) return false;
+  const token = loadSessionToken(lastRoom);
+  if (!token) return false;
+
+  const urlRoom = getUrlRoomParam();
+  // If arrived via invite link for a DIFFERENT room where we have no session,
+  // that genuine invitation takes precedence over restoring the old room.
+  if (urlRoom && urlRoom !== lastRoom && !loadSessionToken(urlRoom)) {
+    return false;
+  }
+  return true;
+};
+
+// Returns a room code ONLY if there is a GENUINE pending invitation.
+// If the room code in the URL matches the player's own active room or any room
+// they already hold a session token for, it is reconnection data, NOT an invitation.
+const getPendingInvitationCode = (): string | null => {
+  const urlRoom = getUrlRoomParam();
+  if (!urlRoom) return null;
+
+  // If the player already holds a session token for this room, it is reconnection data.
+  if (loadSessionToken(urlRoom)) {
+    return null;
+  }
+
+  // If this matches the stored last room and that room has a session token, it's reconnection data.
+  const lastRoom = getStoredLastRoom();
+  if (urlRoom === lastRoom && loadSessionToken(lastRoom)) {
+    return null;
+  }
+
+  return urlRoom;
+};
+
 export default function GameBoard() {
   const socketRef = useRef<Socket | null>(null);
   const moveTimeoutRef = useRef<number | null>(null);
@@ -544,17 +626,21 @@ export default function GameBoard() {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copyLinkFailed, setCopyLinkFailed] = useState(false);
-  const [inviteCode, setInviteCode] = useState<string | null>(null);
+
+  // Session restoration and invite states:
+  // Distinguish genuine invitations from reconnection to an existing session.
+  const [isRestoringSession, setIsRestoringSession] = useState<boolean>(() => hasActiveRoomSession());
+  const [inviteCode, setInviteCode] = useState<string | null>(() => getPendingInvitationCode());
   const autoJoinAttemptedRef = useRef(false);
-  const [roomId, setRoomId] = useState<string | null>(null);
+  const [roomId, setRoomId] = useState<string | null>(() => (hasActiveRoomSession() ? getStoredLastRoom() : null));
   const [roomRole, setRoomRole] = useState<"host" | "guest" | null>(null);
   const [peerCount, setPeerCount] = useState(1);
-  const [joinCode, setJoinCode] = useState("");
+  const [joinCode, setJoinCode] = useState(() => getPendingInvitationCode() || "");
   const [lobbyError, setLobbyError] = useState<string | null>(null);
   // The name typed on the Create/Join screen. Required before either button can
   // be pressed; it rides along on room:create / room:join so the server's player
   // record is BORN with it, and the same value is reused by the settings panel.
-  const [entryName, setEntryName] = useState("");
+  const [entryName, setEntryName] = useState(() => getStoredPlayerName().slice(0, PLAYER_NAME_MAX));
   // The colour step. There is deliberately NO `colorPickerOpen` state: whether
   // the picker is showing is derived from whether WE hold a colour yet, so a
   // refresh mid-picker naturally reopens it. `setColorPickerOpen` used to be
@@ -588,15 +674,20 @@ export default function GameBoard() {
   // Durable session token issued by the server on join. Kept in memory for the
   // live socket and mirrored to localStorage (keyed by room code) so a page
   // refresh can rebind to the same player record via player:rejoin.
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(() => {
+    const lastRoom = getStoredLastRoom();
+    return lastRoom ? loadSessionToken(lastRoom) : null;
+  });
   // Which player record in `players` this browser controls. Learned from the
   // server on a rejoin (playerState.me.id) so a refreshed client repaints the
   // correct seat instead of guessing from isCurrentPlayer.
   const [myPlayerId, setMyPlayerId] = useState<number | null>(null);
-  const sessionTokenRef = useRef<string | null>(null);
+  const sessionTokenRef = useRef<string | null>(
+    typeof window !== "undefined" && getStoredLastRoom() ? loadSessionToken(getStoredLastRoom()!) : null
+  );
   // Mirror of roomId that reconnect handlers can read without being re-created
   // (the socket effect runs once, so a plain state read there would be stale).
-  const socketRoomRef = useRef<string | null>(null);
+  const socketRoomRef = useRef<string | null>(getStoredLastRoom());
 
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [dice, setDice] = useState<[number, number]>([1, 1]);
@@ -889,17 +980,6 @@ export default function GameBoard() {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
 
-  // ---- Session token persistence (keyed by room code) --------------------
-  // The room code is also persisted so a full page reload knows WHICH room to
-  // attempt a rejoin against (state alone is wiped on reload).
-  //
-  // Declared HERE, above the effects that read them: these are `const` bindings,
-  // not hoisted, so an effect running on mount would otherwise close over keys
-  // that did not exist yet.
-  const SESSION_STORAGE_PREFIX = "monopoly:session:";
-  const LAST_ROOM_KEY = "monopoly:last-room";
-  const PLAYER_NAME_KEY = "monopoly:player-name";
-
   // Reflect room code in the browser URL query parameter without triggering full page reload.
   const updateBrowserUrlWithRoom = useCallback((code: string | null) => {
     if (typeof window === "undefined") return;
@@ -929,33 +1009,26 @@ export default function GameBoard() {
   // On first mount:
   // 1. Remember the last room code so the socket effect can attempt player:rejoin.
   // 2. Pre-fill any saved player name from previous sessions.
-  // 3. Detect and validate invite parameters from the URL (?room=... / ?code=... / ?join=...).
+  // 3. Detect genuine invite parameters from the URL (?room=... / ?code=... / ?join=...).
+  //    Crucially: NEVER mistake the player's own active room session for a new invitation.
   useEffect(() => {
     try {
-      const lastRoom = window.localStorage.getItem(LAST_ROOM_KEY);
+      const lastRoom = getStoredLastRoom();
       if (lastRoom) socketRoomRef.current = lastRoom;
-      const savedName = window.localStorage.getItem(PLAYER_NAME_KEY);
+      const savedName = getStoredPlayerName();
       if (savedName) setEntryName((prev) => prev || savedName.slice(0, PLAYER_NAME_MAX));
     } catch {
       // ignore
     }
 
-    if (typeof window !== "undefined") {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const raw = params.get("room") || params.get("code") || params.get("join");
-        if (raw) {
-          const clean = raw.trim().toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6);
-          if (clean) {
-            setJoinCode(clean);
-            setInviteCode(clean);
-          }
-        }
-      } catch {
-        // ignore
-      }
+    const genuineInvite = getPendingInvitationCode();
+    if (genuineInvite) {
+      setJoinCode(genuineInvite);
+      setInviteCode(genuineInvite);
+    } else {
+      setInviteCode(null);
     }
-  }, [LAST_ROOM_KEY, PLAYER_NAME_KEY]);
+  }, []);
 
   const rememberLastRoom = (room: string) => {
     try {
@@ -973,14 +1046,6 @@ export default function GameBoard() {
     } catch {
       // localStorage can be unavailable (private mode / blocked) — the in-memory
       // token still works for this tab's lifetime, so this is non-fatal.
-    }
-  };
-
-  const loadSessionToken = (room: string): string | null => {
-    try {
-      return window.localStorage.getItem(`${SESSION_STORAGE_PREFIX}${room}`);
-    } catch {
-      return null;
     }
   };
 
@@ -1181,6 +1246,7 @@ export default function GameBoard() {
   const resetToFreshSession = () => {
     lastRestoredHandshakeKeyRef.current = null;
     socketRoomRef.current = null;
+    setIsRestoringSession(false);
     // Identity + room membership.
     setRoomId(null);
     setRoomRole(null);
@@ -1211,6 +1277,7 @@ export default function GameBoard() {
     setGamePhase("YOUR TURN");
     updateBrowserUrlWithRoom(null);
     setInviteCode(null);
+    setJoinCode("");
   };
 
   useEffect(() => {
@@ -1252,6 +1319,7 @@ export default function GameBoard() {
           "player:rejoin",
           { roomId: currentRoom, token },
           (res: { ok: boolean; roomId?: string; token?: string; rejoined?: boolean; error?: string; reason?: string; role?: "host" | "guest"; playerState?: PlayerRestoreState }) => {
+            setIsRestoringSession(false);
             if (!res || !res.ok) {
               // The room is gone (its last player left, ending the session) or the
               // token expired. Forget the stale room + token and return to a
@@ -1280,10 +1348,13 @@ export default function GameBoard() {
           }
         );
       } else if (currentRoom) {
+        setIsRestoringSession(false);
         // We know the room but hold no token to rejoin with (e.g. the token was
         // cleared). player:rejoin is unavailable, so fall back to a plain sync
         // so the board still repaints from server truth.
         newSocket.emit("game:request-sync");
+      } else {
+        setIsRestoringSession(false);
       }
     };
     const handleDisconnect = () => {
@@ -4033,7 +4104,7 @@ export default function GameBoard() {
           lobby covers it until then. Creating or joining a room is what
           actually puts this socket into a Socket.io room server-side —
           without it every game event would be dropped. */}
-      {!roomId && (
+      {!roomId && !isRestoringSession && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#050508]/95 p-3 backdrop-blur-sm overflow-y-auto">
           <div className="w-full max-w-[400px] md:w-[46vmin] max-h-[94dvh] overflow-y-auto my-auto rounded-2xl md:rounded-[1.8vmin] border border-purple-400/25 bg-[#0f0c16] p-5 md:p-[3vmin] shadow-[0_0_5vmin_rgba(139,92,246,0.55),0_0_12vmin_rgba(139,92,246,0.3)]">
             <h1 className="text-center text-2xl md:text-[3vmin] font-black uppercase tracking-widest text-white">
@@ -4160,7 +4231,7 @@ export default function GameBoard() {
           has picked a colour AND pressed "ENTER GAME".
           Which swatches are available comes from the SERVER roster (room:players),
           so a colour someone else already holds is disabled the moment they take it. */}
-      {!!roomId && (!hasEnteredGame || (!mySeat?.color && !identityLocked)) && (
+      {!!roomId && !isRestoringSession && (!hasEnteredGame || (!mySeat?.color && !identityLocked)) && (
         <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-[#050508] p-3 sm:p-4 md:p-[2vmin] overflow-y-auto">
           <div className="w-full max-w-[520px] md:w-[62vmin] max-h-[96dvh] overflow-y-auto my-auto rounded-3xl md:rounded-[2.2vmin] border border-white/12 bg-[#0f0c16]/95 p-5 sm:p-6 md:p-[3.2vmin] shadow-[0_0_8vmin_rgba(139,92,246,0.35)] backdrop-blur-md">
             <h1 className="text-center text-2xl sm:text-3xl md:text-[3.2vmin] font-black uppercase tracking-widest text-white drop-shadow-[0_0_2vmin_rgba(255,255,255,0.25)]">
