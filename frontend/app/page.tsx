@@ -675,6 +675,7 @@ export default function GameBoard() {
   // live socket and mirrored to localStorage (keyed by room code) so a page
   // refresh can rebind to the same player record via player:rejoin.
   const [sessionToken, setSessionToken] = useState<string | null>(() => {
+    if (!hasActiveRoomSession()) return null;
     const lastRoom = getStoredLastRoom();
     return lastRoom ? loadSessionToken(lastRoom) : null;
   });
@@ -683,11 +684,13 @@ export default function GameBoard() {
   // correct seat instead of guessing from isCurrentPlayer.
   const [myPlayerId, setMyPlayerId] = useState<number | null>(null);
   const sessionTokenRef = useRef<string | null>(
-    typeof window !== "undefined" && getStoredLastRoom() ? loadSessionToken(getStoredLastRoom()!) : null
+    typeof window !== "undefined" && hasActiveRoomSession() && getStoredLastRoom()
+      ? loadSessionToken(getStoredLastRoom()!)
+      : null
   );
   // Mirror of roomId that reconnect handlers can read without being re-created
   // (the socket effect runs once, so a plain state read there would be stale).
-  const socketRoomRef = useRef<string | null>(getStoredLastRoom());
+  const socketRoomRef = useRef<string | null>(hasActiveRoomSession() ? getStoredLastRoom() : null);
 
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [dice, setDice] = useState<[number, number]>([1, 1]);
@@ -1014,7 +1017,11 @@ export default function GameBoard() {
   useEffect(() => {
     try {
       const lastRoom = getStoredLastRoom();
-      if (lastRoom) socketRoomRef.current = lastRoom;
+      if (lastRoom && hasActiveRoomSession()) {
+        socketRoomRef.current = lastRoom;
+      } else if (!hasActiveRoomSession()) {
+        socketRoomRef.current = null;
+      }
       const savedName = getStoredPlayerName();
       if (savedName) setEntryName((prev) => prev || savedName.slice(0, PLAYER_NAME_MAX));
     } catch {
