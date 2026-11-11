@@ -569,6 +569,9 @@ const rooms = new Map();
 // notice the server restarted and reconnect — but it is ALWAYS armed, so a
 // restored room nobody ever rejoins can't leak its file or its in-memory entry.
 const RESTORED_ROOM_TTL_MS = Number(process.env.RESTORED_ROOM_TTL_MS) || 15 * 60 * 1000; // 15 min default
+// Grace period for empty rooms when a socket disconnects (e.g. browser refresh).
+// Allows the reconnected socket to restore the existing room and state.
+const EMPTY_ROOM_TTL_MS = Number(process.env.EMPTY_ROOM_TTL_MS) || 90 * 1000; // 90s default
 // How long a player has to take their turn before the SERVER forces it forward.
 // Mirrors the client's TURN_TIME_LIMIT (120s). Env-overridable so tests can use
 // a short clock instead of waiting two minutes per turn.
@@ -1247,14 +1250,19 @@ function serializePlayerState(room, player) {
     hasExtraTurn: room.hasExtraTurn === true,
     pot: room.pot ?? 0,
     restHousePot: room.pot ?? 0,
-    pendingAction: room.pendingAction || null
+    pendingAction: room.pendingAction || null,
+    isGameStarted: room.isGameStarted === true,
+    isGameOver: room.isGameOver === true,
+    winnerId: room.winnerId ?? null,
+    winnerReason: room.winnerReason ?? null,
+    maxPlayers: room.maxPlayers ?? MAX_PLAYERS_DEFAULT
   };
 }
 
 // Remove a socket from its room. Crucially, if the room has no members left
 // we also tear down its auction timer and drop it from the map, so abandoned
 // games don't leak intervals or memory.
-function leaveRoom(socket) {
+function leaveRoom(socket, isExplicitLeave = false) {
   const roomId = socket.data.roomId;
   if (!roomId) return;
 
@@ -1283,22 +1291,17 @@ function leaveRoom(socket) {
     // disarm it now rather than let it fire an elimination for an empty room.
     room.clearTurnTimer();
 
-    // LAST PLAYER GONE -> END THE SESSION NOW.
-    // Every session in this room is finished, so we reap it immediately instead
-    // of waiting out a grace window. Two things must die together:
-    //   1. the room itself (in memory + on disk), and
-    //   2. every session token, so a stale localStorage token in any browser
-    //      cannot resolve back to a seat and drag someone into this dead room.
-    // teardownRoom() already does both (it deletes each token from `sessions`,
-    // drops the room, and removes the persisted file), so we reuse it rather than
-    // adding a second mechanism. The result: the next visit starts from the very
-    // beginning — lobby, name, colour picker, brand-new room code.
-    //
-    // NOTE: this is deliberately NOT the old grace-period behaviour. A refresh
-    // used to be able to rejoin inside 90s; now an empty room is gone at once, so
-    // a player who wants their seat back must not fully disconnect.
-    teardownRoom(room);
-    console.log(`🧹 Room ${roomId} was left by its last player — session ended`);
+    if (isExplicitLeave) {
+      // Explicit room:leave means the player deliberately ended their stay in the room.
+      // With no members remaining, reap the room immediately.
+      teardownRoom(room);
+      console.log(`🧹 Room ${roomId} was left by its last player — session ended`);
+    } else {
+      // Disconnect without explicit leave (e.g. browser refresh or network drop).
+      // Arm a grace period so a lone player refreshing their tab can restore their room.
+      armEmptyRoomTimer(room, EMPTY_ROOM_TTL_MS);
+      console.log(`⏳ Room ${roomId} emptied — ${EMPTY_ROOM_TTL_MS / 1000}s grace period before teardown`);
+    }
   }
 }
 
@@ -1507,7 +1510,7 @@ io.on('connection', (socket) => {
     const requested = normalizeRoomCode(payload && payload.roomId);
     const token = payload && payload.token;
 
-    if (socket.data.roomId) leaveRoom(socket);
+    if (socket.data.roomId) leaveRoom(socket, true);
 
     const resolved = requested ? resolveSession(token, requested) : null;
 
@@ -1539,7 +1542,7 @@ io.on('connection', (socket) => {
     });
 
     if (typeof ack === 'function') {
-      ack({ ok: true, roomId: room.roomId, token, rejoined: true, playerId: player.id, playerState });
+      ack({ ok: true, roomId: room.roomId, token, rejoined: true, playerId: player.id, role, playerState });
     }
   });
 
@@ -1551,7 +1554,7 @@ io.on('connection', (socket) => {
     // Capture BEFORE leaveRoom() drops the socket, so we still know who left.
     const wasInGame = !!(room && room.isGameStarted && !room.isGameOver);
 
-    leaveRoom(socket);
+    leaveRoom(socket, true);
     socket.emit('room:left', { roomId });
 
     // A player leaving a LIVE game is an elimination: they're gone for good
@@ -1660,13 +1663,13 @@ io.on('connection', (socket) => {
     socket.data.roomId = room.roomId;
     socketToken.set(socket.id, token);
 
-    // Apply an initial name if one was supplied. Only overwrite when the incoming
-    // name is actually usable, so a re-identify with no name can't wipe a name
-    // the player already chose. Colours are deliberately NOT set here — they go
-    // through player:set-color, which is the only place that can enforce
-    // "nobody else holds this colour" atomically.
+    // Apply an initial name if one was supplied and not already established.
+    // Only set when incoming name is valid and player has not already entered
+    // or established a name, so a reconnect/re-identify does not clobber existing identity.
     const identifiedName = normalizePlayerName(payload && payload.name);
-    if (identifiedName) player.name = identifiedName;
+    if (identifiedName && (!player.name || player.name === `Player ${claimedId}`) && !player.hasEntered && !room.isGameStarted) {
+      player.name = identifiedName;
+    }
 
     // An identified player is a real game participant — make sure the turn
     // clock is ticking. Idempotent, so a second identify won't reset a live turn.
@@ -4665,7 +4668,7 @@ io.on('connection', (socket) => {
     const wasInGame = !!(room && room.isGameStarted && !room.isGameOver);
     const leaverId = actingPlayerId();
 
-    leaveRoom(socket);
+    leaveRoom(socket, false);
     console.log(`🔴 Socket disconnected: ${socket.id}${roomId ? ` (was in Room ${roomId})` : ' (lobby)'}`);
 
     // A DROP-OUT FROM A LIVE GAME IS AN ELIMINATION, exactly like an explicit

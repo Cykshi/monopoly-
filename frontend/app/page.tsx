@@ -1011,14 +1011,14 @@ export default function GameBoard() {
       if (!local) return next;
       return {
         ...next,
-        money: local.money,
-        position: local.position,
-        mood: local.mood ?? next.mood,
+        money: typeof next.money === "number" ? next.money : local.money,
+        position: typeof next.position === "number" ? next.position : local.position,
+        mood: next.mood ?? local.mood,
         inJail: typeof next.inJail === "boolean" ? next.inJail : (local.inJail ?? false),
         jailTurns: typeof next.jailTurns === "number" ? next.jailTurns : (local.jailTurns ?? 0),
         jailCards: typeof next.jailCards === "number" ? next.jailCards : (local.jailCards ?? 0),
-        isBankrupt: local.isBankrupt ?? next.isBankrupt,
-        isResting: local.isResting ?? next.isResting,
+        isBankrupt: typeof next.isBankrupt === "boolean" ? next.isBankrupt : (local.isBankrupt ?? false),
+        isResting: typeof next.isResting === "boolean" ? next.isResting : (local.isResting ?? false),
         isCurrentPlayer: typeof next.isCurrentPlayer === "boolean" ? next.isCurrentPlayer : (local.isCurrentPlayer ?? false),
       };
     });
@@ -1044,15 +1044,12 @@ export default function GameBoard() {
     }
     const next = computeRestoredState<Player, TradeProposal, ChatMessage>(restored);
     if (next.players) {
-      // Merge, not replace: the server's roster is money-stubbed to $0 and must
-      // never clobber a live balance (see mergeServerRoster).
-      const merged = mergeServerRoster(next.players, playersRef.current);
-      if (next.currentTurnPlayerId !== null) {
-        const turnId = next.currentTurnPlayerId;
-        setPlayers(merged.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
-      } else {
-        setPlayers(merged);
-      }
+      const turnId = next.currentTurnPlayerId;
+      setPlayers(
+        turnId !== null
+          ? next.players.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId }))
+          : next.players
+      );
       // NOTE: no manual `playersRef.current = merged` here. The ref is kept in
       // sync by a single effect watching `players` (see below), so writing it
       // from a handler as well was redundant and a way for the two to drift.
@@ -1060,6 +1057,7 @@ export default function GameBoard() {
       const turnId = next.currentTurnPlayerId;
       setPlayers((prev) => prev.map((p) => ({ ...p, isCurrentPlayer: p.id === turnId })));
     }
+    if (typeof next.maxPlayers === "number") setMaxPlayers(next.maxPlayers);
     if (next.propertyOwnership) setPropertyOwnership(next.propertyOwnership);
     if (next.propertyHouses) setPropertyHouses(next.propertyHouses);
     if (next.propertyMortgaged) setPropertyMortgaged(next.propertyMortgaged);
@@ -1085,11 +1083,13 @@ export default function GameBoard() {
     // Adopt the server's turn clock so the rejoin repaints the correct turn and
     // countdown immediately, rather than waiting for the next turn:changed.
     if (next.turnDeadline !== null) setTurnDeadline(next.turnDeadline);
-    setGamePhase("YOUR TURN");
+    if (next.isGameStarted) {
+      setGamePhase("YOUR TURN");
+    }
     setIsRolling(false);
     setIsMoving(false);
 
-    // A restored (i.e.-started) room means the game is in progress.
+    // Authoritative game progress flag from server.
     setIsGameStarted(next.isGameStarted);
     setServerGameStarted(next.isGameStarted);
 
@@ -1101,8 +1101,9 @@ export default function GameBoard() {
     // picker at a player who already owns a colour.
     const restoredMe = next.players?.find((p) => p.id === next.myPlayerId);
     if (restoredMe) {
-      if (restoredMe.name) setEntryName((prev) => prev || restoredMe.name);
+      if (restoredMe.name) setEntryName(restoredMe.name);
       setMyColor(restoredMe.color || null);
+      setSelectedColor(restoredMe.color || null);
       if (restoredMe.color) {
         setHasEnteredGame(true);
       }
@@ -1250,7 +1251,7 @@ export default function GameBoard() {
         newSocket.emit(
           "player:rejoin",
           { roomId: currentRoom, token },
-          (res: { ok: boolean; roomId?: string; token?: string; rejoined?: boolean; error?: string; reason?: string; playerState?: PlayerRestoreState }) => {
+          (res: { ok: boolean; roomId?: string; token?: string; rejoined?: boolean; error?: string; reason?: string; role?: "host" | "guest"; playerState?: PlayerRestoreState }) => {
             if (!res || !res.ok) {
               // The room is gone (its last player left, ending the session) or the
               // token expired. Forget the stale room + token and return to a
@@ -1264,6 +1265,8 @@ export default function GameBoard() {
               resetToFreshSession();
               setConnectionLabel("Connected • Choose a room");
             } else {
+              if (res.roomId) setRoomId(res.roomId);
+              if (res.role) setRoomRole(res.role);
               // The ack carries the same restore payload as room:joined; apply
               // it with the handshakeKey so state and log are restored exactly once.
               if (res.playerState) applyRestoredState(res.playerState, handshakeKey);

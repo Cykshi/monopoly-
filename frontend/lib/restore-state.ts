@@ -83,6 +83,8 @@ export interface PlayerRestoreState {
   // Whether the server considers the game started. Durable server fact, used to
   // lock name/colour editing; absent on older payloads, hence optional.
   isGameStarted?: boolean;
+  isGameOver?: boolean;
+  maxPlayers?: number;
 }
 
 // The subset of client state a rejoin should overwrite, plus the log line and
@@ -114,6 +116,8 @@ export interface ComputedRestoredState<
   consecutiveDoubles: number;
   hasExtraTurn: boolean;
   isGameStarted: boolean;
+  isGameOver: boolean;
+  maxPlayers: number | null;
   logMessage: string;
 }
 
@@ -149,9 +153,11 @@ export function computeRestoredState<
     settings: p.settings ?? null,
     consecutiveDoubles: typeof p.consecutiveDoubles === "number" ? p.consecutiveDoubles : 0,
     hasExtraTurn: Boolean(p.hasExtraTurn),
-    // A restored payload IS by definition a started game (that's why there was
-    // state to restore), so default to true when the server didn't say.
-    isGameStarted: p.isGameStarted ?? true,
+    // Authoritative flag from server payload. If not explicitly true, default to false
+    // so an in-lobby refresh does not prematurely start the game or lock settings.
+    isGameStarted: Boolean(p.isGameStarted),
+    isGameOver: Boolean(p.isGameOver),
+    maxPlayers: typeof p.maxPlayers === "number" ? p.maxPlayers : null,
     logMessage: `♻️ Reconnected — restored ${ownedCount} propert${ownedCount === 1 ? "y" : "ies"}, $${money.toLocaleString()} on hand.`
   };
 }
