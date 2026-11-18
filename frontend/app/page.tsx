@@ -1427,6 +1427,11 @@ export default function GameBoard() {
       if (!data || !data.ok) return;
       applyServerCardOutcomeRef.current(data, false);
     });
+    // Private card details specifically for the drawing player
+    newSocket.on("card:details", (data: CardDrawnEvent) => {
+      if (!data || !data.ok) return;
+      applyServerCardOutcomeRef.current(data, true);
+    });
     // Server-authoritative bail payment. When a peer pays bail, update their
     // money, clear their inJail status, and trigger the jailbreak animation.
     newSocket.on("jail:bail-paid", (data: JailBailPaidEvent) => {
@@ -2736,32 +2741,39 @@ export default function GameBoard() {
   const applyServerCardOutcome = (data: CardDrawnEvent, broadcast = true) => {
     const player = playersRef.current.find((p) => p.id === data.playerId);
     const pName = player?.name || `Player ${data.playerId}`;
+    const isMyCard = data.playerId === myPlayerIdRef.current;
 
-    if (data.kind === "treasure") {
-      if (data.roll <= 2) {
-        addLog(`${pName} drew Treasure (${data.roll}): +$100 from the bank.`);
-      } else if (data.roll <= 4) {
-        addLog(`${pName} drew Treasure (${data.roll}): +$200 and a free Movement Card.`);
-      } else if (data.roll === 5) {
-        addLog(`${pName} drew Treasure (${data.roll}): advances to the nearest Airport.`);
-      } else {
-        addLog(`${pName} drew Treasure (${data.roll}): pays -$150 luxury tax.`);
-      }
-    } else {
-      if (data.roll <= 2) {
-        addLog(`${pName} drew Surprise (${data.roll}): sent straight to JAIL.`);
-      } else if (data.roll <= 4) {
-        addLog(`${pName} drew Surprise (${data.roll}): jumps forward 8 spaces.`);
-      } else if (data.roll === 5) {
-        addLog(`${pName} drew Surprise (${data.roll}): receives a $250 dividend.`);
-      } else {
-        if (data.swap) {
-          const target = playersRef.current.find((p) => p.id === data.swap?.targetId);
-          addLog(`${pName} drew Surprise (${data.roll}): swapped places with ${target?.name || `Player ${data.swap.targetId}`}.`);
+    // Only log detailed card info if this player drew it OR if roll data is present (private ack)
+    if (data.roll !== undefined) {
+      if (data.kind === "treasure") {
+        if (data.roll <= 2) {
+          addLog(`${pName} drew Treasure (${data.roll}): +$100 from the bank.`);
+        } else if (data.roll <= 4) {
+          addLog(`${pName} drew Treasure (${data.roll}): +$200 and a free Movement Card.`);
+        } else if (data.roll === 5) {
+          addLog(`${pName} drew Treasure (${data.roll}): advances to the nearest Airport.`);
         } else {
-          addLog(`${pName} drew Surprise (${data.roll}): no one else to swap with.`);
+          addLog(`${pName} drew Treasure (${data.roll}): pays -$150 luxury tax.`);
+        }
+      } else {
+        if (data.roll <= 2) {
+          addLog(`${pName} drew Surprise (${data.roll}): sent straight to JAIL.`);
+        } else if (data.roll <= 4) {
+          addLog(`${pName} drew Surprise (${data.roll}): jumps forward 8 spaces.`);
+        } else if (data.roll === 5) {
+          addLog(`${pName} drew Surprise (${data.roll}): receives a $250 dividend.`);
+        } else {
+          if (data.swap) {
+            const target = playersRef.current.find((p) => p.id === data.swap?.targetId);
+            addLog(`${pName} drew Surprise (${data.roll}): swapped places with ${target?.name || `Player ${data.swap.targetId}`}.`);
+          } else {
+            addLog(`${pName} drew Surprise (${data.roll}): no one else to swap with.`);
+          }
         }
       }
+    } else {
+      // Public broadcast (no roll): only log generic card draw for other players
+      addLog(`${pName} drew a ${data.kind === "treasure" ? "Treasure" : "Surprise"} card.`);
     }
 
     if (data.grantSkillCard && data.playerId === myPlayerIdRef.current) {

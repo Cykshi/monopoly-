@@ -2749,11 +2749,30 @@ io.on('connection', (socket) => {
 
     console.log(`🎴 Room ${roomId}: Player ${player.id} drew ${outcome.kind} card (${outcome.card.id}) roll=${outcome.roll} pos=${outcome.position} money=${outcome.money}`);
 
-    // Broadcast authoritative outcome to peers in the room
-    socket.to(roomId).emit('card:drawn', outcome);
-
-    // Ack back to acting client
+    // Send PRIVATE card details to the drawing player ONLY (via targeted event & ack)
+    socket.emit('card:details', outcome);
     if (typeof ack === 'function') ack(outcome);
+
+    // Broadcast PUBLIC game-state changes to other players (no card title/description)
+    const publicOutcome = {
+      ok: outcome.ok,
+      playerId: outcome.playerId,
+      kind: outcome.kind,
+      position: outcome.position,
+      fromPosition: outcome.fromPosition,
+      money: outcome.money,
+      passedGo: outcome.passedGo,
+      salary: outcome.salary,
+      inJail: outcome.inJail,
+      jailTurns: outcome.jailTurns,
+      grantJailCard: outcome.grantJailCard,
+      jailCards: outcome.jailCards,
+      landingEffect: outcome.landingEffect,
+      swap: outcome.swap,
+      // Deliberately OMIT: card.title, card.description, roll
+      // Other players see position/money changes but not the private card details
+    };
+    socket.to(roomId).emit('card:drawn', publicOutcome);
   }));
 
   // ===================== SERVER-ROLLED DICE =====================

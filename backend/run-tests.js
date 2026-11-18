@@ -87,6 +87,7 @@ const ONLINE_SUITES = [
   'test-game-settings.js',
   'test-doubles-authority.js',
   'test-card-landing-authority.js',
+  'test-card-privacy.js',
   'test-building-authority.js',
   'test-mortgage-authority.js',
   'test-browser-refresh-mutation.js',

@@ -104,6 +104,7 @@ const SERVER_ONLY_EVENTS = [
   'club:paid',
   'rest-house:resolved',
   'tax:paid',
+  'card:details',
 ];
 
 (async () => {
